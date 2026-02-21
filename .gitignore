@@ -7,3 +7,6 @@ compile_commands.json
 *.out
 .vscode/
 .idea/
+claude-notes/
+*.exe
+*.claude/

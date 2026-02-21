@@ -11,8 +11,27 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 # Source files — add new .cpp files here as you create them
 set(SOURCES
     src/main.cpp
+    src/lexer/lexer.cpp
 )
 
 add_executable(cc89 ${SOURCES})
 
 target_include_directories(cc89 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Tests
+add_executable(test_lexer
+    src/lexer/test_lexer.cpp
+    src/lexer/lexer.cpp
+)
+target_include_directories(test_lexer PRIVATE ${CMAKE_SOURCE_DIR}/src/lexer)
+
+# Auto-format sources before building
+find_program(CLANG_FORMAT clang-format)
+if(CLANG_FORMAT)
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT} -i ${SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang-format"
+    )
+    add_dependencies(cc89 format)
+endif()
