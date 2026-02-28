@@ -1,6 +1,5 @@
 #include "lexer/lexer.h"
 
-#include <cstdlib>
 #include <stdexcept>
 #include <fstream>
 #include <sstream>
@@ -16,7 +15,14 @@ void test(const std::string& inputSourcePath){
     buffer << inputFile.rdbuf();
     inputFile.close();
 
-    Lexer lexer{buffer.str()};
+    Diagnostic::DiagnosticEngine diagnosticEngine;
+    Lexer lexer{buffer.str(), diagnosticEngine};
+
+    if(diagnosticEngine.hasErrors()){
+        diagnosticEngine.print();
+        return;
+    }
+
     auto tokens = lexer.generateTokens();
     for(const auto& token : tokens){
         std::cout << token.toString() << std::endl;

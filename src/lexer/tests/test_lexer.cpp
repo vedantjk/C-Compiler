@@ -24,7 +24,8 @@ std::vector<Token> tokenize(const std::string& input) {
     std::ostringstream suppress;
     std::cerr.rdbuf(suppress.rdbuf());
 
-    Lexer lexer(input);
+    Diagnostic::DiagnosticEngine diag;
+    Lexer lexer(input, diag);
     auto tokens = lexer.generateTokens();
 
     std::cerr.rdbuf(old_cerr);
@@ -42,8 +43,10 @@ TokenizeResult tokenize_with_errors(const std::string& input) {
     std::ostringstream capture;
     std::cerr.rdbuf(capture.rdbuf());
 
-    Lexer lexer(input);
+    Diagnostic::DiagnosticEngine diag;
+    Lexer lexer(input, diag);
     auto tokens = lexer.generateTokens();
+    diag.print();  // flush diagnostics to captured stderr
 
     std::cerr.rdbuf(old_cerr);
     return {std::move(tokens), capture.str()};

@@ -12,6 +12,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 set(SOURCES
     src/main.cpp
     src/lexer/lexer.cpp
+    src/utils/diagnostic.cpp
 )
 
 add_executable(cc89 ${SOURCES})
@@ -20,8 +21,9 @@ target_include_directories(cc89 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # Tests
 add_executable(test_lexer
-    src/lexer/test_lexer.cpp
+    src/lexer/tests/test_lexer.cpp
     src/lexer/lexer.cpp
+    src/utils/diagnostic.cpp
 )
 target_include_directories(test_lexer PRIVATE ${CMAKE_SOURCE_DIR}/src/lexer)
 

@@ -2,7 +2,7 @@
 #define LEXER_H
 
 #include "token.h"
-
+#include "../utils/diagnostic.h"
 #include <string>
 #include <vector>
 #include <iostream>
@@ -12,6 +12,7 @@
   class Lexer{
     std::string input;
     std::vector<Token> tokens;
+    Diagnostic::DiagnosticEngine& diagnosticEngine;
 
     int start = 0;
     int current = 0;
@@ -21,7 +22,7 @@
     static std::unordered_map<std::string, TokenType> keywords;
 
     public:
-    Lexer(std::string input) : input(std::move(input)) {}
+    Lexer(std::string input, Diagnostic::DiagnosticEngine& diagnosticEngine) : input(std::move(input)), diagnosticEngine(diagnosticEngine) {}
 
     void addToken(TokenType token){
         std::string lexeme = input.substr(start, current - start);
@@ -41,8 +42,10 @@
         return c;
     }
 
-    void error(int line, std::string error_message){
-        std::cerr<<line<<": "<<error_message<<std::endl;
+    void error(int line, int col, std::string error_message){
+        Diagnostic::DiagLevel diagLevel{Diagnostic::DiagLevel::LEXER};
+        Diagnostic::Location location{line, col};
+        diagnosticEngine.report(diagLevel, location, error_message);
     }
 
     bool match(char expected){
@@ -65,7 +68,7 @@
         }
 
         if(isAtEnd()){
-            error(line, "Unterminated string");
+            error(line, col, "Unterminated string");
             return;
         }
 
@@ -83,7 +86,7 @@
     if (input[start] == '0' && (peek() == 'x' || peek() == 'X')) {
         advance(); // consume x/X
         if (!std::isxdigit(peek())) {
-            error(line, "Hex constant requires at least one digit");
+            error(line, col, "Hex constant requires at least one digit");
             return;
         }
         while (std::isxdigit(peek())) advance();
@@ -101,7 +104,7 @@
             advance();
             if(peek() == '+' || peek() == '-') advance();
             if(!std::isdigit(peek())){
-                error(line, "Exponent requires at least one digit");
+                error(line, col, "Exponent requires at least one digit");
                 return;
             }
             while(std::isdigit(peek())) advance();
@@ -115,7 +118,7 @@
         advance();
         if(peek() == '+' || peek() == '-') advance();
         if(!std::isdigit(peek())){
-            error(line, "Exponent requires at least one digit");
+            error(line, col, "Exponent requires at least one digit");
             return;
         }
         while(std::isdigit(peek())) advance();
@@ -157,25 +160,25 @@
     }
 
     void Char(){
-        if(isAtEnd()){ error(line, "Unterminated character constant"); return; }
+        if(isAtEnd()){ error(line, col, "Unterminated character constant"); return; }
 
         // Empty character constant ''
         if(peek() == '\''){
             advance(); // consume closing quote
-            error(line, "Empty character constant");
+            error(line, col, "Empty character constant");
             return;
         }
 
         if(peek() == '\\'){
             advance(); // consume backslash
-            if(isAtEnd()){ error(line, "Unterminated character constant"); return; }
+            if(isAtEnd()){ error(line, col, "Unterminated character constant"); return; }
             advance(); // consume escape char
         } else {
             advance(); // consume the character
         }
 
         if(isAtEnd() || peek() != '\''){
-            error(line, "Unterminated or malformed character constant");
+            error(line, col, "Unterminated or malformed character constant");
             // advance to closing quote or EOF for error recovery
             while(!isAtEnd() && peek() != '\'') advance();
             if(!isAtEnd()) advance();
@@ -193,7 +196,7 @@
         }
 
         if(isAtEnd()){
-            error(line, "Unterminated block comment");
+            error(line, col, "Unterminated block comment");
             return;
         }
 
@@ -325,7 +328,7 @@
                 }else if(c == '_' || std::isalnum(c)){
                     identifier();
                 }else{
-                    error(line, "Unexpected character");
+                    error(line, col, "Unexpected character");
                 }
                 break;
         }
