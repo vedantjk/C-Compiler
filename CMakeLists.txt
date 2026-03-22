@@ -8,7 +8,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Compiler warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-# Source files — add new .cpp files here as you create them
 set(SOURCES
     src/main.cpp
     src/lexer/lexer.cpp
