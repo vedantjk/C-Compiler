@@ -17,7 +17,7 @@
     int start = 0;
     int current = 0;
     int line = 1;
-    int col = 0;
+    int col = 1;
 
     static std::unordered_map<std::string, TokenType> keywords;
 
@@ -36,8 +36,8 @@
 
     char advance(){
         char c = input[current++];
-        if(c == '\n') { line++; col = 0;}
-        else if(c == '\t') { col += 8 - (col%8);}
+        if(c == '\n') { line++; col = 1;}
+        else if(c == '\t') { col += 4;}
         else col++;
         return c;
     }
