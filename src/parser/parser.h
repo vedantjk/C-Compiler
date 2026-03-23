@@ -10,6 +10,8 @@
 #include "../ast/Statements/DeclareStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/Expressions/IntLiterals.h"
+#include "../ast/Expressions/BinaryExpr.h"
+#include "../ast/Expressions/VariableExpr.h"
 
 class Parser
 {
@@ -39,12 +41,43 @@ class Parser
   ", expected " + tokenTypeToString(type) + ", received " + tokenTypeToString(tokens[cur_token].type));
         return consume();
     }
+    
+    std::shared_ptr<Expression> parseFactor(){
+        if(peek() == CONSTANT){
+            Token constant = consume();
+            return std::make_shared<IntLiterals>(constant.line, constant.col, constant.lexeme);
+        }
+        else if(peek() == LEFT_PAREN){
+            consume();
+            std::shared_ptr<Expression> parseResult = parseExpression();
+            consume();
+            return parseResult; 
+        }else{
+            Token factor = consume();
+            return std::make_shared<VariableExpr>(factor.line, factor.col, factor.lexeme);
+        } 
+    }
+
+    std::shared_ptr<Expression> parseTerm(){
+        std::shared_ptr<Expression> left = parseFactor();
+        while(peek() == ASTERISK || peek() == SLASH){
+            Token op = consume();
+            std::shared_ptr<Expression> right = parseFactor();
+            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
+        }
+        return left;
+    }
 
     std::shared_ptr<Expression> parseExpression(){
-        if(peek() == CONSTANT){
-            Token intLit = consume();
-            return std::make_shared<IntLiterals>(intLit.line, intLit.col, intLit.lexeme);
+        
+        std::shared_ptr<Expression> left = parseTerm();
+        while(peek() == PLUS || peek() == MINUS){
+            Token op = consume();
+            std::shared_ptr<Expression> right = parseTerm();
+            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
         }
+        return left;
+        
         // add other complex expression handling later.
         return nullptr;
     }
