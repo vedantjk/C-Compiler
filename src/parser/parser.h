@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 #include "../lexer/token.h"
@@ -14,7 +15,11 @@
 #include "../ast/Expressions/VariableExpr.h"
 
 class Parser
-{
+{   
+    std::unordered_map<TokenType, int> precedenceLevel = 
+        {{OR_OP, 1}, {AND_OP, 2}, {EQ_OP, 3}, {NE_OP, 3},
+        {LESS_THAN, 4}, {GREATER_THAN, 4}, {LE_OP, 4}, {GE_OP, 4},
+        {PLUS, 5}, {MINUS, 5}, {ASTERISK, 6}, {SLASH, 6}};
     std::vector<Token> tokens;
     int cur_token = 0;
   public:
@@ -57,29 +62,21 @@ class Parser
             return std::make_shared<VariableExpr>(factor.line, factor.col, factor.lexeme);
         } 
     }
-
-    std::shared_ptr<Expression> parseTerm(){
-        std::shared_ptr<Expression> left = parseFactor();
-        while(peek() == ASTERISK || peek() == SLASH){
-            Token op = consume();
-            std::shared_ptr<Expression> right = parseFactor();
-            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
-        }
-        return left;
+    
+    bool isBinaryOp(TokenType type){
+        return type == OR_OP || type == AND_OP || type == EQ_OP || type == NE_OP || type == LESS_THAN || type == GREATER_THAN
+        || type == LE_OP || type == GE_OP || type == PLUS || type == MINUS || type == ASTERISK || type == SLASH;
     }
 
-    std::shared_ptr<Expression> parseExpression(){
+    std::shared_ptr<Expression> parseExpression(int minPrecedence = 0){
         
-        std::shared_ptr<Expression> left = parseTerm();
-        while(peek() == PLUS || peek() == MINUS){
+        std::shared_ptr<Expression> left = parseFactor();
+        while(isBinaryOp(peek()) && precedenceLevel[peek()] >= minPrecedence){
             Token op = consume();
-            std::shared_ptr<Expression> right = parseTerm();
+            std::shared_ptr<Expression> right = parseExpression(precedenceLevel[op.type]+1);
             left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
         }
         return left;
-        
-        // add other complex expression handling later.
-        return nullptr;
     }
 
     std::shared_ptr<DeclareStmt> parseDeclareStmt(Token type){
