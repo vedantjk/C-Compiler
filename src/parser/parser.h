@@ -10,6 +10,7 @@
 #include "../ast/TopLevelNodes/Function.h"
 #include "../ast/Statements/DeclareStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
+#include "../ast/Statements/IfStmt.h"
 #include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
@@ -107,6 +108,21 @@ class Parser
         return std::make_shared<ReturnStmt>(returnStart.line, returnStart.col, returnExpression);
     }
 
+    std::shared_ptr<IfStmt> parseIfStmt(){
+        Token ifToken = expect(IF); // should never throw;
+        expect(LEFT_PAREN); 
+        std::shared_ptr<Expression> condition = parseExpression();
+        expect(RIGHT_PAREN);
+        std::shared_ptr<BlockStmt> thenBlock = parseBlockStmt();
+
+        std::shared_ptr<BlockStmt> elseBlock;
+        if(peek() == ELSE){
+            consume();
+            elseBlock = parseBlockStmt();
+        }
+        return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
+    }
+
     std::shared_ptr<BlockStmt> parseBlockStmt(){
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::shared_ptr<Statement>> statements;
@@ -120,6 +136,9 @@ class Parser
             }
             else if(peek() == RETURN){
                 statements.emplace_back(parseReturnStmt());
+            }
+            else if(peek() == IF){
+                statements.emplace_back(parseIfStmt());
             }
             else throw std::logic_error("Unexpected token in block " + std::string{tokenTypeToString(peek())}); 
         }

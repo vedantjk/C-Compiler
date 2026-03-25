@@ -15,6 +15,10 @@ class BlockStmt : public Statement
     {
     }
 
+    int returnStatementsSize() const{
+        return statements.size();
+    }
+
     void print(std::ostream &out, int tab) const override
     {
         out << "BlockStmt\n";
