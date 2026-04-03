@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -11,6 +12,9 @@
 #include "../ast/Statements/DeclareStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/Statements/IfStmt.h"
+#include "../ast/Statements/WhileStmt.h"
+#include "../ast/Statements/AssignStmt.h"
+#include "../ast/Statements/ForStmt.h"
 #include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
@@ -56,7 +60,7 @@ class Parser
         else if(peek() == LEFT_PAREN){
             consume();
             std::shared_ptr<Expression> parseResult = parseExpression();
-            consume();
+            expect(RIGHT_PAREN);
             return parseResult; 
         }else{
             Token factor = consume();
@@ -96,7 +100,7 @@ class Parser
                 variables.emplace_back(std::make_shared<VarDecl>(id.line, id.col, idString, typeString, initialization));
             }
         }
-        consume(); // semicolon
+        expect(SEMI_COLON);
         return std::make_shared<DeclareStmt>(type.line, type.col, variables);
     }
 
@@ -104,8 +108,18 @@ class Parser
         Token returnStart = expect(RETURN); // should not throw
         std::shared_ptr<Expression> returnExpression;
         if(peek() != SEMI_COLON) returnExpression = parseExpression();
-        consume(); // semi colon
+        expect(SEMI_COLON); 
         return std::make_shared<ReturnStmt>(returnStart.line, returnStart.col, returnExpression);
+    }
+
+    std::shared_ptr<WhileStmt> parseWhileStmt(){
+        Token whileToken = expect(WHILE);
+        expect(LEFT_PAREN);
+        std::shared_ptr<Expression> condition = parseExpression();
+        expect(RIGHT_PAREN);
+        std::shared_ptr<BlockStmt> whileBlock = parseBlockStmt();
+
+        return std::make_shared<WhileStmt>(whileToken.line, whileToken.col, condition, whileBlock);
     }
 
     std::shared_ptr<IfStmt> parseIfStmt(){
@@ -121,6 +135,32 @@ class Parser
             elseBlock = parseBlockStmt();
         }
         return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
+    }
+
+    std::shared_ptr<AssignStmt> parseAssignStmt(bool semi_colon = true){
+        std::shared_ptr<Expression> lhs = parseExpression();
+        expect(ASSIGN); // for '='
+        std::shared_ptr<Expression> rhs = parseExpression();
+        if(semi_colon) expect(SEMI_COLON); 
+        return std::make_shared<AssignStmt>(lhs->getLine(), lhs->getCol(), lhs, rhs);
+    }
+
+    std::shared_ptr<ForStmt> parseForStmt(){
+        Token forStart = expect(FOR);
+        expect(LEFT_PAREN);
+        std::shared_ptr<Statement> initialization;
+        if(peek() == INT || peek() == CHAR){
+            Token type = consume();
+            initialization = parseDeclareStmt(type);
+        }else{
+            initialization = parseAssignStmt();
+        }
+        std::shared_ptr<Expression> condition = parseExpression();
+        expect(SEMI_COLON); 
+        std::shared_ptr<Statement> update = parseAssignStmt(false);
+        expect(RIGHT_PAREN);
+        std::shared_ptr<BlockStmt> forBlock = parseBlockStmt();
+        return std::make_shared<ForStmt>(forStart.line, forStart.col, initialization, condition, update, forBlock);
     }
 
     std::shared_ptr<BlockStmt> parseBlockStmt(){
@@ -139,6 +179,15 @@ class Parser
             }
             else if(peek() == IF){
                 statements.emplace_back(parseIfStmt());
+            }
+            else if(peek() == WHILE){
+                statements.emplace_back(parseWhileStmt());
+            }
+            else if(peek() == IDENTIFIER){
+                statements.emplace_back(parseAssignStmt());
+            }
+            else if(peek() == FOR){
+                statements.emplace_back(parseForStmt());
             }
             else throw std::logic_error("Unexpected token in block " + std::string{tokenTypeToString(peek())}); 
         }

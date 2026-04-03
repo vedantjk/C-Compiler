@@ -1,0 +1,30 @@
+#pragma once
+
+#include "../Expressions/Expressions.h"
+#include "./BlockStmt.h"
+#include "Statement.h"
+#include <memory>
+#include <ostream>
+
+class ForStmt : public Statement{
+    std::shared_ptr<Statement> initialization;
+    std::shared_ptr<Expression> condition;
+    std::shared_ptr<Statement> update;
+    std::shared_ptr<BlockStmt> forBlock;
+
+public:
+    ForStmt(int line_, int col_, std::shared_ptr<Statement> initialization_, std::shared_ptr<Expression> condition_, std::shared_ptr<Statement> update_, std::shared_ptr<BlockStmt> forBlock_):
+        Statement(line_, col_), initialization(std::move(initialization_)), condition(std::move(condition_)), update(std::move(update_)), forBlock(std::move(forBlock_)){}
+
+    void print(std::ostream& out, int tab) const override{
+        out<<"FOR( ";
+        initialization->print(out, tab);
+        out<<"; ";
+        condition->print(out, tab);
+        out<<"; ";
+        update->print(out, tab);
+        out<<")\n";
+        forBlock->print(out, tab+1);
+    }
+
+};
