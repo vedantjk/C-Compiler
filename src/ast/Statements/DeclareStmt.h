@@ -16,10 +16,13 @@ class DeclareStmt : public Statement
     }
 
     void print(std::ostream &out, int tab) const override { 
-        out << "DECLARE STMT\n";
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
         for (auto& var : variables)
         {
             var->print(out, tab);
         }
+        out << ";";
     }
 };

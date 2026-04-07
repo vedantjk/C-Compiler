@@ -14,8 +14,12 @@ public:
         Statement(line_, col_), lhs(std::move(lhs_)), rhs(std::move(rhs_)) {}
 
     void print(std::ostream& out, int tab) const override{
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
         lhs->print(out, tab);
         out<<" = ";
         rhs->print(out, tab);
+        out << ";";
     }
 };

@@ -18,10 +18,11 @@ public:
 
     void print(std::ostream& out, int tab) const override {
         out<<functionName<<"(";
-        for(auto& parameter : parameters){
-            parameter->print(out, tab);
+        for(int i = 0; i<(int)parameters.size(); i++){
+            parameters[i]->print(out, tab);
+            if(i!=(int)parameters.size()-1) out<<", ";
         }
-        out<<")\n";
+        out<<")";
     }
 
 };

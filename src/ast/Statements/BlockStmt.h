@@ -21,10 +21,11 @@ class BlockStmt : public Statement
 
     void print(std::ostream &out, int tab) const override
     {
-        out << "BlockStmt\n";
+
         for (auto &statement : statements)
         {
             statement->print(out, tab);
+            out << "\n";
         }
     }
 };

@@ -1,3 +1,5 @@
+#pragma once
+
 #include "BlockStmt.h"
 #include "../Expressions/Expressions.h"
 #include <memory>
@@ -14,15 +16,24 @@ public:
         Statement(line_, col_), condition(std::move(condition_)), thenBlock(std::move(thenBlock_)), elseBlock(std::move(elseBlock_)){}
 
     void print(std::ostream& out, int tab) const override{
-        out<< " if ( ";
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out<< "if(";
         condition->print(out, tab);
         out<<"){ \n";
         thenBlock->print(out, tab+1);
-        out<<"}\n";
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out<<"} ";
         if(elseBlock){
-            out<<"else {";
+            out<<"else{";
             elseBlock->print(out, tab+1);
-            out<<"}\n";
+            for(int i = 0; i<tab;i++){
+                out<<"  ";
+            }
+            out<<"}";
         }
     }
 };

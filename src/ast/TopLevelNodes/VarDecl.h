@@ -21,11 +21,10 @@ class VarDecl : public TopLevelNode
 
     void print(std::ostream &out, int tab) const override
       {
-        out << type << " " << name << " ";
+        out << type << " " << name;
         if(initialization){ 
           out<<" = ";
           initialization->print(out, tab);
         }
-        out << "\n";
       }
 };

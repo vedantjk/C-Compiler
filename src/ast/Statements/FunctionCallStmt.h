@@ -1,3 +1,5 @@
+#pragma once
+
 #include "Statement.h"
 #include "../Expressions/Expressions.h"
 #include <ostream>
@@ -11,13 +13,17 @@ class FunctionCallStmt : public Statement{
 
     public:
 
-    FunctionCallStmt(int line_, int col_, std::string name_, std::vector<std::shared_ptr<Expression>> parameters_) : Statement(line_, col_), name(name_), parameters(parameters_) {}
+    FunctionCallStmt(int line_, int col_, std::string name_, std::vector<std::shared_ptr<Expression>> parameters_) : Statement(line_, col_), name(name_), parameters(std::move(parameters_)) {}
     
     void print(std::ostream& out, int tab) const override{
-        out<<name<<"(";
-        for(auto& parameter : parameters){
-            parameter->print(out, tab);
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
         }
-        out<<")\n";
+        out<<name<<"(";
+        for(int i = 0; i<(int)parameters.size(); i++){
+            parameters[i]->print(out, tab);
+            if(i!=(int)parameters.size() - 1) out << ", ";
+        }
+        out<<");";
     }
 };

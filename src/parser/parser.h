@@ -231,6 +231,14 @@ class Parser
         return std::make_shared<BlockStmt>(blockStart.line, blockStart.col, statements);
     }
 
+    void parseParam(std::vector<Parameter>& parameters){
+        if((peek() == INT || peek() == CHAR) && peekNext() == IDENTIFIER){
+            Token type = consume(); // int, char
+            Token param = consume();
+            parameters.emplace_back(type.lexeme, param.lexeme, param.line, param.col);
+        } else throw std::logic_error("Unexpected token in function parameters " + std::string{tokenTypeToString(peek())});
+    }
+
     std::shared_ptr<Function> parseFunction(Token returnType, Token functionName){
         int line = returnType.line;
         int col = returnType.col;
@@ -238,7 +246,14 @@ class Parser
         std::string functionNameString = functionName.lexeme;
         std::vector<Parameter> parameters;
 
-        // add parameter handling later
+        if(peek()!=RIGHT_PAREN){
+            parseParam(parameters);
+            while(peek() == COMMA){
+                consume(); // comma
+                parseParam(parameters);
+            }
+        }
+        
         Token rightParen = expect(RIGHT_PAREN);
         std::shared_ptr<BlockStmt> blockStmt;
         if(peek() == LEFT_BRACE)

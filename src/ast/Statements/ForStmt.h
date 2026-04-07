@@ -17,14 +17,21 @@ public:
         Statement(line_, col_), initialization(std::move(initialization_)), condition(std::move(condition_)), update(std::move(update_)), forBlock(std::move(forBlock_)){}
 
     void print(std::ostream& out, int tab) const override{
-        out<<"FOR( ";
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out<<"for( ";
         initialization->print(out, tab);
         out<<"; ";
         condition->print(out, tab);
         out<<"; ";
         update->print(out, tab);
-        out<<")\n";
+        out<<"){\n";
         forBlock->print(out, tab+1);
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out<<"}";
     }
 
 };

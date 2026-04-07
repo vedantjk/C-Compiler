@@ -16,10 +16,17 @@ public:
         Statement(line_, col_), condition(std::move(condition_)), whileBlock(std::move(whileBlock_)) {}
 
     void print(std::ostream& out, int tab) const override{
-        out<<"WHILE ( " ;
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out<<"while ( " ;
         condition->print(out, tab);
-        out<<" )\n";
+        out<<" ){\n";
         whileBlock->print(out, tab+1);
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out<<"}";
     }
 
 };

@@ -1,5 +1,5 @@
-int print(){
-    return 0;
+int print(int a, int b){
+    return a + b;
 }
 
 int main()
@@ -7,8 +7,8 @@ int main()
     int x = 5;
     int y = 10;
     int z = (x + y) * 2 - x / (y - 3);
-    print();
-    int a = print();
+    print(y, z);
+    int a = print(x, y);
     if (x > 0 && y <= 10)
     {
         int w = z + 1;

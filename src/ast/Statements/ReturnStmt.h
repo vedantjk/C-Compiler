@@ -13,9 +13,12 @@ class ReturnStmt : public Statement
         Statement(line_, col_), returnExpression(std::move(returnExpression_)) {}
 
     void print(std::ostream& out, int tab) const override { 
-        
-        out << "Return Stmt\n";
+        for(int i = 0; i<tab;i++){
+            out<<"  ";
+        }
+        out << "return ";
         if(returnExpression)
             returnExpression->print(out, tab);
+        out << ";";
     }
 };
