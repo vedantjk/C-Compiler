@@ -15,9 +15,11 @@
 #include "../ast/Statements/WhileStmt.h"
 #include "../ast/Statements/AssignStmt.h"
 #include "../ast/Statements/ForStmt.h"
+#include "../ast/Statements/FunctionCallStmt.h"
 #include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
+#include "../ast/Expressions/FunctionCallExpr.h"
 
 class Parser
 {   
@@ -52,6 +54,20 @@ class Parser
         return consume();
     }
     
+    std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(Token& functionName){
+        expect(LEFT_PAREN);
+        std::vector<std::shared_ptr<Expression>> parameters;
+        if (peek() != RIGHT_PAREN) {
+            parameters.emplace_back(parseExpression());
+            while (peek() == COMMA) {
+                consume();
+                parameters.emplace_back(parseExpression());
+            }
+        }
+        expect(RIGHT_PAREN);
+        return std::make_shared<FunctionCallExpr>(functionName.line, functionName.col, functionName.lexeme, parameters);
+    }
+
     std::shared_ptr<Expression> parseFactor(){
         if(peek() == CONSTANT){
             Token constant = consume();
@@ -63,8 +79,11 @@ class Parser
             expect(RIGHT_PAREN);
             return parseResult; 
         }else{
-            Token factor = consume();
-            return std::make_shared<VariableExpr>(factor.line, factor.col, factor.lexeme);
+            Token name = consume();
+            if(peek() == LEFT_PAREN){
+                return parseFunctionCallExpr(name);
+            }
+            else return std::make_shared<VariableExpr>(name.line, name.col, name.lexeme);
         } 
     }
     
@@ -163,6 +182,22 @@ class Parser
         return std::make_shared<ForStmt>(forStart.line, forStart.col, initialization, condition, update, forBlock);
     }
 
+    std::shared_ptr<FunctionCallStmt> parseFunctionCallStmt(){
+        Token functionName = expect(IDENTIFIER);
+        expect(LEFT_PAREN);
+        std::vector<std::shared_ptr<Expression>> parameters;
+        if (peek() != RIGHT_PAREN) {
+            parameters.emplace_back(parseExpression());
+            while (peek() == COMMA) {
+                consume();
+                parameters.emplace_back(parseExpression());
+            }
+        }
+        expect(RIGHT_PAREN);
+        expect(SEMI_COLON);
+        return std::make_shared<FunctionCallStmt>(functionName.line, functionName.col, functionName.lexeme, parameters);
+    }
+
     std::shared_ptr<BlockStmt> parseBlockStmt(){
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::shared_ptr<Statement>> statements;
@@ -184,7 +219,8 @@ class Parser
                 statements.emplace_back(parseWhileStmt());
             }
             else if(peek() == IDENTIFIER){
-                statements.emplace_back(parseAssignStmt());
+                if(peekNext() == LEFT_PAREN) statements.emplace_back(parseFunctionCallStmt());
+                else statements.emplace_back(parseAssignStmt());
             }
             else if(peek() == FOR){
                 statements.emplace_back(parseForStmt());

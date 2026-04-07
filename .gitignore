@@ -12,3 +12,4 @@ claude-notes/
 *.claude/
 .vs/
 CMakeSettings.json
+tests/c-testsuite/
