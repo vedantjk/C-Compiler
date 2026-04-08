@@ -20,6 +20,8 @@
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
 #include "../ast/Expressions/FunctionCallExpr.h"
+#include "../ast/Expressions/UnaryExpr.h"
+#include "../ast/Expressions/StringLiterals.h"
 
 class Parser
 {   
@@ -54,7 +56,7 @@ class Parser
         return consume();
     }
     
-    std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(Token& functionName){
+    std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(std::shared_ptr<VariableExpr> functionName){
         expect(LEFT_PAREN);
         std::vector<std::shared_ptr<Expression>> parameters;
         if (peek() != RIGHT_PAREN) {
@@ -65,26 +67,47 @@ class Parser
             }
         }
         expect(RIGHT_PAREN);
-        return std::make_shared<FunctionCallExpr>(functionName.line, functionName.col, functionName.lexeme, parameters);
+        return std::make_shared<FunctionCallExpr>(functionName->getLine(), functionName->getCol(), functionName, parameters);
     }
 
     std::shared_ptr<Expression> parseFactor(){
+        std::shared_ptr<Expression> node;
         if(peek() == CONSTANT){
             Token constant = consume();
-            return std::make_shared<IntLiterals>(constant.line, constant.col, constant.lexeme);
+            node = std::make_shared<IntLiterals>(constant.line, constant.col, constant.lexeme);
         }
         else if(peek() == LEFT_PAREN){
             consume();
             std::shared_ptr<Expression> parseResult = parseExpression();
             expect(RIGHT_PAREN);
-            return parseResult; 
-        }else{
+            node = parseResult; 
+        }else if(peek() == IDENTIFIER){
             Token name = consume();
-            if(peek() == LEFT_PAREN){
-                return parseFunctionCallExpr(name);
+            node = std::make_shared<VariableExpr>(name.line, name.col, name.lexeme);
+        }else if(peek() == STRING_LITERAL){
+            Token s = consume();
+            int len = s.lexeme.size();
+            std::string combined = s.lexeme.substr(1, len - 2);
+            while(peek() == STRING_LITERAL){
+                Token r = consume();
+                int newLen = r.lexeme.size();
+                combined += r.lexeme.substr(1, newLen - 2);
             }
-            else return std::make_shared<VariableExpr>(name.line, name.col, name.lexeme);
-        } 
+            combined = '"' + combined + '"';
+            node = std::make_shared<StringLiterals>(s.line, s.col, combined);
+        } else throw std::logic_error("Invalid token as a factor " + std::string(tokenTypeToString(peek())));
+        
+        while(true){
+            if(peek() == LEFT_PAREN){
+                auto var = std::dynamic_pointer_cast<VariableExpr>(node);
+                if(!var) throw std::logic_error("callee must be an identifier");
+                node = parseFunctionCallExpr(var);
+            }else if(peek() == INC_OP || peek() == DEC_OP){
+                Token op = consume();
+                node = std::make_shared<UnaryExpr>(node->getLine(),node->getCol(), op.lexeme, node, true);
+            }else break;
+        }
+        return node;
     }
     
     bool isBinaryOp(TokenType type){
@@ -92,9 +115,23 @@ class Parser
         || type == LE_OP || type == GE_OP || type == PLUS || type == MINUS || type == ASTERISK || type == SLASH;
     }
 
+    bool isUnaryOp(TokenType type){
+        return type == EXCLAMATION || type == TILDE || type == MINUS || type == PLUS || type == AMPERSAND || type == ASTERISK || type == INC_OP || type == DEC_OP;
+    }
+
+    std::shared_ptr<Expression> parseUnary(){
+        if(isUnaryOp(peek())){
+            Token op = consume();
+            std::shared_ptr<Expression> operand = parseUnary();
+            return std::make_shared<UnaryExpr>(op.line, op.col, op.lexeme, operand);
+        }
+        std::shared_ptr<Expression> operand = parseFactor();
+        return operand;
+    }
+
     std::shared_ptr<Expression> parseExpression(int minPrecedence = 0){
         
-        std::shared_ptr<Expression> left = parseFactor();
+        std::shared_ptr<Expression> left = parseUnary();
         while(isBinaryOp(peek()) && precedenceLevel[peek()] >= minPrecedence){
             Token op = consume();
             std::shared_ptr<Expression> right = parseExpression(precedenceLevel[op.type]+1);
@@ -117,7 +154,7 @@ class Parser
                 }
                 if(peek() == COMMA) consume();
                 variables.emplace_back(std::make_shared<VarDecl>(id.line, id.col, idString, typeString, initialization));
-            }
+            } else throw std::logic_error("Got invalid token in declare stmt: " + std::string(tokenTypeToString(peek())));
         }
         expect(SEMI_COLON);
         return std::make_shared<DeclareStmt>(type.line, type.col, variables);

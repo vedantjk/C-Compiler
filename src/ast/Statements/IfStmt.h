@@ -28,7 +28,7 @@ public:
         }
         out<<"} ";
         if(elseBlock){
-            out<<"else{";
+            out<<"else {\n";
             elseBlock->print(out, tab+1);
             for(int i = 0; i<tab;i++){
                 out<<"  ";
