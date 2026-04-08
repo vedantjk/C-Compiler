@@ -23,6 +23,7 @@ public:
         out<<"for( ";
         initialization->print(out, tab);
         condition->print(out, tab);
+        out<<";";
         update->print(out, tab);
         out<<"){\n";
         forBlock->print(out, tab+1);

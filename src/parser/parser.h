@@ -16,6 +16,8 @@
 #include "../ast/Statements/AssignStmt.h"
 #include "../ast/Statements/ForStmt.h"
 #include "../ast/Statements/FunctionCallStmt.h"
+#include "../ast/Statements/BreakStmt.h"
+#include "../ast/Statements/ContinueStmt.h"
 #include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
@@ -235,6 +237,18 @@ class Parser
         return std::make_shared<FunctionCallStmt>(functionName.line, functionName.col, functionName.lexeme, parameters);
     }
 
+    std::shared_ptr<BreakStmt> parseBreakStmt(){
+        Token breakToken = expect(BREAK);
+        expect(SEMI_COLON);
+        return std::make_shared<BreakStmt>(breakToken.line, breakToken.col);
+    }
+
+    std::shared_ptr<ContinueStmt> parseContinueStmt(){
+        Token continueToken = expect(CONTINUE);
+        expect(SEMI_COLON);
+        return std::make_shared<ContinueStmt>(continueToken.line, continueToken.col);
+    }
+
     std::shared_ptr<BlockStmt> parseBlockStmt(){
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::shared_ptr<Statement>> statements;
@@ -261,6 +275,12 @@ class Parser
             }
             else if(peek() == FOR){
                 statements.emplace_back(parseForStmt());
+            }
+            else if(peek() == BREAK){
+                statements.emplace_back(parseBreakStmt());
+            }
+            else if(peek() == CONTINUE){
+                statements.emplace_back(parseContinueStmt());
             }
             else throw std::logic_error("Unexpected token in block " + std::string{tokenTypeToString(peek())}); 
         }
