@@ -19,9 +19,10 @@ class DeclareStmt : public Statement
         for(int i = 0; i<tab;i++){
             out<<"  ";
         }
-        for (auto& var : variables)
+        for (size_t i= 0; i<variables.size(); i++)
         {
-            var->print(out, tab);
+            variables[i]->print(out, tab);
+            if (i != variables.size() - 1) out<<",";
         }
         out << ";";
     }
