@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <memory>
+#include <ranges>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +25,13 @@
 #include "../ast/Expressions/FunctionCallExpr.h"
 #include "../ast/Expressions/UnaryExpr.h"
 #include "../ast/Expressions/StringLiterals.h"
+
+struct Declarator {
+    std::shared_ptr<Type> type;
+    std::string name;
+    int line;
+    int col;
+};
 
 class Parser
 {   
@@ -57,7 +65,54 @@ class Parser
   ", expected " + tokenTypeToString(type) + ", received " + tokenTypeToString(tokens[cur_token].type));
         return consume();
     }
-    
+
+    static bool isTypeStart(const TokenType t) {
+        return t == INT || t == CHAR || t == VOID || t == STRUCT;
+    }
+
+    std::tuple<std::shared_ptr<Type>, int, int> parseBaseType() {
+        if (peek() == INT)  { auto t = consume(); return {IntType::getInstance(), t.line, t.col};  }
+        if (peek() == CHAR) { auto t = consume(); return {CharType::getInstance(), t.line, t.col}; }
+        if (peek() == VOID) { auto t = consume(); return {VoidType::getInstance(), t.line, t.col}; }
+        if (peek() == STRUCT) {
+            auto t = consume();
+            Token name = expect(IDENTIFIER);
+            return {std::make_shared<StructType>(name.lexeme), t.line, t.col};
+        }
+        throw std::logic_error(
+            "Expected type specifier, got " + std::string(tokenTypeToString(peek())));
+    }
+
+    Declarator parseDeclarator(std::shared_ptr<Type> base) {
+        // leading *s — leftmost is outermost, so wrap in-order
+        while (peek() == ASTERISK) {
+            consume();
+            base = std::make_shared<PointerType>(base);
+        }
+
+        if (peek() == LEFT_PAREN) {
+            throw std::logic_error(
+                "parenthesized declarators (e.g. int (*p)[10]) not supported yet");
+        }
+
+        const Token id = expect(IDENTIFIER);
+
+        // trailing [N]s — rightmost is innermost, so collect then reverse-wrap
+        std::vector<size_t> dims;
+        while (peek() == LEFT_BRACKET) {
+            consume();
+            Token sz = expect(CONSTANT);
+            expect(RIGHT_BRACKET);
+            dims.push_back(std::stoul(sz.lexeme));
+        }
+        for (unsigned long long & dim : std::views::reverse(dims)) {
+            base = std::make_shared<ArrayType>(base, dim);
+        }
+
+        return Declarator{base, id.lexeme, id.line, id.col};
+    }
+
+
     std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(std::shared_ptr<VariableExpr> functionName){
         expect(LEFT_PAREN);
         std::vector<std::shared_ptr<Expression>> parameters;
@@ -142,24 +197,20 @@ class Parser
         return left;
     }
 
-    std::shared_ptr<DeclareStmt> parseDeclareStmt(Token type){
+    std::shared_ptr<DeclareStmt> parseDeclareStmt(const std::shared_ptr<Type>& type, int line, int col){
         std::vector<std::shared_ptr<VarDecl>> variables;
-        std::string typeString = type.lexeme;
-        while(peek() != SEMI_COLON){
-            if(peek() == IDENTIFIER){
-                Token id = consume();
-                std::string idString = id.lexeme;
-                std::shared_ptr<Expression> initialization;
-                if(peek() == ASSIGN){
-                    consume();
-                    initialization = parseExpression();
-                }
-                if(peek() == COMMA) consume();
-                variables.emplace_back(std::make_shared<VarDecl>(id.line, id.col, idString, typeString, initialization));
-            } else throw std::logic_error("Got invalid token in declare stmt: " + std::string(tokenTypeToString(peek())));
+        while(peek() != SEMI_COLON && peek() != EOF_TOKEN){
+            auto [finalType, name, variable_line, variable_col] = parseDeclarator(type);
+            std::shared_ptr<Expression> initialization;
+            if(peek() == ASSIGN){
+                consume();
+                initialization = parseExpression();
+            }
+            if(peek() == COMMA) consume();
+            variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name, finalType, initialization));
         }
         expect(SEMI_COLON);
-        return std::make_shared<DeclareStmt>(type.line, type.col, variables);
+        return std::make_shared<DeclareStmt>(line, col, variables);
     }
 
     std::shared_ptr<ReturnStmt> parseReturnStmt(){
@@ -208,8 +259,8 @@ class Parser
         expect(LEFT_PAREN);
         std::shared_ptr<Statement> initialization;
         if(peek() == INT || peek() == CHAR){
-            Token type = consume();
-            initialization = parseDeclareStmt(type);
+            auto [type, line, col] = parseBaseType();
+            initialization = parseDeclareStmt(type, line, col);
         }else{
             initialization = parseAssignStmt();
         }
@@ -257,8 +308,8 @@ class Parser
                 statements.emplace_back(parseBlockStmt());
             }
             else if(peek() == INT || peek() == CHAR){
-                Token type = consume();
-                statements.emplace_back(parseDeclareStmt(type));
+                auto [type, line, col] = parseBaseType();
+                statements.emplace_back(parseDeclareStmt(type, line, col));
             }
             else if(peek() == RETURN){
                 statements.emplace_back(parseReturnStmt());
@@ -288,18 +339,14 @@ class Parser
         return std::make_shared<BlockStmt>(blockStart.line, blockStart.col, statements);
     }
 
-    void parseParam(std::vector<Parameter>& parameters){
-        if((peek() == INT || peek() == CHAR) && peekNext() == IDENTIFIER){
-            Token type = consume(); // int, char
-            Token param = consume();
-            parameters.emplace_back(type.lexeme, param.lexeme, param.line, param.col);
-        } else throw std::logic_error("Unexpected token in function parameters " + std::string{tokenTypeToString(peek())});
+    void parseParam(std::vector<Parameter>& parameters)
+    {
+        const auto type = parseBaseType();
+        auto finalType = parseDeclarator(std::get<0>(type));
+        parameters.emplace_back(finalType.type, finalType.name, finalType.line, finalType.col);
     }
 
-    std::shared_ptr<Function> parseFunction(Token returnType, Token functionName){
-        int line = returnType.line;
-        int col = returnType.col;
-        std::string returnTypeString = returnType.lexeme;
+    std::shared_ptr<Function> parseFunction(std::shared_ptr<Type> returnType, int line, int col, Token functionName){
         std::string functionNameString = functionName.lexeme;
         std::vector<Parameter> parameters;
 
@@ -317,18 +364,18 @@ class Parser
             blockStmt = parseBlockStmt();
         else expect(SEMI_COLON);
 
-        return std::make_shared<Function>(line, col, functionNameString, returnTypeString, parameters, blockStmt);
+        return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt);
     }
 
     std::shared_ptr<Program> ParseProgram() { 
         std::vector<std::shared_ptr<Function>> functions;
         while(peek() != EOF_TOKEN){
             if(peek() == INT || peek() == CHAR){
-                Token type = consume();
+                auto [type, line, col] = parseBaseType();
                 Token identifier = expect(IDENTIFIER);
                 if(peek() == LEFT_PAREN){
                     consume();
-                    functions.emplace_back(parseFunction(type, identifier));
+                    functions.emplace_back(parseFunction(type, line, col, identifier));
                 }
                 // add varDecl support later
             } // add pointer support later
