@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cmath>
 #include <memory>
 #include <ranges>
 #include <stdexcept>
@@ -25,6 +24,10 @@
 #include "../ast/Expressions/FunctionCallExpr.h"
 #include "../ast/Expressions/UnaryExpr.h"
 #include "../ast/Expressions/StringLiterals.h"
+#include "../ast/Expressions/SubscriptExpr.h"
+#include "../ast/Expressions/MemberExpr.h"
+#include "../ast/Expressions/SizeOfExpr.h"
+#include "../ast/Expressions/CastExpr.h"
 
 struct Declarator {
     std::shared_ptr<Type> type;
@@ -112,6 +115,31 @@ class Parser
         return Declarator{base, id.lexeme, id.line, id.col};
     }
 
+    std::shared_ptr<Type> parseAbstractDeclarator(std::shared_ptr<Type> base)
+    {
+        while (peek() == ASTERISK)
+        {
+            consume();
+            base = std::make_shared<PointerType>(base);
+        }
+
+        if (peek() == LEFT_PAREN) {
+            throw std::logic_error(
+                "parenthesized declarators (e.g. int (*p)[10]) not supported yet");
+        }
+        std::vector<size_t> dims;
+        while (peek() == LEFT_BRACKET) {
+            consume();
+            Token sz = expect(CONSTANT);
+            expect(RIGHT_BRACKET);
+            dims.push_back(std::stoul(sz.lexeme));
+        }
+        for (unsigned long long & dim : std::views::reverse(dims)) {
+            base = std::make_shared<ArrayType>(base, dim);
+        }
+
+        return base;
+    }
 
     std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(std::shared_ptr<VariableExpr> functionName){
         expect(LEFT_PAREN);
@@ -153,7 +181,7 @@ class Parser
             combined = '"' + combined + '"';
             node = std::make_shared<StringLiterals>(s.line, s.col, combined);
         } else throw std::logic_error("Invalid token as a factor " + std::string(tokenTypeToString(peek())));
-        
+
         while(true){
             if(peek() == LEFT_PAREN){
                 auto var = std::dynamic_pointer_cast<VariableExpr>(node);
@@ -162,8 +190,18 @@ class Parser
             }else if(peek() == INC_OP || peek() == DEC_OP){
                 Token op = consume();
                 node = std::make_shared<UnaryExpr>(node->getLine(),node->getCol(), op.lexeme, node, true);
+            }else if (peek() == LEFT_BRACKET){
+                consume();
+                std::shared_ptr<Expression> index = parseExpression();
+                expect(RIGHT_BRACKET);
+                node = std::make_shared<SubscriptExpr>(node, index, node->getLine(), node->getCol());
+            }else if (peek() == DOT || peek() == PTR_OP){
+                Token op = consume();
+                Token field = expect(IDENTIFIER);
+                node = std::make_shared<MemberExpr>(node, field.lexeme, op.type == PTR_OP, node->getLine(), node->getCol());
             }else break;
         }
+
         return node;
     }
     
@@ -181,6 +219,29 @@ class Parser
             Token op = consume();
             std::shared_ptr<Expression> operand = parseUnary();
             return std::make_shared<UnaryExpr>(op.line, op.col, op.lexeme, operand);
+        }
+        if (peek() == SIZEOF)
+        {
+            Token t = consume();
+            if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
+            {
+                consume();
+                auto [base, _, __] = parseBaseType();
+                base = parseAbstractDeclarator(base);
+                expect(RIGHT_PAREN);
+                return std::make_shared<SizeOfExpr>(t.line, t.col, base, nullptr);
+            }
+            std::shared_ptr<Expression> expr = parseUnary();
+            return std::make_shared<SizeOfExpr>(expr->getLine(), expr->getCol(), nullptr, expr);
+        }
+        if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
+        {
+            consume();
+            auto [base, line, col] = parseBaseType();
+            base = parseAbstractDeclarator(base);
+            expect(RIGHT_PAREN);
+            auto operand = parseUnary();
+            return std::make_shared<CastExpr>(base, operand, line, col);
         }
         std::shared_ptr<Expression> operand = parseFactor();
         return operand;

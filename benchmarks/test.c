@@ -24,7 +24,19 @@ int main()
 {
     int x = 5;
     int y = 10;
-
+    int a[10][11];
+    a[1] = 2;
+    a[x] = 12;
+    a[x][y] = 23;
+    int s1 = sizeof(int);
+    int s2 = sizeof(int *);
+    int s3 = sizeof(char[10]);
+    int s4 = sizeof x;            /* expr form, no parens */
+    int s5 = sizeof(x);           /* expr form, parenthesized — disambiguates to expr because x isn't a type */
+    int s6 = sizeof !x;           /* sizeof of a unary expr */
+    int s7 = sizeof a[0];         /* sizeof of a subscript */
+    return sizeof(int) + 1;       /* in return */
+    if (sizeof x > 0) { }         /* in condition */
     /* mixing unary with binary precedence */
     int a = -x + y;
     int b = -x * y;
@@ -88,5 +100,20 @@ int main()
     char buf[32];
     char names[10][32];
 
+    /* === NEW: member access (.) and (->) — names need not be declared, parser only === */
+    p.x = 1;
+    q->y = 2;
+    p.x.y = 3;            /* chained dot, left-associative */
+    q->next->val = 4;     /* chained arrow */
+    a[i].field = 5;       /* subscript then member */
+    obj.arr[i] = 6;       /* member then subscript */
+    obj.inner.arr[i] = 7; /* chained member then subscript */
+    int memberRead = p.x + q->y;  /* members in expression position */
+
+
+    char c = (char)x;            /* int → char, truncates */
+    int  n = (int)c;             /* char → int, sign-extends */
+    int *ip = (int *)p;          /* pointer reinterpretation */
+    char *cp = (char *)&n;       /* peek at int's bytes */
     return -x;
 }
