@@ -9,6 +9,7 @@
 #include "../lexer/token.h"
 #include "../ast/ASTNodes/Program.h"
 #include "../ast/TopLevelNodes/Function.h"
+#include "../ast/TopLevelNodes/StructDecl.h"
 #include "../ast/Statements/DeclareStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/Statements/IfStmt.h"
@@ -86,7 +87,8 @@ class Parser
             "Expected type specifier, got " + std::string(tokenTypeToString(peek())));
     }
 
-    Declarator parseDeclarator(std::shared_ptr<Type> base) {
+    void parseDeclaratorHead(std::shared_ptr<Type>& base)
+    {
         // leading *s — leftmost is outermost, so wrap in-order
         while (peek() == ASTERISK) {
             consume();
@@ -97,9 +99,10 @@ class Parser
             throw std::logic_error(
                 "parenthesized declarators (e.g. int (*p)[10]) not supported yet");
         }
+    }
 
-        const Token id = expect(IDENTIFIER);
-
+    void parseDeclaratorTail(std::shared_ptr<Type>& base)
+    {
         // trailing [N]s — rightmost is innermost, so collect then reverse-wrap
         std::vector<size_t> dims;
         while (peek() == LEFT_BRACKET) {
@@ -111,33 +114,19 @@ class Parser
         for (unsigned long long & dim : std::views::reverse(dims)) {
             base = std::make_shared<ArrayType>(base, dim);
         }
+    }
 
+    Declarator parseDeclarator(std::shared_ptr<Type> base) {
+        parseDeclaratorHead(base);
+        const Token id = expect(IDENTIFIER);
+        parseDeclaratorTail(base);
         return Declarator{base, id.lexeme, id.line, id.col};
     }
 
     std::shared_ptr<Type> parseAbstractDeclarator(std::shared_ptr<Type> base)
     {
-        while (peek() == ASTERISK)
-        {
-            consume();
-            base = std::make_shared<PointerType>(base);
-        }
-
-        if (peek() == LEFT_PAREN) {
-            throw std::logic_error(
-                "parenthesized declarators (e.g. int (*p)[10]) not supported yet");
-        }
-        std::vector<size_t> dims;
-        while (peek() == LEFT_BRACKET) {
-            consume();
-            Token sz = expect(CONSTANT);
-            expect(RIGHT_BRACKET);
-            dims.push_back(std::stoul(sz.lexeme));
-        }
-        for (unsigned long long & dim : std::views::reverse(dims)) {
-            base = std::make_shared<ArrayType>(base, dim);
-        }
-
+        parseDeclaratorHead(base);
+        parseDeclaratorTail(base);
         return base;
     }
 
@@ -258,7 +247,8 @@ class Parser
         return left;
     }
 
-    std::shared_ptr<DeclareStmt> parseDeclareStmt(const std::shared_ptr<Type>& type, int line, int col){
+    std::vector<std::shared_ptr<VarDecl>> parseVarDecl(const std::shared_ptr<Type>& type, bool global = false)
+    {
         std::vector<std::shared_ptr<VarDecl>> variables;
         while(peek() != SEMI_COLON && peek() != EOF_TOKEN){
             auto [finalType, name, variable_line, variable_col] = parseDeclarator(type);
@@ -268,9 +258,14 @@ class Parser
                 initialization = parseExpression();
             }
             if(peek() == COMMA) consume();
-            variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name, finalType, initialization));
+            variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name, finalType, initialization, global));
         }
         expect(SEMI_COLON);
+        return variables;
+    }
+
+    std::shared_ptr<DeclareStmt> parseDeclareStmt(const std::shared_ptr<Type>& type, int line, int col){
+        auto variables = parseVarDecl(type);
         return std::make_shared<DeclareStmt>(line, col, variables);
     }
 
@@ -368,7 +363,7 @@ class Parser
             if(peek() == LEFT_BRACE){
                 statements.emplace_back(parseBlockStmt());
             }
-            else if(peek() == INT || peek() == CHAR){
+            else if(isTypeStart(peek())){
                 auto [type, line, col] = parseBaseType();
                 statements.emplace_back(parseDeclareStmt(type, line, col));
             }
@@ -428,20 +423,63 @@ class Parser
         return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt);
     }
 
-    std::shared_ptr<Program> ParseProgram() { 
-        std::vector<std::shared_ptr<Function>> functions;
-        while(peek() != EOF_TOKEN){
-            if(peek() == INT || peek() == CHAR){
-                auto [type, line, col] = parseBaseType();
-                Token identifier = expect(IDENTIFIER);
-                if(peek() == LEFT_PAREN){
-                    consume();
-                    functions.emplace_back(parseFunction(type, line, col, identifier));
-                }
-                // add varDecl support later
-            } // add pointer support later
+    std::shared_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type>& structType, int line, int col)
+    {
+        expect(LEFT_BRACE);
+        if (peek() == RIGHT_BRACE)
+        {
+            throw std::logic_error("Empty struct body not allowed");
         }
-        return std::make_shared<Program>(functions);
+        std::vector<StructField> fields;
+        while (peek()!=RIGHT_BRACE && peek()!=EOF_TOKEN){
+            auto [type, line, col] = parseBaseType();
+            while (peek()!=SEMI_COLON && peek()!=EOF_TOKEN)
+            {
+                parseDeclaratorHead(type);
+                const Token id = expect(IDENTIFIER);
+                parseDeclaratorTail(type);
+                fields.emplace_back(type, id.lexeme, line, col);
+                if (peek() == COMMA) consume();
+            }
+            expect(SEMI_COLON);
+        }
+        expect(RIGHT_BRACE);
+        expect(SEMI_COLON);
+        return std::make_shared<StructDecl>(structType->toString(), fields, line, col);
+    }
+
+    std::shared_ptr<Program> ParseProgram() { 
+        std::vector<std::shared_ptr<TopLevelNode>> nodes;
+        while(peek() != EOF_TOKEN){
+
+            if(isTypeStart(peek())){
+                auto [type, line, col] = parseBaseType();
+                parseDeclaratorHead(type);
+                if (peek() == IDENTIFIER)
+                {
+                    if (peekNext() == LEFT_PAREN) // handle functions
+                    {
+                        Token identifier = expect(IDENTIFIER);
+                        consume();
+                        nodes.emplace_back(parseFunction(type, line, col, identifier));
+                    }
+                    else // handle variable declarations
+                    {
+                        parseDeclaratorTail(type);
+                        auto variables = parseVarDecl(type, true);
+                        for (const auto& var : variables)
+                        {
+                            nodes.emplace_back(var);
+                        }
+                    }
+                }else if (peek() == LEFT_BRACE)
+                {
+                    nodes.emplace_back(parseStructDecl(type, line, col));
+                }
+            } // add pointer support later
+
+        }
+        return std::make_shared<Program>(nodes);
     }
 
 };

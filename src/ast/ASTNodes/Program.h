@@ -4,19 +4,19 @@
 #include <vector>
 #include <memory>
 #include "./ASTNode.h"
-#include "../TopLevelNodes/Function.h"
+#include "../TopLevelNodes/TopLevelNode.h"
 
 class Program : public ASTNode
 {
-    std::vector<std::shared_ptr<Function>> functions;
+    std::vector<std::shared_ptr<TopLevelNode>> nodes;
 
     public:
-    Program(std::vector<std::shared_ptr<Function>> functions) : ASTNode(0,0) ,                        
-functions(std::move(functions)) {} 
+    explicit Program(std::vector<std::shared_ptr<TopLevelNode>> nodes) : ASTNode(0,0) ,
+nodes(std::move(nodes)) {}
 
     void print(std::ostream& out, int tab) const override{
-        for(auto& function : functions){
-            function->print(out, tab);
+        for(auto& node : nodes){
+            node->print(out, tab);
         }
     }
 };

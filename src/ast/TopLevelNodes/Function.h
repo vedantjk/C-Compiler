@@ -8,6 +8,7 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 struct Parameter
 {
@@ -16,7 +17,7 @@ struct Parameter
     int line;
     int col;
 
-    Parameter(std::shared_ptr<Type> type_, std::string name_, int line_, int col_) : type(type_), name(name_), line(line_), col(col_) {}
+    Parameter(std::shared_ptr<Type> type_, std::string name_, int line_, int col_) : type(std::move(type_)), name(std::move(name_)), line(line_), col(col_) {}
 };
 
 class Function : public TopLevelNode
@@ -28,7 +29,7 @@ class Function : public TopLevelNode
 
     public:
     Function(int line_, int col_, std::string name_, std::shared_ptr<Type> type_, std::vector<Parameter> parameters_, std::shared_ptr<BlockStmt> statements_) :
-        TopLevelNode(line_, col_), name(name_), type(type_), parameters(std::move(parameters_)), statements(std::move(statements_)){}
+        TopLevelNode(line_, col_), name(std::move(name_)), type(std::move(type_)), parameters(std::move(parameters_)), statements(std::move(statements_)){}
 
     void print(std::ostream& out, int tab) const override{
         out << type->toString() << " " << name << " ( ";
