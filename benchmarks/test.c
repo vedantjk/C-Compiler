@@ -54,3 +54,8 @@ void main() {
     int t[3] = {1, 2, 3,};   /* trailing comma — legal C89 */
     int u[3] = {1};          /* partial — legal, rest implicitly zero */
 }
+
+int main() { ; return 0; }      // leading empty
+int main() { return 0; ; }      // trailing empty
+int main() { ; }                // only empty
+int main() { ;;; return 0; }    // multiple

@@ -396,6 +396,10 @@ class Parser
             if(peek() == LEFT_BRACE){
                 statements.emplace_back(parseBlockStmt());
             }
+            else if (peek() == SEMI_COLON)
+            {
+                consume();
+            }
             else if(isTypeStart(peek())){
                 auto [type, line, col] = parseBaseType();
                 statements.emplace_back(parseDeclareStmt(type, line, col));
