@@ -425,21 +425,26 @@ class Parser
     std::shared_ptr<BlockStmt> parseBlockStmt(){
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::shared_ptr<Statement>> statements;
+        bool seenNonDeclStatements = false;
         while(peek()!=RIGHT_BRACE){
+            if(isTypeStart(peek())){
+                if (seenNonDeclStatements)
+                {
+                    throw std::logic_error("cannot add declarations after statements.");
+                }
+                auto [type, line, col] = parseBaseType();
+                statements.emplace_back(parseDeclareStmt(type, line, col));
+                continue;
+            }
+            seenNonDeclStatements = true;
             if(peek() == LEFT_BRACE){
                 statements.emplace_back(parseBlockStmt());
             }
-            else if (peek() == SEMI_COLON)
-            {
+            else if (peek() == SEMI_COLON){
                 consume();
             }
-            else if (peek() == DO)
-            {
+            else if (peek() == DO){
                 statements.emplace_back(parseDoWhileStmt());
-            }
-            else if(isTypeStart(peek())){
-                auto [type, line, col] = parseBaseType();
-                statements.emplace_back(parseDeclareStmt(type, line, col));
             }
             else if(peek() == RETURN){
                 statements.emplace_back(parseReturnStmt());
@@ -463,7 +468,7 @@ class Parser
             else if(peek() == CONTINUE){
                 statements.emplace_back(parseContinueStmt());
             }
-            else throw std::logic_error("Unexpected token in block " + std::string{tokenTypeToString(peek())}); 
+            else throw std::logic_error("Unexpected token in block " + std::string{tokenTypeToString(peek())});
         }
         consume(); // consume the right brace
         return std::make_shared<BlockStmt>(blockStart.line, blockStart.col, statements);
