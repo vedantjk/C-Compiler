@@ -45,4 +45,11 @@ void main() {
     p.x = 1;
     p.y = 2;
     q->x = 3;
+    int a[3] = {1, 2, 3};
+    int b[4] = {4, 5, 6, 7,};
+    int m[1][2] = {{1, 2}};
+    int n[2][2] = {{1, 2}, {3, 4}};
+    struct Point p = {1, 2};
+    int t[3] = {1, 2, 3,};   /* trailing comma — legal C89 */
+    int u[3] = {1};          /* partial — legal, rest implicitly zero */
 }

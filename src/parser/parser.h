@@ -29,6 +29,7 @@
 #include "../ast/Expressions/MemberExpr.h"
 #include "../ast/Expressions/SizeOfExpr.h"
 #include "../ast/Expressions/CastExpr.h"
+#include "../ast/Expressions/InitExpr.h"
 
 struct Declarator {
     std::shared_ptr<Type> type;
@@ -247,6 +248,33 @@ class Parser
         return left;
     }
 
+    std::shared_ptr<Expression> parseInitializers()
+    {
+        if (peek() == LEFT_BRACE)
+        {
+            Token brace = consume();
+            if (peek() == RIGHT_BRACE)
+            {
+                throw std::logic_error("Empty Initializations are disallowed");
+            }
+            std::vector<std::shared_ptr<Expression>> initializations;
+            if (peek() != RIGHT_BRACE)
+            {
+                initializations.emplace_back(parseInitializers());
+                while (peek() == COMMA)
+                {
+                    consume();
+                    if (peek() == RIGHT_BRACE) break;
+                    initializations.emplace_back(parseInitializers());
+                }
+            }
+            expect(RIGHT_BRACE);
+            return std::make_shared<InitExpr>(initializations, brace.line, brace.col);
+        }
+
+        return parseExpression();
+    }
+
     std::vector<std::shared_ptr<VarDecl>> parseVarDecl(const std::shared_ptr<Type>& type, bool global = false)
     {
         std::vector<std::shared_ptr<VarDecl>> variables;
@@ -255,7 +283,7 @@ class Parser
             std::shared_ptr<Expression> initialization;
             if(peek() == ASSIGN){
                 consume();
-                initialization = parseExpression();
+                initialization = parseInitializers();
             }
             if(peek() == COMMA) consume();
             variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name, finalType, initialization, global));
