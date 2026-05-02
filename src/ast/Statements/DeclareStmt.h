@@ -1,16 +1,19 @@
 #pragma once
 
-#include "./Statement.h"
 #include "../TopLevelNodes/VarDecl.h"
-#include <vector>
+#include "../TopLevelNodes/StructDecl.h"
+#include "./Statement.h"
 #include <iostream>
+#include <variant>
+#include <vector>
 
 class DeclareStmt : public Statement
 {
-    std::vector<std::shared_ptr<VarDecl>> variables;
+    std::variant<std::vector<std::shared_ptr<VarDecl>>,std::shared_ptr<StructDecl>> variables;
 
     public:
-    DeclareStmt(int line_, int col_, std::vector<std::shared_ptr<VarDecl>> variables_)
+    DeclareStmt(int line_, int col_, std::variant<std::vector<std::shared_ptr<VarDecl>>,
+                               std::shared_ptr<StructDecl>> variables_)
         : Statement(line_, col_), variables(std::move(variables_))
     {
     }
@@ -19,11 +22,19 @@ class DeclareStmt : public Statement
         for(int i = 0; i<tab;i++){
             out<<"  ";
         }
-        for (size_t i= 0; i<variables.size(); i++)
+        if (std::holds_alternative<std::vector<std::shared_ptr<VarDecl>>>(variables))
         {
-            variables[i]->print(out, tab);
-            if (i != variables.size() - 1) out<<",";
+            auto& val = std::get<std::vector<std::shared_ptr<VarDecl>>>(variables);
+            for (size_t i= 0; i<val.size(); i++)
+            {
+                val[i]->print(out, tab+1);
+                if (i != val.size() - 1) out<<",";
+            }
+            out << ";";
+        } else
+        {
+            auto& val = std::get<std::shared_ptr<StructDecl>>(variables);
+            val->print(out, tab+1);
         }
-        out << ";";
     }
 };

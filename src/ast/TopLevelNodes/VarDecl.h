@@ -28,9 +28,5 @@ class VarDecl : public TopLevelNode
           out<<" = ";
           initialization->print(out, tab);
         }
-        if (global)
-        {
-            out<<";\n";
-        }
       }
 };

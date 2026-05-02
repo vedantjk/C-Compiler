@@ -17,6 +17,7 @@ nodes(std::move(nodes)) {}
     void print(std::ostream& out, int tab) const override{
         for(auto& node : nodes){
             node->print(out, tab);
+            out<<"\n";
         }
     }
 };

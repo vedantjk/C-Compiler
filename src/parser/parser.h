@@ -293,6 +293,11 @@ class Parser
     }
 
     std::shared_ptr<DeclareStmt> parseDeclareStmt(const std::shared_ptr<Type>& type, int line, int col){
+        if (peek() == LEFT_BRACE)
+        {
+            auto structVar = parseStructDecl(type, line, col);
+            return std::make_shared<DeclareStmt>(line, col, structVar);
+        }
         auto variables = parseVarDecl(type);
         return std::make_shared<DeclareStmt>(line, col, variables);
     }

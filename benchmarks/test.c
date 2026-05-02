@@ -42,6 +42,7 @@ void scale(struct Point *p, int k) { }
 void main() {
     struct Point p;
     struct Point *q;
+    struct Point { int x; int y; };
     p.x = 1;
     p.y = 2;
     q->x = 3;

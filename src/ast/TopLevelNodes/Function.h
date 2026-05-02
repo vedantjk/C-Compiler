@@ -39,6 +39,6 @@ class Function : public TopLevelNode
         }
         out << " ) {\n";
         statements->print(out, tab+1);
-        out << "} \n";
+        out << "}";
     }
 };

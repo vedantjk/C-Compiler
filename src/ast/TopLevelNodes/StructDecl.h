@@ -1,3 +1,5 @@
+#pragma once
+
 #include "TopLevelNode.h"
 #include "types/types.h"
 
@@ -27,8 +29,10 @@ class StructDecl : public TopLevelNode
         out<<name<<" {\n";
         for (auto field : fields)
         {
+            for (int i = 0; i<tab; i++) out<<" ";
             out<<"  "<<field.toString()<<";\n";
         }
-        out<<"};\n";
+        for (int i = 0; i<tab; i++) out<<" ";
+        out<<"};";
     }
 };
