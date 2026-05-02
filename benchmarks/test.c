@@ -59,3 +59,12 @@ int main() { ; return 0; }      // leading empty
 int main() { return 0; ; }      // trailing empty
 int main() { ; }                // only empty
 int main() { ;;; return 0; }    // multiple
+
+int main() {
+    int i = 0;
+    do { i = i + 1; } while (i < 10);
+    do { ; } while (0);            // exercises empty-stmt inside do-while body
+    do { break; } while (1);
+    do { continue; } while (i < 5);
+    return 0;
+}

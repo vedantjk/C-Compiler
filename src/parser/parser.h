@@ -6,30 +6,31 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../lexer/token.h"
 #include "../ast/ASTNodes/Program.h"
-#include "../ast/TopLevelNodes/Function.h"
-#include "../ast/TopLevelNodes/StructDecl.h"
-#include "../ast/Statements/DeclareStmt.h"
-#include "../ast/Statements/ReturnStmt.h"
-#include "../ast/Statements/IfStmt.h"
-#include "../ast/Statements/WhileStmt.h"
-#include "../ast/Statements/AssignStmt.h"
-#include "../ast/Statements/ForStmt.h"
-#include "../ast/Statements/FunctionCallStmt.h"
-#include "../ast/Statements/BreakStmt.h"
-#include "../ast/Statements/ContinueStmt.h"
-#include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/BinaryExpr.h"
-#include "../ast/Expressions/VariableExpr.h"
+#include "../ast/Expressions/CastExpr.h"
 #include "../ast/Expressions/FunctionCallExpr.h"
-#include "../ast/Expressions/UnaryExpr.h"
-#include "../ast/Expressions/StringLiterals.h"
-#include "../ast/Expressions/SubscriptExpr.h"
+#include "../ast/Expressions/InitExpr.h"
+#include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/MemberExpr.h"
 #include "../ast/Expressions/SizeOfExpr.h"
-#include "../ast/Expressions/CastExpr.h"
-#include "../ast/Expressions/InitExpr.h"
+#include "../ast/Expressions/StringLiterals.h"
+#include "../ast/Expressions/SubscriptExpr.h"
+#include "../ast/Expressions/UnaryExpr.h"
+#include "../ast/Expressions/VariableExpr.h"
+#include "../ast/Statements/AssignStmt.h"
+#include "../ast/Statements/BreakStmt.h"
+#include "../ast/Statements/ContinueStmt.h"
+#include "../ast/Statements/DeclareStmt.h"
+#include "../ast/Statements/ForStmt.h"
+#include "../ast/Statements/FunctionCallStmt.h"
+#include "../ast/Statements/IfStmt.h"
+#include "../ast/Statements/ReturnStmt.h"
+#include "../ast/Statements/WhileStmt.h"
+#include "../ast/Statements/DoWhileStmt.h"
+#include "../ast/TopLevelNodes/Function.h"
+#include "../ast/TopLevelNodes/StructDecl.h"
+#include "../lexer/token.h"
 
 struct Declarator {
     std::shared_ptr<Type> type;
@@ -315,6 +316,10 @@ class Parser
         expect(LEFT_PAREN);
         std::shared_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
+        if (peek() != LEFT_BRACE)
+        {
+            throw std::logic_error("while statement expects braces");
+        }
         std::shared_ptr<BlockStmt> whileBlock = parseBlockStmt();
 
         return std::make_shared<WhileStmt>(whileToken.line, whileToken.col, condition, whileBlock);
@@ -322,14 +327,22 @@ class Parser
 
     std::shared_ptr<IfStmt> parseIfStmt(){
         Token ifToken = expect(IF); // should never throw;
-        expect(LEFT_PAREN); 
+        expect(LEFT_PAREN);
         std::shared_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
+        if (peek() != LEFT_BRACE)
+        {
+            throw std::logic_error("if statement expects braces");
+        }
         std::shared_ptr<BlockStmt> thenBlock = parseBlockStmt();
 
         std::shared_ptr<BlockStmt> elseBlock;
         if(peek() == ELSE){
             consume();
+            if (peek() != LEFT_BRACE)
+            {
+                throw std::logic_error("else statement expects braces");
+            }
             elseBlock = parseBlockStmt();
         }
         return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
@@ -357,6 +370,10 @@ class Parser
         expect(SEMI_COLON); 
         std::shared_ptr<Statement> update = parseAssignStmt(false);
         expect(RIGHT_PAREN);
+        if (peek() != LEFT_BRACE)
+        {
+            throw std::logic_error("for statement expects braces");
+        }
         std::shared_ptr<BlockStmt> forBlock = parseBlockStmt();
         return std::make_shared<ForStmt>(forStart.line, forStart.col, initialization, condition, update, forBlock);
     }
@@ -389,6 +406,22 @@ class Parser
         return std::make_shared<ContinueStmt>(continueToken.line, continueToken.col);
     }
 
+    std::shared_ptr<DoWhileStmt> parseDoWhileStmt()
+    {
+        Token doStart = expect(DO); // should not throw
+        if (peek()!=LEFT_BRACE)
+        {
+            throw std::logic_error("do while statement expects braces");
+        }
+        std::shared_ptr<BlockStmt> doBlock = parseBlockStmt();
+        expect(WHILE);
+        expect(LEFT_PAREN);
+        std::shared_ptr<Expression> condition = parseExpression();
+        expect(RIGHT_PAREN);
+        expect(SEMI_COLON);
+        return std::make_shared<DoWhileStmt>(doBlock, condition, doStart.line, doStart.col);
+    }
+
     std::shared_ptr<BlockStmt> parseBlockStmt(){
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::shared_ptr<Statement>> statements;
@@ -399,6 +432,10 @@ class Parser
             else if (peek() == SEMI_COLON)
             {
                 consume();
+            }
+            else if (peek() == DO)
+            {
+                statements.emplace_back(parseDoWhileStmt());
             }
             else if(isTypeStart(peek())){
                 auto [type, line, col] = parseBaseType();
