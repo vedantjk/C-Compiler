@@ -147,5 +147,70 @@ int main() {
     (a + b) = 5;                   // not an lvalue — parser accepts, semantic rejects
     side_effect() = 5;             // same
     1 = 2;                         // same
+    a = 1+2 ? 1 : 0;
     return 0;
+}
+
+// ---- ternary `?:` ----
+
+// basic ternary, condition uses binary so we know precedence is right
+int abs_val(int x) { return x > 0 ? x : -x; }
+
+// right-associativity: a ? b : c ? d : e  parses as  a ? b : (c ? d : e)
+int main() {
+    int a = 1; int b = 2; int c = 3; int d = 4; int e = 5;
+    int r = a ? b : c ? d : e;     // = a ? b : (c ? d : e)
+    return r;
+}
+
+// chained "switch" idiom — exercises right-assoc nesting depth
+int classify(int x) {
+    return x == 0 ? 1
+         : x == 1 ? 2
+         : x == 2 ? 3
+         : 0;
+}
+
+// ternary in expression contexts (init, return, condition, arg, index, member)
+int foo(int a, int b) { return a + b; }
+int main() {
+    int x = 1;
+    int y = x ? 10 : 20;                  // init slot
+    int a[10];
+    if (x ? 1 : 0) { return 1; }          // if-condition
+    while (x ? x - 1 : 0) { x = x - 1; }  // while-condition
+    foo(x ? 1 : 2, x ? 3 : 4);            // both call args
+    a[x ? 0 : 1] = 99;                    // subscript index
+    return x ? a[0] : a[1];               // return
+}
+
+// assignment inside ternary slots
+int main() {
+    int x = 0; int y = 0; int z = 0;
+    x = y ? (z = 5) : 0;           // explicit parens
+    x = y ? z = 5 : 0;             // middle slot — `expression` allows assignment, no parens needed
+    x = y ? 1 : z = 5;             // third slot — gcc-style: parses as y ? 1 : (z = 5)
+    return x;
+}
+
+// ternary nested as condition
+int main() {
+    int a = 1; int b = 2;
+    int r = (a > b ? a : b) > 0 ? 1 : -1;  // ternary feeding a binary feeding another ternary
+    return r;
+}
+
+// parens force a different parse tree than right-assoc default
+int main() {
+    int a = 1; int b = 2; int c = 3; int d = 4; int e = 5;
+    int r = (a ? b : c) ? d : e;   // forces left-leaning shape
+    return r;
+}
+
+// ternary in pointer/struct contexts — no parser-level lvalue check
+struct Node { int data; struct Node *next; };
+int main() {
+    struct Node *p; struct Node *q; struct Node *r;
+    int v = (p ? p : q)->data;     // ternary expression as base of `->`
+    return v;
 }

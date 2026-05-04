@@ -19,6 +19,7 @@
 #include "../ast/Expressions/UnaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
 #include "../ast/Expressions/AssignExpr.h"
+#include "../ast/Expressions/TernaryExpr.h"
 #include "../ast/Statements/BreakStmt.h"
 #include "../ast/Statements/ContinueStmt.h"
 #include "../ast/Statements/DeclareStmt.h"
@@ -249,9 +250,23 @@ class Parser
         return left;
     }
 
+    std::shared_ptr<Expression> parseTernaryExpression()
+    {
+        std::shared_ptr<Expression> condition = parseBinaryExpression();
+        if (peek() == QUESTION_MARK)
+        {
+            consume();
+            std::shared_ptr<Expression> thenBranch = parseExpression();
+            expect(COLON);
+            std::shared_ptr<Expression> elseBranch = parseTernaryExpression();
+            return std::make_shared<TernaryExpr>(condition, thenBranch, elseBranch, condition->getLine(), condition->getCol());
+        }
+        return condition;
+    }
+
     std::shared_ptr<Expression> parseExpression()
     {
-        std::shared_ptr<Expression> left = parseBinaryExpression();
+        std::shared_ptr<Expression> left = parseTernaryExpression();
         while (peek() == ASSIGN)
         {
             consume();
