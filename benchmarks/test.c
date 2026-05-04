@@ -370,3 +370,47 @@ int main() {
     while (c != '\0') { c = c + 1; }           // loop condition
     return c == 'x' ? 'A' : '0';
 }
+
+// ---- comma operator ----
+
+// basic: left-associative, lower precedence than `=`
+int main() {
+    int a = 1; int b = 2; int c = 3;
+    a, b, c;                       // = (a, b), c — three values, result is c
+    a = 1, b = 2;                  // = (a = 1), (b = 2) — two assignments, result is 2
+    return a + b;
+}
+
+// comma in for-loop slots — both init and update support it
+int main() {
+    int i; int j; int sum = 0;
+    for (i = 0, j = 10; i < j; i++, j--) {
+        sum = sum + i;
+    }
+    return sum;
+}
+
+// comma is NOT comma-operator at function-call arg separators or var-decl separators
+int two_args(int a, int b) { return a + b; }
+int main() {
+    int x = 1, y = 2;              // two var decls, NOT (1, 2)
+    two_args(x, y);                // two args, NOT one comma-expression arg
+    two_args((x, y), x);           // first arg IS a comma expression — explicit parens
+    return x + y;
+}
+
+// comma in expression contexts — return, if, while, subscript, ternary middle
+int main() {
+    int a[10]; int i = 0; int j = 5;
+    int k = a[i, j];                            // subscript = `(i, j)` = j
+    if (i = 0, j > 0) { return 1; }            // condition is `(i = 0, j > 0)` — value of j > 0
+    while (i++, i < 3) { ; }                   // condition is value of `i < 3` after `i++`
+    return (k > 0 ? (a[0] = 1, k) : 0);        // ternary middle is comma expression
+}
+
+// comma chains and precedence with assignment
+int main() {
+    int a; int b; int c;
+    a = b = 1, c = 2;              // = (a = (b = 1)), (c = 2) — assignments group, comma joins
+    return a;
+}

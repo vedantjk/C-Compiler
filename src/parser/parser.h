@@ -143,10 +143,10 @@ class Parser
         expect(LEFT_PAREN);
         std::vector<std::shared_ptr<Expression>> parameters;
         if (peek() != RIGHT_PAREN) {
-            parameters.emplace_back(parseExpression());
+            parameters.emplace_back(parseAssignment());
             while (peek() == COMMA) {
                 consume();
-                parameters.emplace_back(parseExpression());
+                parameters.emplace_back(parseAssignment());
             }
         }
         expect(RIGHT_PAREN);
@@ -282,14 +282,26 @@ class Parser
         || type == RIGHT_ASSIGN;
     }
 
-    std::shared_ptr<Expression> parseExpression()
+    std::shared_ptr<Expression> parseAssignment()
     {
         std::shared_ptr<Expression> left = parseTernaryExpression();
         while (isAssignmentOp(peek()))
         {
             Token op = consume();
-            std::shared_ptr<Expression> right = parseExpression();
+            std::shared_ptr<Expression> right = parseAssignment();
             left = std::make_shared<AssignExpr>(left, right, op.lexeme, left->getLine(), left->getCol());
+        }
+        return left;
+    }
+
+    std::shared_ptr<Expression> parseExpression()
+    {
+        std::shared_ptr<Expression> left = parseAssignment();
+        while (peek() == COMMA)
+        {
+            Token op = consume();
+            std::shared_ptr<Expression> right = parseAssignment();
+            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
         }
         return left;
     }
@@ -325,7 +337,7 @@ class Parser
             return std::make_shared<InitExpr>(initializations, brace.line, brace.col);
         }
 
-        return parseExpression();
+        return parseAssignment();
     }
 
     std::vector<std::shared_ptr<VarDecl>> parseVarDecl(const std::shared_ptr<Type>& type, bool global = false)
