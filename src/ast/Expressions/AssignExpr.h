@@ -5,13 +5,15 @@
 class AssignExpr : public Expression
 {
     std::shared_ptr<Expression> lhs, rhs;
+    std::string op;
 public:
-    AssignExpr(std::shared_ptr<Expression> lhs, std::shared_ptr<Expression> rhs, int line, int col) : Expression(line, col), lhs(std::move(lhs)), rhs(std::move(rhs)) {};
+    AssignExpr(std::shared_ptr<Expression> lhs, std::shared_ptr<Expression> rhs, std::string op, int line, int col) :
+    Expression(line, col), lhs(std::move(lhs)), rhs(std::move(rhs)), op(op) {};
 
     void print(std::ostream &out, int tab) const override
     {
         lhs->print(out, tab);
-        out <<" = (";
+        out<<" "<< op <<" (";
         rhs->print(out, tab);
         out <<")";
     }

@@ -264,14 +264,21 @@ class Parser
         return condition;
     }
 
+    bool isAssignmentOp(TokenType type)
+    {
+        return type == ASSIGN || type == ADD_ASSIGN || type == SUB_ASSIGN || type == MUL_ASSIGN || type == DIV_ASSIGN
+        || type ==  MOD_ASSIGN || type == AND_ASSIGN || type == OR_ASSIGN || type == XOR_ASSIGN || type == LEFT_ASSIGN
+        || type == RIGHT_ASSIGN;
+    }
+
     std::shared_ptr<Expression> parseExpression()
     {
         std::shared_ptr<Expression> left = parseTernaryExpression();
-        while (peek() == ASSIGN)
+        while (isAssignmentOp(peek()))
         {
-            consume();
+            Token op = consume();
             std::shared_ptr<Expression> right = parseExpression();
-            left = std::make_shared<AssignExpr>(left, right, left->getLine(), left->getCol());
+            left = std::make_shared<AssignExpr>(left, right, op.lexeme, left->getLine(), left->getCol());
         }
         return left;
     }

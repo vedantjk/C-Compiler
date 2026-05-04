@@ -214,3 +214,83 @@ int main() {
     int v = (p ? p : q)->data;     // ternary expression as base of `->`
     return v;
 }
+
+// ---- compound assignment ----
+
+// every compound operator, basic form
+int main() {
+    int x = 0;
+    x += 1;
+    x -= 1;
+    x *= 2;
+    x /= 2;
+    x %= 3;
+    x <<= 1;
+    x >>= 1;
+    x &= 7;
+    x |= 8;
+    x ^= 4;
+    return x;
+}
+
+// right-associativity: a += b += c  parses as  a += (b += c)
+int main() {
+    int a = 1; int b = 2; int c = 3;
+    a += b += c;                   // a += (b += c)
+    return a;
+}
+
+// mixing plain `=` and compound — both sit at the same precedence level
+int main() {
+    int x = 0; int y = 0;
+    x = y += 5;                    // x = (y += 5)
+    x += y = 7;                    // x += (y = 7)
+    return x;
+}
+
+// compound on non-trivial LHS forms
+struct Box { int w; int h; };
+int main() {
+    int *p; int a[10]; struct Box b; struct Box *bp;
+    *p += 1;
+    a[0] *= 2;
+    b.w -= 3;
+    bp->h <<= 2;
+    return 0;
+}
+
+// compound with non-trivial RHS — exercises full expression on the right
+int main() {
+    int x = 10; int y = 3; int z = 2;
+    x += y * z;                    // RHS is a binary expression
+    x *= y + z;
+    x &= y > z ? 0xF : 0x0;        // RHS is a ternary (note: hex may not parse; use decimal if it doesn't)
+    return x;
+}
+
+// compound in expression contexts (init, return, condition, arg)
+int sink(int v) { return v; }
+int main() {
+    int x = 1; int y = 2;
+    int z = (x += 5);              // init slot — assignment-expression
+    if (x -= 1) { return x; }      // if-condition
+    while (y *= 2) { y = y - 100; }
+    sink(x ^= y);                  // function arg
+    return x;
+}
+
+// compound in for-loop update slot — bare expression, no `;` consumed by slot
+int main() {
+    int i = 0; int sum = 0;
+    for (i = 0; i < 10; i += 2) { sum += i; }
+    for (i = 0; i < 100; i *= 2) { ; }   // i never grows from 0 — infinite-loop semantically, but parses
+    return sum;
+}
+
+// parser-permissive: compound on non-lvalue, parser accepts, semantic rejects
+int main() {
+    int a; int b;
+    (a + b) += 5;
+    1 *= 2;
+    return 0;
+}
