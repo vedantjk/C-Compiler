@@ -322,3 +322,51 @@ int main() {
 
     return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10 + r11 + r12 + r13 + r14;
 }
+
+// ---- char literals ----
+
+// basic forms — printer should preserve the quoted lexeme
+int putchar(int c) { return c; }
+int main() {
+    char a = 'a';
+    char z = 'Z';
+    char zero = '0';
+    char nine = '9';
+    char space = ' ';
+    char bang = '!';
+    char semi = ';';
+    return 0;
+}
+
+// escape sequences — lexer accepts any '\X' as a 2-char form
+int main() {
+    char nl = '\n';
+    char tab = '\t';
+    char bs = '\\';
+    char sq = '\'';
+    char dq = '\"';
+    char nul = '\0';
+    char cr = '\r';
+    return 0;
+}
+
+// chars in arithmetic and comparison (legal because char constants ARE int in C)
+int main() {
+    int c = 'a';
+    int digit = c - '0';                       // common idiom
+    int upper = c - 'a' + 'A';                 // tolower-ish
+    int isLower = c >= 'a' && c <= 'z';        // range check
+    int isDigit = c >= '0' && c <= '9';
+    int sum = 'a' + 1;                         // produces 98
+    return digit + upper + isLower + isDigit + sum;
+}
+
+// chars in expression contexts: arg, init, condition, ternary, return
+int main() {
+    char c = 'x';
+    putchar('H');                              // function arg
+    putchar(c == 'x' ? 'Y' : 'N');             // ternary slots
+    if (c == '\n') { return 1; }               // condition
+    while (c != '\0') { c = c + 1; }           // loop condition
+    return c == 'x' ? 'A' : '0';
+}
