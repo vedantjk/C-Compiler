@@ -18,16 +18,16 @@
 #include "../ast/Expressions/SubscriptExpr.h"
 #include "../ast/Expressions/UnaryExpr.h"
 #include "../ast/Expressions/VariableExpr.h"
-#include "../ast/Statements/AssignStmt.h"
+#include "../ast/Expressions/AssignExpr.h"
 #include "../ast/Statements/BreakStmt.h"
 #include "../ast/Statements/ContinueStmt.h"
 #include "../ast/Statements/DeclareStmt.h"
 #include "../ast/Statements/ForStmt.h"
-#include "../ast/Statements/FunctionCallStmt.h"
 #include "../ast/Statements/IfStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/Statements/WhileStmt.h"
 #include "../ast/Statements/DoWhileStmt.h"
+#include "../ast/Statements/ExprStmt.h"
 #include "../ast/TopLevelNodes/Function.h"
 #include "../ast/TopLevelNodes/StructDecl.h"
 #include "../lexer/token.h"
@@ -238,15 +238,34 @@ class Parser
         return operand;
     }
 
-    std::shared_ptr<Expression> parseExpression(int minPrecedence = 0){
+    std::shared_ptr<Expression> parseBinaryExpression(int minPrecedence = 0){
         
         std::shared_ptr<Expression> left = parseUnary();
         while(isBinaryOp(peek()) && precedenceLevel[peek()] >= minPrecedence){
             Token op = consume();
-            std::shared_ptr<Expression> right = parseExpression(precedenceLevel[op.type]+1);
+            std::shared_ptr<Expression> right = parseBinaryExpression(precedenceLevel[op.type]+1);
             left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
         }
         return left;
+    }
+
+    std::shared_ptr<Expression> parseExpression()
+    {
+        std::shared_ptr<Expression> left = parseBinaryExpression();
+        while (peek() == ASSIGN)
+        {
+            consume();
+            std::shared_ptr<Expression> right = parseExpression();
+            left = std::make_shared<AssignExpr>(left, right, left->getLine(), left->getCol());
+        }
+        return left;
+    }
+
+    std::shared_ptr<ExprStmt> parseExprStatement(bool semiColon = true)
+    {
+        std::shared_ptr<Expression> expr = parseExpression();
+        if (semiColon) expect(SEMI_COLON);
+        return std::make_shared<ExprStmt>(expr, expr->getLine(), expr->getCol(), semiColon);
     }
 
     std::shared_ptr<Expression> parseInitializers()
@@ -348,14 +367,6 @@ class Parser
         return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
     }
 
-    std::shared_ptr<AssignStmt> parseAssignStmt(bool semi_colon = true){
-        std::shared_ptr<Expression> lhs = parseExpression();
-        expect(ASSIGN); // for '='
-        std::shared_ptr<Expression> rhs = parseExpression();
-        if(semi_colon) expect(SEMI_COLON); 
-        return std::make_shared<AssignStmt>(lhs->getLine(), lhs->getCol(), lhs, rhs);
-    }
-
     std::shared_ptr<ForStmt> parseForStmt(){
         Token forStart = expect(FOR);
         expect(LEFT_PAREN);
@@ -364,11 +375,10 @@ class Parser
             auto [type, line, col] = parseBaseType();
             initialization = parseDeclareStmt(type, line, col);
         }else{
-            initialization = parseAssignStmt();
+            initialization = parseExprStatement(true);
         }
-        std::shared_ptr<Expression> condition = parseExpression();
-        expect(SEMI_COLON); 
-        std::shared_ptr<Statement> update = parseAssignStmt(false);
+        std::shared_ptr<Statement> condition = parseExprStatement(true);
+        std::shared_ptr<Statement> update = parseExprStatement(false);
         expect(RIGHT_PAREN);
         if (peek() != LEFT_BRACE)
         {
@@ -376,22 +386,6 @@ class Parser
         }
         std::shared_ptr<BlockStmt> forBlock = parseBlockStmt();
         return std::make_shared<ForStmt>(forStart.line, forStart.col, initialization, condition, update, forBlock);
-    }
-
-    std::shared_ptr<FunctionCallStmt> parseFunctionCallStmt(){
-        Token functionName = expect(IDENTIFIER);
-        expect(LEFT_PAREN);
-        std::vector<std::shared_ptr<Expression>> parameters;
-        if (peek() != RIGHT_PAREN) {
-            parameters.emplace_back(parseExpression());
-            while (peek() == COMMA) {
-                consume();
-                parameters.emplace_back(parseExpression());
-            }
-        }
-        expect(RIGHT_PAREN);
-        expect(SEMI_COLON);
-        return std::make_shared<FunctionCallStmt>(functionName.line, functionName.col, functionName.lexeme, parameters);
     }
 
     std::shared_ptr<BreakStmt> parseBreakStmt(){
@@ -456,8 +450,7 @@ class Parser
                 statements.emplace_back(parseWhileStmt());
             }
             else if(peek() == IDENTIFIER){
-                if(peekNext() == LEFT_PAREN) statements.emplace_back(parseFunctionCallStmt());
-                else statements.emplace_back(parseAssignStmt());
+                statements.emplace_back(parseExprStatement());
             }
             else if(peek() == FOR){
                 statements.emplace_back(parseForStmt());
@@ -468,7 +461,7 @@ class Parser
             else if(peek() == CONTINUE){
                 statements.emplace_back(parseContinueStmt());
             }
-            else throw std::logic_error("Unexpected token in block " + std::string{tokenTypeToString(peek())});
+            else statements.emplace_back(parseExprStatement());
         }
         consume(); // consume the right brace
         return std::make_shared<BlockStmt>(blockStart.line, blockStart.col, statements);
