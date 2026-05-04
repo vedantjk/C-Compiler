@@ -11,6 +11,8 @@ int x = 1, y = 2;
 int *foo() { return 0; }
 int **bar() { return 0; }
 
+int foo(int);
+
 struct Point {
     int x;
     int y;
@@ -414,3 +416,37 @@ int main() {
     a = b = 1, c = 2;              // = (a = (b = 1)), (c = 2) — assignments group, comma joins
     return a;
 }
+
+int main(void)
+{
+
+}
+
+// ---- function prototypes (no body) and unnamed parameters ----
+
+// every form of unnamed param
+int proto_one(int);                            // single unnamed
+int proto_two(int, char);                      // multiple unnamed
+int proto_mixed(int x, char);                  // mixed: named + unnamed
+int proto_mixed2(int, char y);                 // mixed: unnamed + named
+int proto_ptr(int *, char *);                  // pointer types, unnamed
+int proto_arr(int [10], char [3][4]);          // array types, unnamed
+int proto_struct(struct Point, struct Point *); // struct types, unnamed
+int proto_void(void);                          // void parameter list
+int proto_no_args();                           // empty parameter list (K&R-ish — accepts anything)
+
+// prototype followed by definition with same signature
+int square(int);                               // prototype
+int square(int x) { return x * x; }            // definition
+
+// prototype declared, then called from another function
+int sum3(int, int, int);
+int caller() {
+    return sum3(1, 2, 3);
+}
+
+// definition with all the named-param forms still works
+int complex_def(int *p, char arr[10], struct Point pt) {
+    return p[0];
+}
+

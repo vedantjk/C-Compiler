@@ -37,8 +37,16 @@ class Function : public TopLevelNode
             out << parameters[i].type->toString() << " " << parameters[i].name;
             if(i!=(int)parameters.size() - 1) out <<", "; 
         }
-        out << " ) {\n";
-        statements->print(out, tab+1);
-        out << "}";
+        out << " ) ";
+        if (statements != nullptr)
+        {
+            out <<"{\n";
+            statements->print(out, tab+1);
+            out << "}";
+        }else
+        {
+            out <<";";
+        }
+
     }
 };

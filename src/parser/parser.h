@@ -514,25 +514,39 @@ class Parser
 
     void parseParam(std::vector<Parameter>& parameters)
     {
-        const auto type = parseBaseType();
-        auto finalType = parseDeclarator(std::get<0>(type));
-        parameters.emplace_back(finalType.type, finalType.name, finalType.line, finalType.col);
+        auto [type, baseLine, baseCol] = parseBaseType();
+        parseDeclaratorHead(type);
+        std::string name;
+        int line = baseLine, col = baseCol;
+        if (peek() == IDENTIFIER) {
+            Token id = consume();
+            name = id.lexeme;
+            line = id.line;
+            col = id.col;
+        }
+        parseDeclaratorTail(type);
+        parameters.emplace_back(type, name, line, col);
     }
 
     std::shared_ptr<Function> parseFunction(std::shared_ptr<Type> returnType, int line, int col, Token functionName){
         std::string functionNameString = functionName.lexeme;
         std::vector<Parameter> parameters;
 
-        if(peek()!=RIGHT_PAREN){
+        if(peek()!=RIGHT_PAREN && peek()!=VOID){
             parseParam(parameters);
             while(peek() == COMMA){
                 consume(); // comma
                 parseParam(parameters);
             }
         }
-        
+        if (peek() == VOID) consume();
         Token rightParen = expect(RIGHT_PAREN);
         std::shared_ptr<BlockStmt> blockStmt;
+        if (peek() == SEMI_COLON)
+        {
+            consume();
+            return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt);
+        }
         if(peek() == LEFT_BRACE)
             blockStmt = parseBlockStmt();
         else expect(SEMI_COLON);
