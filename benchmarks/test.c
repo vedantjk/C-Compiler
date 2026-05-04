@@ -294,3 +294,31 @@ int main() {
     1 *= 2;
     return 0;
 }
+
+// ---- bitwise + % as binary ops ----
+
+// each line targets one precedence boundary; comment shows expected parse
+int main() {
+    int a = 1; int b = 2; int c = 3;
+
+    int r1 = a | b & c;            // = a | (b & c)         — & tighter than |
+    int r2 = a & b | c;            // = (a & b) | c
+    int r3 = a ^ b | c;            // = (a ^ b) | c         — ^ tighter than |, looser than &
+    int r4 = a & b ^ c;            // = (a & b) ^ c
+
+    int r5 = a == b & c;           // = (a == b) & c        — equality tighter than &
+    int r6 = a & b == c;           // = a & (b == c)        — famous C wart
+    int r7 = a & b == 0;
+
+    int r8 = a + b << c;           // = (a + b) << c        — shift looser than +
+    int r9 = a << b + c;           // = a << (b + c)
+    int r10 = a < b << c;          // = a < (b << c)        — shift tighter than <
+
+    int r11 = a + b % c;           // = a + (b % c)         — % at multiplicative level
+    int r12 = a * b % c;           // = (a * b) % c         — left-assoc same level
+
+    int r13 = ~a & b;              // = (~a) & b
+    int r14 = a & ~b;              // = a & (~b)
+
+    return r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10 + r11 + r12 + r13 + r14;
+}

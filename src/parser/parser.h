@@ -42,10 +42,16 @@ struct Declarator {
 
 class Parser
 {   
-    std::unordered_map<TokenType, int> precedenceLevel = 
-        {{OR_OP, 1}, {AND_OP, 2}, {EQ_OP, 3}, {NE_OP, 3},
-        {LESS_THAN, 4}, {GREATER_THAN, 4}, {LE_OP, 4}, {GE_OP, 4},
-        {PLUS, 5}, {MINUS, 5}, {ASTERISK, 6}, {SLASH, 6}};
+    std::unordered_map<TokenType, int> precedenceLevel =
+        {{OR_OP, 1}, {AND_OP, 2},
+        {PIPE, 3},
+        {CARET, 4},
+        {AMPERSAND, 5},
+        {EQ_OP, 6}, {NE_OP, 6},
+        {LESS_THAN, 7}, {GREATER_THAN, 7}, {LE_OP, 7}, {GE_OP, 7},
+        {LEFT_OP, 8}, {RIGHT_OP, 8},
+        {PLUS, 9}, {MINUS, 9},
+        {ASTERISK, 10}, {SLASH, 10}, {PERCENT, 10}};
     std::vector<Token> tokens;
     int cur_token = 0;
   public:
@@ -198,8 +204,13 @@ class Parser
     }
     
     bool isBinaryOp(TokenType type){
-        return type == OR_OP || type == AND_OP || type == EQ_OP || type == NE_OP || type == LESS_THAN || type == GREATER_THAN
-        || type == LE_OP || type == GE_OP || type == PLUS || type == MINUS || type == ASTERISK || type == SLASH;
+        return type == OR_OP || type == AND_OP
+            || type == PIPE || type == CARET || type == AMPERSAND
+            || type == EQ_OP || type == NE_OP
+            || type == LESS_THAN || type == GREATER_THAN || type == LE_OP || type == GE_OP
+            || type == LEFT_OP || type == RIGHT_OP
+            || type == PLUS || type == MINUS
+            || type == ASTERISK || type == SLASH || type == PERCENT;
     }
 
     bool isUnaryOp(TokenType type){
