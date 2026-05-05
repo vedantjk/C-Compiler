@@ -57,6 +57,10 @@ class Parser
   public:
     Parser(std::vector<Token> tokens_) : tokens(std::move(tokens_)) {}
 
+    // ============================================================
+    // Cursor helpers — peek, consume, expect
+    // ============================================================
+
     TokenType peek()
     {
         if (cur_token == (int)tokens.size())
@@ -79,9 +83,38 @@ class Parser
         return consume();
     }
 
+    // ============================================================
+    // Predicate helpers — type starts and operator categories
+    // ============================================================
+
     static bool isTypeStart(const TokenType t) {
         return t == INT || t == CHAR || t == VOID || t == STRUCT;
     }
+
+    bool isUnaryOp(TokenType type){
+        return type == EXCLAMATION || type == TILDE || type == MINUS || type == PLUS || type == AMPERSAND || type == ASTERISK || type == INC_OP || type == DEC_OP;
+    }
+
+    bool isBinaryOp(TokenType type){
+        return type == OR_OP || type == AND_OP
+            || type == PIPE || type == CARET || type == AMPERSAND
+            || type == EQ_OP || type == NE_OP
+            || type == LESS_THAN || type == GREATER_THAN || type == LE_OP || type == GE_OP
+            || type == LEFT_OP || type == RIGHT_OP
+            || type == PLUS || type == MINUS
+            || type == ASTERISK || type == SLASH || type == PERCENT;
+    }
+
+    bool isAssignmentOp(TokenType type)
+    {
+        return type == ASSIGN || type == ADD_ASSIGN || type == SUB_ASSIGN || type == MUL_ASSIGN || type == DIV_ASSIGN
+        || type ==  MOD_ASSIGN || type == AND_ASSIGN || type == OR_ASSIGN || type == XOR_ASSIGN || type == LEFT_ASSIGN
+        || type == RIGHT_ASSIGN;
+    }
+
+    // ============================================================
+    // Type / declarator parsing — base types and declarator chains
+    // ============================================================
 
     std::tuple<std::shared_ptr<Type>, int, int> parseBaseType() {
         if (peek() == INT)  { auto t = consume(); return {IntType::getInstance(), t.line, t.col};  }
@@ -139,18 +172,90 @@ class Parser
         return base;
     }
 
-    std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(std::shared_ptr<VariableExpr> functionName){
-        expect(LEFT_PAREN);
-        std::vector<std::shared_ptr<Expression>> parameters;
-        if (peek() != RIGHT_PAREN) {
-            parameters.emplace_back(parseAssignment());
-            while (peek() == COMMA) {
-                consume();
-                parameters.emplace_back(parseAssignment());
-            }
+    // ============================================================
+    // Expression parsing — top-down (entry first, leaves last)
+    // ============================================================
+
+    std::shared_ptr<Expression> parseExpression()
+    {
+        std::shared_ptr<Expression> left = parseAssignment();
+        while (peek() == COMMA)
+        {
+            Token op = consume();
+            std::shared_ptr<Expression> right = parseAssignment();
+            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
         }
-        expect(RIGHT_PAREN);
-        return std::make_shared<FunctionCallExpr>(functionName->getLine(), functionName->getCol(), functionName, parameters);
+        return left;
+    }
+
+    std::shared_ptr<Expression> parseAssignment()
+    {
+        std::shared_ptr<Expression> left = parseTernaryExpression();
+        while (isAssignmentOp(peek()))
+        {
+            Token op = consume();
+            std::shared_ptr<Expression> right = parseAssignment();
+            left = std::make_shared<AssignExpr>(left, right, op.lexeme, left->getLine(), left->getCol());
+        }
+        return left;
+    }
+
+    std::shared_ptr<Expression> parseTernaryExpression()
+    {
+        std::shared_ptr<Expression> condition = parseBinaryExpression();
+        if (peek() == QUESTION_MARK)
+        {
+            consume();
+            std::shared_ptr<Expression> thenBranch = parseExpression();
+            expect(COLON);
+            std::shared_ptr<Expression> elseBranch = parseTernaryExpression();
+            return std::make_shared<TernaryExpr>(condition, thenBranch, elseBranch, condition->getLine(), condition->getCol());
+        }
+        return condition;
+    }
+
+    std::shared_ptr<Expression> parseBinaryExpression(int minPrecedence = 0){
+
+        std::shared_ptr<Expression> left = parseUnary();
+        while(isBinaryOp(peek()) && precedenceLevel[peek()] >= minPrecedence){
+            Token op = consume();
+            std::shared_ptr<Expression> right = parseBinaryExpression(precedenceLevel[op.type]+1);
+            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
+        }
+        return left;
+    }
+
+    std::shared_ptr<Expression> parseUnary(){
+        if(isUnaryOp(peek())){
+            Token op = consume();
+            std::shared_ptr<Expression> operand = parseUnary();
+            return std::make_shared<UnaryExpr>(op.line, op.col, op.lexeme, operand);
+        }
+        if (peek() == SIZEOF)
+        {
+            Token t = consume();
+            if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
+            {
+                consume();
+                auto [base, _, __] = parseBaseType();
+                base = parseAbstractDeclarator(base);
+                expect(RIGHT_PAREN);
+                return std::make_shared<SizeOfExpr>(t.line, t.col, base, nullptr);
+            }
+            std::shared_ptr<Expression> expr = parseUnary();
+            return std::make_shared<SizeOfExpr>(expr->getLine(), expr->getCol(), nullptr, expr);
+        }
+        if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
+        {
+            consume();
+            auto [base, line, col] = parseBaseType();
+            base = parseAbstractDeclarator(base);
+            expect(RIGHT_PAREN);
+            auto operand = parseUnary();
+            return std::make_shared<CastExpr>(base, operand, line, col);
+        }
+        std::shared_ptr<Expression> operand = parseFactor();
+        return operand;
     }
 
     std::shared_ptr<Expression> parseFactor(){
@@ -163,7 +268,7 @@ class Parser
             consume();
             std::shared_ptr<Expression> parseResult = parseExpression();
             expect(RIGHT_PAREN);
-            node = parseResult; 
+            node = parseResult;
         }else if(peek() == IDENTIFIER){
             Token name = consume();
             node = std::make_shared<VariableExpr>(name.line, name.col, name.lexeme);
@@ -202,115 +307,19 @@ class Parser
 
         return node;
     }
-    
-    bool isBinaryOp(TokenType type){
-        return type == OR_OP || type == AND_OP
-            || type == PIPE || type == CARET || type == AMPERSAND
-            || type == EQ_OP || type == NE_OP
-            || type == LESS_THAN || type == GREATER_THAN || type == LE_OP || type == GE_OP
-            || type == LEFT_OP || type == RIGHT_OP
-            || type == PLUS || type == MINUS
-            || type == ASTERISK || type == SLASH || type == PERCENT;
-    }
 
-    bool isUnaryOp(TokenType type){
-        return type == EXCLAMATION || type == TILDE || type == MINUS || type == PLUS || type == AMPERSAND || type == ASTERISK || type == INC_OP || type == DEC_OP;
-    }
-
-    std::shared_ptr<Expression> parseUnary(){
-        if(isUnaryOp(peek())){
-            Token op = consume();
-            std::shared_ptr<Expression> operand = parseUnary();
-            return std::make_shared<UnaryExpr>(op.line, op.col, op.lexeme, operand);
-        }
-        if (peek() == SIZEOF)
-        {
-            Token t = consume();
-            if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
-            {
+    std::shared_ptr<FunctionCallExpr> parseFunctionCallExpr(std::shared_ptr<VariableExpr> functionName){
+        expect(LEFT_PAREN);
+        std::vector<std::shared_ptr<Expression>> parameters;
+        if (peek() != RIGHT_PAREN) {
+            parameters.emplace_back(parseAssignment());
+            while (peek() == COMMA) {
                 consume();
-                auto [base, _, __] = parseBaseType();
-                base = parseAbstractDeclarator(base);
-                expect(RIGHT_PAREN);
-                return std::make_shared<SizeOfExpr>(t.line, t.col, base, nullptr);
+                parameters.emplace_back(parseAssignment());
             }
-            std::shared_ptr<Expression> expr = parseUnary();
-            return std::make_shared<SizeOfExpr>(expr->getLine(), expr->getCol(), nullptr, expr);
         }
-        if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
-        {
-            consume();
-            auto [base, line, col] = parseBaseType();
-            base = parseAbstractDeclarator(base);
-            expect(RIGHT_PAREN);
-            auto operand = parseUnary();
-            return std::make_shared<CastExpr>(base, operand, line, col);
-        }
-        std::shared_ptr<Expression> operand = parseFactor();
-        return operand;
-    }
-
-    std::shared_ptr<Expression> parseBinaryExpression(int minPrecedence = 0){
-        
-        std::shared_ptr<Expression> left = parseUnary();
-        while(isBinaryOp(peek()) && precedenceLevel[peek()] >= minPrecedence){
-            Token op = consume();
-            std::shared_ptr<Expression> right = parseBinaryExpression(precedenceLevel[op.type]+1);
-            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
-        }
-        return left;
-    }
-
-    std::shared_ptr<Expression> parseTernaryExpression()
-    {
-        std::shared_ptr<Expression> condition = parseBinaryExpression();
-        if (peek() == QUESTION_MARK)
-        {
-            consume();
-            std::shared_ptr<Expression> thenBranch = parseExpression();
-            expect(COLON);
-            std::shared_ptr<Expression> elseBranch = parseTernaryExpression();
-            return std::make_shared<TernaryExpr>(condition, thenBranch, elseBranch, condition->getLine(), condition->getCol());
-        }
-        return condition;
-    }
-
-    bool isAssignmentOp(TokenType type)
-    {
-        return type == ASSIGN || type == ADD_ASSIGN || type == SUB_ASSIGN || type == MUL_ASSIGN || type == DIV_ASSIGN
-        || type ==  MOD_ASSIGN || type == AND_ASSIGN || type == OR_ASSIGN || type == XOR_ASSIGN || type == LEFT_ASSIGN
-        || type == RIGHT_ASSIGN;
-    }
-
-    std::shared_ptr<Expression> parseAssignment()
-    {
-        std::shared_ptr<Expression> left = parseTernaryExpression();
-        while (isAssignmentOp(peek()))
-        {
-            Token op = consume();
-            std::shared_ptr<Expression> right = parseAssignment();
-            left = std::make_shared<AssignExpr>(left, right, op.lexeme, left->getLine(), left->getCol());
-        }
-        return left;
-    }
-
-    std::shared_ptr<Expression> parseExpression()
-    {
-        std::shared_ptr<Expression> left = parseAssignment();
-        while (peek() == COMMA)
-        {
-            Token op = consume();
-            std::shared_ptr<Expression> right = parseAssignment();
-            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right, op.lexeme);
-        }
-        return left;
-    }
-
-    std::shared_ptr<ExprStmt> parseExprStatement(bool semiColon = true)
-    {
-        std::shared_ptr<Expression> expr = parseExpression();
-        if (semiColon) expect(SEMI_COLON);
-        return std::make_shared<ExprStmt>(expr, expr->getLine(), expr->getCol(), semiColon);
+        expect(RIGHT_PAREN);
+        return std::make_shared<FunctionCallExpr>(functionName->getLine(), functionName->getCol(), functionName, parameters);
     }
 
     std::shared_ptr<Expression> parseInitializers()
@@ -338,6 +347,17 @@ class Parser
         }
 
         return parseAssignment();
+    }
+
+    // ============================================================
+    // Statement parsing — declarations, control flow, and blocks
+    // ============================================================
+
+    std::shared_ptr<ExprStmt> parseExprStatement(bool semiColon = true)
+    {
+        std::shared_ptr<Expression> expr = parseExpression();
+        if (semiColon) expect(SEMI_COLON);
+        return std::make_shared<ExprStmt>(expr, expr->getLine(), expr->getCol(), semiColon);
     }
 
     std::vector<std::shared_ptr<VarDecl>> parseVarDecl(const std::shared_ptr<Type>& type, bool global = false)
@@ -375,20 +395,6 @@ class Parser
         return std::make_shared<ReturnStmt>(returnStart.line, returnStart.col, returnExpression);
     }
 
-    std::shared_ptr<WhileStmt> parseWhileStmt(){
-        Token whileToken = expect(WHILE);
-        expect(LEFT_PAREN);
-        std::shared_ptr<Expression> condition = parseExpression();
-        expect(RIGHT_PAREN);
-        if (peek() != LEFT_BRACE)
-        {
-            throw std::logic_error("while statement expects braces");
-        }
-        std::shared_ptr<BlockStmt> whileBlock = parseBlockStmt();
-
-        return std::make_shared<WhileStmt>(whileToken.line, whileToken.col, condition, whileBlock);
-    }
-
     std::shared_ptr<IfStmt> parseIfStmt(){
         Token ifToken = expect(IF); // should never throw;
         expect(LEFT_PAREN);
@@ -410,6 +416,36 @@ class Parser
             elseBlock = parseBlockStmt();
         }
         return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
+    }
+
+    std::shared_ptr<WhileStmt> parseWhileStmt(){
+        Token whileToken = expect(WHILE);
+        expect(LEFT_PAREN);
+        std::shared_ptr<Expression> condition = parseExpression();
+        expect(RIGHT_PAREN);
+        if (peek() != LEFT_BRACE)
+        {
+            throw std::logic_error("while statement expects braces");
+        }
+        std::shared_ptr<BlockStmt> whileBlock = parseBlockStmt();
+
+        return std::make_shared<WhileStmt>(whileToken.line, whileToken.col, condition, whileBlock);
+    }
+
+    std::shared_ptr<DoWhileStmt> parseDoWhileStmt()
+    {
+        Token doStart = expect(DO); // should not throw
+        if (peek()!=LEFT_BRACE)
+        {
+            throw std::logic_error("do while statement expects braces");
+        }
+        std::shared_ptr<BlockStmt> doBlock = parseBlockStmt();
+        expect(WHILE);
+        expect(LEFT_PAREN);
+        std::shared_ptr<Expression> condition = parseExpression();
+        expect(RIGHT_PAREN);
+        expect(SEMI_COLON);
+        return std::make_shared<DoWhileStmt>(doBlock, condition, doStart.line, doStart.col);
     }
 
     std::shared_ptr<ForStmt> parseForStmt(){
@@ -443,22 +479,6 @@ class Parser
         Token continueToken = expect(CONTINUE);
         expect(SEMI_COLON);
         return std::make_shared<ContinueStmt>(continueToken.line, continueToken.col);
-    }
-
-    std::shared_ptr<DoWhileStmt> parseDoWhileStmt()
-    {
-        Token doStart = expect(DO); // should not throw
-        if (peek()!=LEFT_BRACE)
-        {
-            throw std::logic_error("do while statement expects braces");
-        }
-        std::shared_ptr<BlockStmt> doBlock = parseBlockStmt();
-        expect(WHILE);
-        expect(LEFT_PAREN);
-        std::shared_ptr<Expression> condition = parseExpression();
-        expect(RIGHT_PAREN);
-        expect(SEMI_COLON);
-        return std::make_shared<DoWhileStmt>(doBlock, condition, doStart.line, doStart.col);
     }
 
     std::shared_ptr<BlockStmt> parseBlockStmt(){
@@ -511,6 +531,10 @@ class Parser
         consume(); // consume the right brace
         return std::make_shared<BlockStmt>(blockStart.line, blockStart.col, statements);
     }
+
+    // ============================================================
+    // Top-level / program — parameters, functions, structs, entry
+    // ============================================================
 
     void parseParam(std::vector<Parameter>& parameters)
     {

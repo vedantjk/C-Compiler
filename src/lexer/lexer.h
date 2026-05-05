@@ -24,6 +24,10 @@
     public:
     Lexer(std::string input, Diagnostic::DiagnosticEngine& diagnosticEngine) : input(std::move(input)), diagnosticEngine(diagnosticEngine) {}
 
+    // ============================================================
+    // Utility helpers — cursor advance, peek, match, error reporting
+    // ============================================================
+
     void addToken(TokenType token){
         std::string lexeme = input.substr(start, current - start);
         if(token == EOF_TOKEN) lexeme = "";
@@ -61,6 +65,15 @@
         return input[current];
     }
 
+    char peekNext() const{
+        if (current + 1 >= (int)input.size()) return '\0';
+        return input[current + 1];
+    }
+
+    // ============================================================
+    // Token scanners — invoked once the leading char(s) identify the token kind
+    // ============================================================
+
     void string(){
         while(peek() != '"' && !isAtEnd()){
             if(peek() == '\\') advance();
@@ -74,11 +87,6 @@
 
         advance();
         addToken(STRING_LITERAL);
-    }
-
-    char peekNext() const{
-        if (current + 1 >= (int)input.size()) return '\0';
-        return input[current + 1];
     }
 
     void number(){
@@ -203,6 +211,10 @@
         advance();
         advance();
     }
+
+    // ============================================================
+    // Main dispatch — branches on the next char to pick a scanner
+    // ============================================================
 
     void scanToken(){
         char c = advance();
@@ -333,6 +345,10 @@
                 break;
         }
     }
+
+    // ============================================================
+    // Driver and output
+    // ============================================================
 
     std::vector<Token> generateTokens(){
         while(!isAtEnd()){
