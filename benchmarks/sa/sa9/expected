@@ -1,0 +1,5 @@
+Semantic error at line 15: field 't' not defined in struct 'C'.
+Semantic error at line 16: cannot access field 'd' on non-struct type 'int'.
+Semantic error at line 17: field 'd' not defined in struct 'C'.
+Semantic error at line 18: field 't' not defined in struct 'C'.
+Semantic error at line 19: field 'd' not defined in struct 'C'.

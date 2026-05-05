@@ -1,0 +1,1 @@
+Semantic error at line 2: redeclaration of variable 'myVar'. Previous declaration at line 1.

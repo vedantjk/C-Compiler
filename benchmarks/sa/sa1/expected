@@ -1,0 +1,2 @@
+Semantic error at line 5: redeclaration of variable 'a'. Previous declaration (parameter) at line 4.
+Semantic error at line 6: redeclaration of variable 'd'. Previous declaration (parameter) at line 4.

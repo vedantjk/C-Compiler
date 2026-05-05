@@ -1,0 +1,5 @@
+Semantic error at line 11: cannot dereference non-pointer type 'int'.
+Semantic error at line 12: cannot subscript non-array, non-pointer type 'int'.
+Semantic error at line 13: cannot access member on non-struct type 'int'.
+Semantic error at line 14: '.' used on pointer type 'struct Point *'; did you mean '->'?
+Semantic error at line 15: '->' used on non-pointer type 'struct Point'; did you mean '.'?

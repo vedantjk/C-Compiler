@@ -1,0 +1,2 @@
+Semantic error at line 2: 'break' statement not in a loop.
+Semantic error at line 9: 'continue' statement not in a loop.

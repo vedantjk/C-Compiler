@@ -1,0 +1,2 @@
+Semantic error at line 1: not all control flow paths in 'foo' return a value.
+Semantic error at line 5: not all control flow paths in 'bar' return a value.

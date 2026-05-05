@@ -1,0 +1,2 @@
+Semantic error at line 5: function 'compute' redefined. Previous definition at line 1.
+Semantic error at line 13: function 'add' redefined. Previous definition at line 9.
