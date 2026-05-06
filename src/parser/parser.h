@@ -555,27 +555,38 @@ class Parser
     std::shared_ptr<Function> parseFunction(std::shared_ptr<Type> returnType, int line, int col, Token functionName){
         std::string functionNameString = functionName.lexeme;
         std::vector<Parameter> parameters;
+        bool variadic = false;
 
-        if(peek()!=RIGHT_PAREN && peek()!=VOID){
+        if(peek()!=RIGHT_PAREN && peek()!=VOID && peek()!=ELLIPSIS){
             parseParam(parameters);
             while(peek() == COMMA){
                 consume(); // comma
+                if (peek() == ELLIPSIS) break;
                 parseParam(parameters);
             }
         }
         if (peek() == VOID) consume();
+        if (peek() == ELLIPSIS)
+        {
+            if (parameters.empty())
+            {
+                throw std::logic_error("There must be at least 1 named parameter. line: " + std::to_string(functionName.line) + ", col: " + std::to_string(functionName.col));
+            }
+            consume();
+            variadic = true;
+        }
         Token rightParen = expect(RIGHT_PAREN);
         std::shared_ptr<BlockStmt> blockStmt;
         if (peek() == SEMI_COLON)
         {
             consume();
-            return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt);
+            return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt, variadic);
         }
         if(peek() == LEFT_BRACE)
             blockStmt = parseBlockStmt();
         else expect(SEMI_COLON);
 
-        return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt);
+        return std::make_shared<Function>(line, col, functionNameString, returnType, parameters, blockStmt, variadic);
     }
 
     std::shared_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type>& structType, int line, int col)
