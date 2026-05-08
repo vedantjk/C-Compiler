@@ -377,7 +377,8 @@ class Parser
         return variables;
     }
 
-    std::shared_ptr<DeclareStmt> parseDeclareStmt(const std::shared_ptr<Type>& type, int line, int col){
+    std::shared_ptr<DeclareStmt> parseDeclareStmt(std::shared_ptr<Type> &type, int line, int col)
+    {
         if (peek() == LEFT_BRACE)
         {
             auto structVar = parseStructDecl(type, line, col);
@@ -451,13 +452,7 @@ class Parser
     std::shared_ptr<ForStmt> parseForStmt(){
         Token forStart = expect(FOR);
         expect(LEFT_PAREN);
-        std::shared_ptr<Statement> initialization;
-        if(peek() == INT || peek() == CHAR){
-            auto [type, line, col] = parseBaseType();
-            initialization = parseDeclareStmt(type, line, col);
-        }else{
-            initialization = parseExprStatement(true);
-        }
+        std::shared_ptr<Statement> initialization = parseExprStatement(true);
         std::shared_ptr<Statement> condition = parseExprStatement(true);
         std::shared_ptr<Statement> update = parseExprStatement(false);
         expect(RIGHT_PAREN);
@@ -611,7 +606,7 @@ class Parser
         }
         expect(RIGHT_BRACE);
         expect(SEMI_COLON);
-        return std::make_shared<StructDecl>(structType->toString(), fields, line, col);
+        return std::make_shared<StructDecl>(structType->toString(), fields, line, col, structType);
     }
 
     std::shared_ptr<Program> ParseProgram() { 

@@ -1,7 +1,7 @@
 #include "ast/ASTNodes/Program.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
-
+#include "semanticanalyzer/SemanticAnalyzer.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -36,6 +36,8 @@ void test(const std::string &inputSourcePath)
     Parser parser{tokens};
     std::shared_ptr<Program> p = parser.ParseProgram();
     p->print(std::cout, 0);
+    SemanticAnalyzer semanticAnalyzer;
+    semanticAnalyzer.validate(p);
 }
 
 int main(int argc, char **argv)

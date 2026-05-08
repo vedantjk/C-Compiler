@@ -9,9 +9,9 @@
 
 class DeclareStmt : public Statement
 {
+public:
     std::variant<std::vector<std::shared_ptr<VarDecl>>,std::shared_ptr<StructDecl>> variables;
 
-    public:
     DeclareStmt(int line_, int col_, std::variant<std::vector<std::shared_ptr<VarDecl>>,
                                std::shared_ptr<StructDecl>> variables_)
         : Statement(line_, col_), variables(std::move(variables_))

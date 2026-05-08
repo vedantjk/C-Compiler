@@ -7,12 +7,12 @@
 #include <ostream>
 
 class ForStmt : public Statement{
+public:
     std::shared_ptr<Statement> initialization;
     std::shared_ptr<Statement> condition;
     std::shared_ptr<Statement> update;
     std::shared_ptr<BlockStmt> forBlock;
 
-public:
     ForStmt(int line_, int col_, std::shared_ptr<Statement> initialization_, std::shared_ptr<Statement> condition_, std::shared_ptr<Statement> update_, std::shared_ptr<BlockStmt> forBlock_):
         Statement(line_, col_), initialization(std::move(initialization_)), condition(std::move(condition_)), update(std::move(update_)), forBlock(std::move(forBlock_)){}
 

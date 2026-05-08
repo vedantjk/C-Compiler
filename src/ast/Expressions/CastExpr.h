@@ -3,9 +3,9 @@
 
 class CastExpr : public Expression
 {
+public:
     std::shared_ptr<Type> type;
     std::shared_ptr<Expression> operand;
-    public:
 
     CastExpr(std::shared_ptr<Type> type, std::shared_ptr<Expression> operand, int line, int column) : Expression(line, column), type(type), operand(operand) {};
 

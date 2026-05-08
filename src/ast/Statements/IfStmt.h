@@ -6,11 +6,10 @@
 #include <ostream>
 
 class IfStmt : public Statement{
+public:
     std::shared_ptr<Expression> condition;
     std::shared_ptr<BlockStmt> thenBlock;
     std::shared_ptr<BlockStmt> elseBlock;
-
-public:
 
     IfStmt(int line_, int col_, std::shared_ptr<Expression> condition_, std::shared_ptr<BlockStmt> thenBlock_, std::shared_ptr<BlockStmt> elseBlock_):
         Statement(line_, col_), condition(std::move(condition_)), thenBlock(std::move(thenBlock_)), elseBlock(std::move(elseBlock_)){}

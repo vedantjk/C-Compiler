@@ -5,9 +5,10 @@
 
 class ExprStmt : public Statement
 {
+public:
     std::shared_ptr<Expression> expr;
     bool printSemiColon = true;
-    public:
+
     ExprStmt(std::shared_ptr<Expression> expr, int line, int col, bool printSemiColon = true) :
     Statement(line, col), expr(std::move(expr)), printSemiColon(printSemiColon) {}
 

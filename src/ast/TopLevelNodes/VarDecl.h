@@ -9,12 +9,12 @@
 
 class VarDecl : public TopLevelNode
 {
+public:
     std::string name;
     std::shared_ptr<Type> type;
     std::shared_ptr<Expression> initialization;
     bool global;
 
-    public:
     VarDecl(int line_, int col_, std::string name_, std::shared_ptr<Type> type_, std::shared_ptr<Expression> initialization_, bool global = false):
         TopLevelNode(line_, col_), name(name_), type(type_),
             initialization(std::move(initialization_)), global(global)

@@ -89,3 +89,37 @@ public:
     }
     [[nodiscard]] std::shared_ptr<Type> getInner() const { return inner; }
 };
+
+class FunctionType : public Type
+{
+public:
+
+    std::shared_ptr<Type> returnType;
+    std::vector<std::shared_ptr<Type>> paramTypes;
+    bool isVariadic;
+    FunctionType(std::shared_ptr<Type> returnType, std::vector<std::shared_ptr<Type>> paramTypes, bool isVariadic = false):
+
+    returnType(std::move(returnType)), paramTypes(std::move(paramTypes)), isVariadic(isVariadic) {}
+    [[nodiscard]] std::string toString() const override
+    {
+        std::string functionTypeString;
+        functionTypeString += returnType->toString();
+        functionTypeString += "(";
+        for (int i = 0; i < paramTypes.size(); i++)
+        {
+            functionTypeString += paramTypes[i]->toString();
+            if (i != paramTypes.size() - 1)
+            {
+                functionTypeString += ", ";
+            }
+        }
+        if (isVariadic)
+        {
+            functionTypeString += "...";
+        }
+        functionTypeString += ")";
+        return functionTypeString;
+    }
+    [[nodiscard]] std::shared_ptr<Type> getInner() const { return returnType; }
+
+};

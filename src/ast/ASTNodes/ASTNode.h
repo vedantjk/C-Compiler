@@ -3,13 +3,14 @@
 #include <iostream>
 #include <memory>
 
+struct Symbol;
+
 class ASTNode
 {
+public:
     int line;
     int col;
-
-public:
-
+    std::shared_ptr<Symbol> symbol;
     ASTNode(int line_, int col_) : line(line_), col(col_) {}
     
     virtual ~ASTNode() = default;

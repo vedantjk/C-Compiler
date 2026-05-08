@@ -7,9 +7,9 @@
 
 class BlockStmt : public Statement
 {
+public:
     std::vector<std::shared_ptr<Statement>> statements;
 
-    public:
     BlockStmt(int line_, int col_, std::vector<std::shared_ptr<Statement>> statements_)
         : Statement(line_, col_), statements(std::move(statements_))
     {

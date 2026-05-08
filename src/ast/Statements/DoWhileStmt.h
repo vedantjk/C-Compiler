@@ -5,10 +5,9 @@
 
 class DoWhileStmt : public Statement
 {
+public:
     std::shared_ptr<BlockStmt> block;
     std::shared_ptr<Expression> condition;
-
-    public:
 
     DoWhileStmt(std::shared_ptr<BlockStmt> block, std::shared_ptr<Expression> condition, int line, int column) :
     Statement(line, column), block(std::move(block)), condition(std::move(condition)) {}

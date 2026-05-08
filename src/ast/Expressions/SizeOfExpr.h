@@ -4,9 +4,9 @@
 
 class SizeOfExpr : public Expression
 {
+public:
     std::shared_ptr<Type> type;
     std::shared_ptr<Expression> expr;
-    public:
 
     SizeOfExpr(int line, int col, std::shared_ptr<Type> type = nullptr, std::shared_ptr<Expression> expr = nullptr) : Expression(line, col), type(std::move(type)), expr(std::move(expr)) {}
 

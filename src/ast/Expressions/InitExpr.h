@@ -4,8 +4,9 @@
 #include <vector>
 class InitExpr : public Expression
 {
+public:
     std::vector<std::shared_ptr<Expression>> elements;
-    public:
+
     InitExpr(std::vector<std::shared_ptr<Expression>> elements, int line, int col) : Expression(line,col), elements(elements) {}
 
     void print(std::ostream &out, int tab) const override

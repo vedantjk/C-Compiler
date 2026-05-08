@@ -19,10 +19,13 @@ struct StructField
 
 class StructDecl : public TopLevelNode
 {
+public:
     std::string name;
     std::vector<StructField> fields;
-    public:
-    StructDecl(std::string name, std::vector<StructField> fields, int line, int col) : TopLevelNode(line, col), name(std::move(name)), fields(std::move(fields)) {}
+    std::shared_ptr<Type> baseType;
+
+    StructDecl(std::string name, std::vector<StructField> fields, int line, int col, std::shared_ptr<Type> baseType) :
+    TopLevelNode(line, col), name(std::move(name)), fields(std::move(fields)), baseType(std::move(baseType)) {}
 
     void print(std::ostream& out, int tab) const override
     {

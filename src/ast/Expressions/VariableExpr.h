@@ -4,8 +4,8 @@
 #include <ostream>
 
 class VariableExpr : public Expression{
+public:
     std::string name;
-    public:
 
     VariableExpr(int line_, int col_, std::string name_) : Expression(line_, col_), name(name_) {}
 
