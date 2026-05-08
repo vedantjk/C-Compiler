@@ -1,4 +1,5 @@
 #include "ast/ASTNodes/Program.h"
+#include "ast/visitors/ASTDebugPrinter.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semanticanalyzer/SemanticAnalyzer.h"
@@ -6,8 +7,14 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
-void test(const std::string &inputSourcePath)
+// Stages, in pipeline order. Default is the last one wired up.
+//   --lex       lex only; print tokens
+//   --parse     lex + parse; print AST debug
+//   --validate  lex + parse + SA; print AST debug after SA   (default)
+//   --compile   alias for the latest stage (currently --validate)
+static int run(const std::string &inputSourcePath, const std::string &stage)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -21,33 +28,57 @@ void test(const std::string &inputSourcePath)
 
     Diagnostic::DiagnosticEngine diagnosticEngine;
     Lexer lexer{buffer.str(), diagnosticEngine};
+    auto tokens = lexer.generateTokens();
 
     if (diagnosticEngine.hasErrors())
     {
         diagnosticEngine.print();
-        return;
+        return 1;
     }
 
-    auto tokens = lexer.generateTokens();
-    for (const auto &token : tokens)
+    if (stage == "lex")
     {
-        std::cout << token.toString() << std::endl;
+        for (const auto &token : tokens) std::cout << token.toString() << "\n";
+        return 0;
     }
+
     Parser parser{tokens};
     std::shared_ptr<Program> p = parser.ParseProgram();
-    p->print(std::cout, 0);
-    SemanticAnalyzer semanticAnalyzer;
-    semanticAnalyzer.validate(p);
+    ASTDebugPrinter dbg(std::cout);
+
+    if (stage == "parse")
+    {
+        dbg.print(p);
+        return 0;
+    }
+
+    if (stage == "validate" || stage == "compile")
+    {
+        SemanticAnalyzer semanticAnalyzer;
+        semanticAnalyzer.validate(p);
+        dbg.print(p);
+        return 0;
+    }
+
+    std::cerr << "unknown stage: --" << stage << "\n";
+    return 2;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2)
+    std::string stage = "validate";
+    std::string path;
+    for (int i = 1; i < argc; ++i)
     {
-        std::cerr << "Usage: cc89 <source.c>\n";
+        std::string a = argv[i];
+        if (a.rfind("--", 0) == 0) stage = a.substr(2);
+        else path = a;
+    }
+    if (path.empty())
+    {
+        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--compile] <source.c>\n";
         return 1;
     }
 
-    std::cout << "cc89: " << argv[1] << "\n";
-    test(argv[1]);
+    return run(path, stage);
 }
