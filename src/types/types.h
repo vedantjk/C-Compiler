@@ -7,6 +7,7 @@ class Type
 public:
     [[nodiscard]] virtual std::string toString() const = 0;
     virtual ~Type() = default;
+    virtual bool equals(const Type& other) const = 0;
 };
 
 class IntType : public Type
@@ -22,6 +23,11 @@ class IntType : public Type
     [[nodiscard]] std::string toString() const override
     {
         return "int";
+    }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        return this == &other;
     }
 };
 
@@ -39,6 +45,11 @@ public:
     {
         return "char";
     }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        return this == &other;
+    }
 };
 
 class VoidType : public Type
@@ -55,6 +66,11 @@ public:
     {
         return "void";
     }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        return this == &other;
+    }
 };
 
 class StructType : public Type {
@@ -63,6 +79,14 @@ public:
     explicit StructType(std::string n) : name(std::move(n)) {}
     [[nodiscard]] std::string toString() const override { return "struct " + name; }
     [[nodiscard]] const std::string& getName() const { return name; }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        auto s = dynamic_cast<const StructType *>(&other);
+        if (!s) return false;
+
+        return name == s->getName();
+    }
 };
 
 class PointerType : public Type
@@ -75,6 +99,14 @@ class PointerType : public Type
         return inner->toString() + "*";
     }
     [[nodiscard]] std::shared_ptr<Type> getInner() const { return inner; }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        auto p = dynamic_cast<const PointerType *>(&other);
+        if (!p) return false;
+
+        return inner->equals(*p->inner);
+    }
 };
 
 class ArrayType : public Type
@@ -88,6 +120,14 @@ public:
         return "[" + std::to_string(size) + "]" + inner->toString();
     }
     [[nodiscard]] std::shared_ptr<Type> getInner() const { return inner; }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        auto a = dynamic_cast<const ArrayType *>(&other);
+        if (!a) return false;
+        if (size != a->size) return false;
+        return inner->equals(*a->inner);
+    }
 };
 
 class FunctionType : public Type
@@ -121,5 +161,17 @@ public:
         return functionTypeString;
     }
     [[nodiscard]] std::shared_ptr<Type> getInner() const { return returnType; }
+
+    [[nodiscard]] bool equals(const Type& other) const override
+    {
+        auto f = dynamic_cast<const FunctionType*>(&other);
+        if (!f) return false;
+        if (isVariadic != f->isVariadic) return false;
+        if (paramTypes.size() != f->paramTypes.size()) return false;
+        if (!returnType->equals(*f->returnType)) return false;
+        for (size_t i = 0; i < paramTypes.size(); ++i)
+            if (!paramTypes[i]->equals(*f->paramTypes[i])) return false;
+        return true;
+    }
 
 };

@@ -11,6 +11,48 @@
 #include "../symboltable/SymbolTable.h"
 #include "../ast/Statements/ReturnStmt.h"
 
+inline bool isArithmeticOp(const std::string& op)
+{
+    return op == "+" || op == "-" || op == "*" || op == "/" || op == "%";
+}
+
+inline bool isComparisonOp(const std::string& op)
+{
+    return op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!=";
+}
+
+inline bool isLogicalOp(const std::string& op)
+{
+    return op == "||" || op == "&&";
+}
+
+inline bool isBitwiseOp(const std::string& op)
+{
+    return op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>";
+}
+
+inline bool isComma(const std::string& op)
+{
+    return op == ",";
+}
+
+inline bool isInteger(const std::shared_ptr<Type>& t)
+{
+    return std::dynamic_pointer_cast<IntType>(t) != nullptr
+        || std::dynamic_pointer_cast<CharType>(t) != nullptr;
+}
+
+inline bool isPointer(const std::shared_ptr<Type>& t)
+{
+    const auto x = std::dynamic_pointer_cast<PointerType>(t);
+    return x != nullptr;
+}
+
+inline bool isScalar(const std::shared_ptr<Type>& t)
+{
+    return isInteger(t) || isPointer(t);
+}
+
 class SemanticAnalyzer
 {
     SymbolTable symbolTable;
@@ -31,25 +73,161 @@ class SemanticAnalyzer
         symbol->node = node;
     }
 
-    void analyzeExpr(const std::shared_ptr<Expression>& expr) const
+    bool isNullPointerConstant(const std::shared_ptr<Expression>& e) {
+        if (const auto lit = std::dynamic_pointer_cast<IntLiterals>(e))
+            return lit->value == "0";
+        if (const auto cast = std::dynamic_pointer_cast<CastExpr>(e)) {
+            const auto ptr = std::dynamic_pointer_cast<PointerType>(cast->type);
+            if (!ptr) return false;
+            if (!std::dynamic_pointer_cast<VoidType>(ptr->getInner())) return false;
+            return isNullPointerConstant(cast->operand);
+        }
+        return false;
+    }
+
+    void analyzeExpr(const std::shared_ptr<Expression>& expr)
     {
         if (auto x = std::dynamic_pointer_cast<IntLiterals>(expr))
         {
             x->resolvedType = IntType::getInstance();
             x->isLvalue = false;
-            return;
+        }else if (auto x = std::dynamic_pointer_cast<StringLiterals>(expr)){
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<AssignExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<BinaryExpr>(expr))
+        {
+            analyzeExpr(x->left);
+            analyzeExpr(x->right);
+
+            const auto lType = x->left->resolvedType;
+            const auto rType = x->right->resolvedType;
+
+            if (isArithmeticOp(x->binaryOp))
+            {
+                if (!isInteger(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
+                        <<": Arithmetic operator needs integer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isInteger(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
+                        <<": Arithmetic operator needs integer for right expression, got " << rType->toString() << ".\n";
+                }
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }else if (isComparisonOp(x->binaryOp))
+            {
+                const bool isEquality = (x->binaryOp == "==" || x->binaryOp == "!=");
+
+                if (!isScalar(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
+                        <<": Comparison operator needs integer or pointer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isScalar(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
+                        <<": Comparison operator needs integer or pointer for right expression, got " << rType->toString() << ".\n";
+                }
+
+                if (isScalar(lType) && isScalar(rType))
+                {
+                    const bool bothArith = isInteger(lType) && isInteger(rType);
+                    const bool bothPtr   = isPointer(lType) && isPointer(rType);
+
+                    if (bothPtr && !lType->equals(*rType))
+                    {
+                        std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
+                            <<": Comparison operator needs matching pointer types, left: " << lType->toString()
+                            <<", right: " << rType->toString() << ".\n";
+                    }
+                    else if (!bothArith && !bothPtr)
+                    {
+                        const bool nullOK = isEquality &&
+                            ((isPointer(lType) && isNullPointerConstant(x->right))
+                          || (isPointer(rType) && isNullPointerConstant(x->left)));
+                        if (!nullOK)
+                        {
+                            std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
+                                <<": Comparison operator needs both arithmetic or both pointer, left: " << lType->toString()
+                                <<", right: " << rType->toString() << ".\n";
+                        }
+                    }
+                }
+
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }else if (isLogicalOp(x->binaryOp))
+            {
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }else if (isBitwiseOp(x->binaryOp))
+            {
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }else if (isComma(x->binaryOp))
+            {
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }
+
+        }else if (auto x = std::dynamic_pointer_cast<CastExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<FunctionCallExpr>(expr))
+        {
+            analyzeFunctionCallExpr(x);
+        }else if (auto x = std::dynamic_pointer_cast<InitExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<MemberExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<SizeOfExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<TernaryExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<UnaryExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else if (auto x = std::dynamic_pointer_cast<VariableExpr>(expr))
+        {
+            x->resolvedType = IntType::getInstance();
+            x->isLvalue = false;
+        }else
+        {
+            throw std::runtime_error("Reached invalid expression at line " + std::to_string(expr->getLine())
+                + ", col " + std::to_string(expr->getCol()));
         }
-        // TODO: other expression kinds
+
     }
 
 
-    void analyzeFunctionCallExpr(const std::shared_ptr<FunctionCallExpr> &expr) const
+    void analyzeFunctionCallExpr(const std::shared_ptr<FunctionCallExpr> &expr)
     {
         std::string functionName = expr->functionName->name;
         const auto checkFunctionExistence = symbolTable.find(functionName, Kind::FUNCTION);
         if (checkFunctionExistence == nullptr)
         {
             std::cerr << "Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": function "<<functionName<<" not declared\n";
+            expr->resolvedType = IntType::getInstance();
         }else
         {
             auto functionType = std::dynamic_pointer_cast<FunctionType>(checkFunctionExistence->type);
@@ -61,21 +239,20 @@ class SemanticAnalyzer
                 for (int i = 0; i < expr->parameters.size(); i++)
                 {
                     analyzeExpr(expr->parameters[i]);
-                    if (functionType->paramTypes[i] != expr->parameters[i]->resolvedType)
+                    if (!functionType->paramTypes[i]->equals(*expr->parameters[i]->resolvedType))
                     {
                         std::cerr <<"Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": mismatched param types, expected " <<functionType->paramTypes[i]->toString() << " got " << expr->parameters[i]->resolvedType->toString() << "\n";
                     }
                 }
             }
+            expr->resolvedType = functionType->returnType;
         }
+        expr->isLvalue = false;
     }
 
-    void analyzeExprStmt(const std::shared_ptr<ExprStmt> &exprStmt) const
+    void analyzeExprStmt(const std::shared_ptr<ExprStmt> &exprStmt)
     {
-        if (auto x = std::dynamic_pointer_cast<FunctionCallExpr>(exprStmt->expr))
-        {
-            analyzeFunctionCallExpr(x);
-        }
+        analyzeExpr(exprStmt->expr);
     }
 
     void analyzeStructDecl(const std::shared_ptr<StructDecl> &structDecl)
@@ -111,7 +288,7 @@ class SemanticAnalyzer
         if (stmt->returnExpression != nullptr)
         {
             analyzeExpr(stmt->returnExpression);
-            if (currentReturnType != stmt->returnExpression->resolvedType)
+            if (!currentReturnType->equals(*stmt->returnExpression->resolvedType))
             {
                 std::cerr << "Semantic error at line " <<stmt->returnExpression->getLine() << ", col " << stmt->returnExpression->col << ": expected type - " << currentReturnType->toString() << ", got " << stmt->returnExpression->resolvedType->toString() <<"\n";
             }
