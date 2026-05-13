@@ -85,14 +85,28 @@ class SemanticAnalyzer
         return false;
     }
 
+    size_t decodedLength(const std::string& s) {
+        // s is "..." (with outer quotes)
+        size_t n = 0;
+        for (size_t i = 1; i + 1 < s.size(); ++i) {
+            if (s[i] == '\\') ++i;   // skip the backslash, count the next char as 1
+            ++n;
+        }
+        return n + 1;                // +1 for null terminator
+    }
+
     void analyzeExpr(const std::shared_ptr<Expression>& expr)
     {
         if (auto x = std::dynamic_pointer_cast<IntLiterals>(expr))
         {
             x->resolvedType = IntType::getInstance();
             x->isLvalue = false;
-        }else if (auto x = std::dynamic_pointer_cast<StringLiterals>(expr)){
-            x->resolvedType = IntType::getInstance();
+        }else if (auto x = std::dynamic_pointer_cast<StringLiterals>(expr))
+        {
+            const size_t size = decodedLength(x->literal);
+            const auto type = CharType::getInstance();
+            auto stringType = std::make_shared<ArrayType>(type, size);
+            x->resolvedType = stringType;
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<AssignExpr>(expr))
         {
