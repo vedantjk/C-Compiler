@@ -117,7 +117,7 @@ public:
     ArrayType(std::shared_ptr<Type> inner, size_t size) : inner(std::move(inner)), size(size) {}
     [[nodiscard]] std::string toString() const override
     {
-        return "[" + std::to_string(size) + "]" + inner->toString();
+        return inner->toString() + "[" + std::to_string(size) + "]" ;
     }
     [[nodiscard]] std::shared_ptr<Type> getInner() const { return inner; }
 
