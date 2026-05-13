@@ -73,6 +73,50 @@ class SemanticAnalyzer
         symbol->node = node;
     }
 
+   void declareFunction(const std::shared_ptr<Function>& node,
+                       const std::shared_ptr<FunctionType>& fnType)
+  {
+      auto existing = symbolTable.find(node->name, Kind::FUNCTION);
+
+      if (!existing) {
+          // First time seeing this name — fresh insert.
+          auto sym = std::make_shared<Symbol>(node->name, fnType,
+                                              node->getLine(), node->getCol(),
+                                              Kind::FUNCTION);
+          symbolTable.insert(node->name, sym, Kind::FUNCTION);
+          node->symbol = sym;
+          sym->node = node;
+          return;
+      }
+
+      if (existing->kind != Kind::FUNCTION) {
+          std::cerr << "Semantic error at line " << node->getLine() << ", col " << node->getCol()
+                    << ": '" << node->name << "' redeclared as different kind ("
+                    << kindToString(existing->kind) << " at line " << existing->line << ").\n";
+          return;
+      }
+
+      if (!existing->type->equals(*fnType)) {
+          std::cerr << "Semantic error at line " << node->getLine() << ", col " << node->getCol()
+                    << ": conflicting types for '" << node->name
+                    << "' (was " << existing->type->toString()
+                    << ", now " << fnType->toString() << ").\n";
+          return;
+      }
+
+      if (node->statements) {
+          auto prevNode = std::dynamic_pointer_cast<Function>(existing->node.lock());
+          if (prevNode && prevNode->statements) {
+              std::cerr << "Semantic error at line " << node->getLine() << ", col " << node->getCol()
+                        << ": redefinition of '" << node->name
+                        << "' (previous definition at line " << existing->line << ").\n";
+              return;
+          }
+          existing->node = node;     // this body is now the canonical decl
+      }
+      node->symbol = existing;       // share the existing Symbol either way
+  }
+
     bool isNullPointerConstant(const std::shared_ptr<Expression>& e) {
         if (const auto lit = std::dynamic_pointer_cast<IntLiterals>(e))
             return lit->value == "0";
@@ -245,8 +289,22 @@ class SemanticAnalyzer
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<VariableExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
-            x->isLvalue = false;
+            auto sym = symbolTable.find(x->name, Kind::VARIABLE);
+            if (!sym) sym = symbolTable.find(x->name, Kind::PARAMETER);
+
+            if (!sym)
+            {
+                std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": use of undeclared identifier '" << x->name << "'.\n";
+                x->resolvedType = IntType::getInstance();  // placeholder so downstream doesn't crash
+                x->isLvalue = false;
+            }
+            else
+            {
+                x->resolvedType = sym->type;
+                x->isLvalue = true;
+                x->symbol = sym;
+            }
         }else
         {
             throw std::runtime_error("Reached invalid expression at line " + std::to_string(expr->getLine())
@@ -254,7 +312,6 @@ class SemanticAnalyzer
         }
 
     }
-
 
     void analyzeFunctionCallExpr(const std::shared_ptr<FunctionCallExpr> &expr)
     {
@@ -375,7 +432,7 @@ class SemanticAnalyzer
         auto functionType = std::make_shared<FunctionType>(node->type, paramTypes, node->variadic);
         const auto function = std::make_shared<Symbol>(node->name, functionType, node->getLine(), node->getCol(),
                                          Kind::FUNCTION);
-        check(node->name, function, Kind::FUNCTION, node->getLine(), node->getCol(), node);
+        declareFunction(node, functionType);
         symbolTable.enterScope();
         for (auto& param : node->parameters)
         {
@@ -385,7 +442,10 @@ class SemanticAnalyzer
                 std::cerr << "Semantic error at line " << param.line << ", col " << param.col << ": duplicate parameter '" << param.name << "'\n";
             }
         }
-        analyzeStatements(node->statements);
+        if (node->statements)
+        {
+            analyzeStatements(node->statements);
+        }
 
         symbolTable.exitScope();
         currentReturnType = prev;
