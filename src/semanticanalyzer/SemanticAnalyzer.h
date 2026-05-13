@@ -164,16 +164,38 @@ class SemanticAnalyzer
                 x->isLvalue = false;
             }else if (isLogicalOp(x->binaryOp))
             {
+                if (!isScalar(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
+                        <<": Logical operator needs integer or pointer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isScalar(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
+                        <<": Logical operator needs integer or pointer for right expression, got " << rType->toString() << ".\n";
+                }
+
                 x->resolvedType = IntType::getInstance();
                 x->isLvalue = false;
             }else if (isBitwiseOp(x->binaryOp))
             {
+                if (!isInteger(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
+                        <<": Bitwise operator needs integer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isInteger(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
+                        <<": Bitwise operator needs integer for right expression, got " << rType->toString() << ".\n";
+                }
+
                 x->resolvedType = IntType::getInstance();
                 x->isLvalue = false;
             }else if (isComma(x->binaryOp))
             {
-                x->resolvedType = IntType::getInstance();
-                x->isLvalue = false;
+                x->resolvedType = rType;
+                x->isLvalue = x->right->isLvalue;
             }
 
         }else if (auto x = std::dynamic_pointer_cast<CastExpr>(expr))
