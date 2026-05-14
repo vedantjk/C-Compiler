@@ -330,6 +330,9 @@ class SemanticAnalyzer
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<SizeOfExpr>(expr))
         {
+            if (x->expr)
+                analyzeExpr(x->expr);
+
             x->resolvedType = IntType::getInstance();
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(expr))

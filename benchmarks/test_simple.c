@@ -222,6 +222,32 @@ int assign() {
     return 0;
 }
 
+int sizeofTest() {
+    int a;
+    int *p;
+    struct Point s;
+
+    /* --- valid: type form --- */
+    sizeof(int);
+    sizeof(int*);
+    sizeof(struct Point);
+
+    /* --- valid: expr form (not evaluated, but type-checked) --- */
+    sizeof(a);
+    sizeof(a + 1);
+    sizeof(*p);
+    sizeof(s);
+
+    /* --- valid: result is int — assign into an int --- */
+    a = sizeof(int);
+
+    /* --- invalid: bad operand inside expr form propagates --- */
+    sizeof(nope);     /* undeclared identifier */
+    sizeof(*a);       /* deref non-pointer */
+
+    return 0;
+}
+
 int main() {
     return 0;
 }
