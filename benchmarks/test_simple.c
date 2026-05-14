@@ -152,6 +152,76 @@ int unary() {
     return 0;
 }
 
+int assign() {
+    int a;
+    int b;
+    char c;
+    int *p;
+    int *q;
+    char *cp;
+    struct Point s;
+
+    /* --- valid: plain '=' same type --- */
+    a = b;
+    c = c;
+    p = q;
+
+    /* --- valid: null-pointer-constant to pointer --- */
+    p = 0;
+
+    /* --- valid: chained / right-associative --- */
+    a = b = 5;
+
+    /* --- valid: compound arithmetic on ints --- */
+    a += b;
+    a -= 1;
+    a *= 2;
+    a /= 3;
+    a %= 4;
+
+    /* --- valid: pointer += int / -= int --- */
+    p += 1;
+    p -= a;
+
+    /* --- valid: compound bitwise on ints --- */
+    a &= 1;
+    a |= 2;
+    a ^= 3;
+    a <<= 1;
+    a >>= 1;
+
+    /* --- invalid: type mismatch on '=' --- */
+    a = p;
+    p = cp;
+    a = "hi";
+
+    /* --- invalid: LHS not lvalue --- */
+    5 = a;
+    (a + b) = 3;
+    (a = 1) = 2;     /* result of '=' is not lvalue */
+
+    /* --- invalid: += / -= bad operands --- */
+    a += p;          /* RHS pointer */
+    s += 1;          /* LHS struct */
+    p += q;          /* RHS pointer */
+
+    /* --- invalid: *= / /= / %= bad operands --- */
+    p *= 1;          /* LHS pointer */
+    a *= p;          /* RHS pointer */
+    s /= 1;          /* LHS struct */
+
+    /* --- invalid: bitwise= bad operands --- */
+    p &= 1;          /* LHS pointer */
+    a |= p;          /* RHS pointer */
+    a <<= cp;        /* RHS pointer */
+
+    /* --- invalid: result of assignment is not lvalue --- */
+    &(a = 1);
+    &(a += 1);
+
+    return 0;
+}
+
 int main() {
     return 0;
 }

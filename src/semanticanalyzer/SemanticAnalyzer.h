@@ -154,7 +154,64 @@ class SemanticAnalyzer
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<AssignExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
+            analyzeExpr(x->lhs);
+            analyzeExpr(x->rhs);
+
+            const auto lType = x->lhs->resolvedType;
+            const auto rType = x->rhs->resolvedType;
+            if (!x->lhs->isLvalue)
+            {
+                std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
+                    <<": Left expression must be an lvalue, got rvalue of type: " << lType->toString() << ".\n";
+            }
+
+            if (x->op == "=")
+            {
+                if (!lType->equals(*rType) && !(isPointer(lType) && isNullPointerConstant(x->rhs)))
+                {
+                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
+                        <<": Left expression and right expression are not same type, left type: "
+                        << lType->toString() << ", right type: " << rType->toString() << ".\n";
+                }
+            }else if (x->op == "+=" || x->op == "-=")
+            {
+                if (!isScalar(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
+                        <<": Arithmetic assignment needs integer or pointer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isInteger(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->rhs->getLine() <<", col "<<x->rhs->getCol()
+                        <<": Arithmetic assignment needs integer for right expression, got " << rType->toString() << ".\n";
+                }
+            }else if (x->op == "*=" || x->op == "/=" || x->op == "%=")
+            {
+                if (!isInteger(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
+                        <<": Arithmetic assignment needs integer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isInteger(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->rhs->getLine() <<", col "<<x->rhs->getCol()
+                        <<": Arithmetic assignment needs integer for right expression, got " << rType->toString() << ".\n";
+                }
+            }else if (x->op == "&=" || x->op == "^=" || x->op == "|=" || x->op == "<<=" || x->op == ">>=")
+            {
+                if (!isInteger(lType))
+                {
+                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
+                        <<": Bitwise assignment needs integer for left expression, got " << lType->toString() << ".\n";
+                }
+                if (!isInteger(rType))
+                {
+                    std::cerr << "Semantic error at line "<< x->rhs->getLine() <<", col "<<x->rhs->getCol()
+                        <<": Bitwise assignment needs integer for right expression, got " << rType->toString() << ".\n";
+                }
+            }
+
+            x->resolvedType = x->lhs->resolvedType;
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<BinaryExpr>(expr))
         {
