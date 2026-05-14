@@ -280,6 +280,46 @@ int castTest() {
     return 0;
 }
 
+int subscriptTest() {
+    int a;
+    int *p;
+    int arr[5];
+    int matrix[3][4];
+    char *cp;
+    struct Point s;
+
+    /* --- valid: pointer subscript --- */
+    p[0];
+    p[a];
+
+    /* --- valid: array subscript --- */
+    arr[0];
+    arr[a];
+
+    /* --- valid: multi-dim subscript peels one layer at a time --- */
+    matrix[1];        /* result is int[4], lvalue */
+    matrix[1][2];     /* result is int, lvalue */
+
+    /* --- valid: result is lvalue, can assign through it --- */
+    arr[0] = 7;
+    p[a] = 9;
+    matrix[1][2] = 11;
+
+    /* --- valid: char* indexing --- */
+    cp[0];
+
+    /* --- invalid: non-integer index --- */
+    arr[p];
+    arr[s];
+
+    /* --- invalid: operand not array/pointer --- */
+    a[0];
+    s[0];
+    5[arr];           /* symmetric form intentionally rejected in v1 */
+
+    return 0;
+}
+
 int main() {
     return 0;
 }

@@ -352,8 +352,27 @@ class SemanticAnalyzer
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
-            x->isLvalue = false;
+            analyzeExpr(x->lvalue);
+            analyzeExpr(x->index);
+
+            if (!isInteger(x->index->resolvedType))
+            {
+                std::cerr << "Semantic error at line " << x->index->getLine() << ", col " << x->index->getCol()
+                    << ": required integer index, received '" << x->index->resolvedType->toString() << "'.\n";
+            }
+
+            auto lt = x->lvalue->resolvedType;
+            std::shared_ptr<Type> finalType = IntType::getInstance();
+            if (auto arr = std::dynamic_pointer_cast<ArrayType>(lt))      finalType = arr->getInner();
+            else if (auto ptr = std::dynamic_pointer_cast<PointerType>(lt)) finalType = ptr->getInner();
+            else
+            {
+                std::cerr<< "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required pointer or array type, received '" << x->lvalue->resolvedType->toString() << "'.\n";
+            }
+
+            x->resolvedType = finalType;
+            x->isLvalue = true;
         }else if (auto x = std::dynamic_pointer_cast<TernaryExpr>(expr))
         {
             x->resolvedType = IntType::getInstance();
