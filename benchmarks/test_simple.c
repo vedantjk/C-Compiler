@@ -248,6 +248,38 @@ int sizeofTest() {
     return 0;
 }
 
+int castTest() {
+    int a;
+    int *p;
+    char c;
+    struct Point s;
+
+    /* --- valid: scalar -> scalar --- */
+    (int)c;
+    (char)a;
+    (int*)a;
+    (int)p;
+
+    /* --- valid: (void)x to discard --- */
+    (void)a;
+    (void)p;
+
+    /* --- valid: null-pointer-constant via (void*)0 still works --- */
+    p = (void*)0;
+
+    /* --- valid: cast result is the target type (assign back) --- */
+    a = (int)p;
+    p = (int*)a;
+
+    /* --- invalid: cast FROM struct --- */
+    (int)s;
+
+    /* --- invalid: cast TO struct --- */
+    (struct Point)a;
+
+    return 0;
+}
+
 int main() {
     return 0;
 }

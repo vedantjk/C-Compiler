@@ -48,6 +48,12 @@ inline bool isPointer(const std::shared_ptr<Type>& t)
     return x != nullptr;
 }
 
+inline bool isVoid(const std::shared_ptr<Type>& t)
+{
+    const auto x = std::dynamic_pointer_cast<VoidType>(t);
+    return x != nullptr;
+}
+
 inline bool isScalar(const std::shared_ptr<Type>& t)
 {
     return isInteger(t) || isPointer(t);
@@ -315,7 +321,16 @@ class SemanticAnalyzer
 
         }else if (auto x = std::dynamic_pointer_cast<CastExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
+            analyzeExpr(x->operand);
+
+            if (!isScalar(x->operand->resolvedType) || (!isScalar(x->type) && !isVoid(x->type)))
+            {
+                std::cerr << "Semantic error at line "<< x->getLine() <<", col "<<x->getCol()
+                        <<": Cannot cast to or from struct, got " << x->operand->resolvedType->toString()
+                        << " and " << x->type->toString() << ".\n";
+            }
+
+            x->resolvedType = x->type;
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<FunctionCallExpr>(expr))
         {
