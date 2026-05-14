@@ -11,10 +11,13 @@
 
 // Stages, in pipeline order. Default is the last one wired up.
 //   --lex       lex only; print tokens
-//   --parse     lex + parse; print AST debug
-//   --validate  lex + parse + SA; print AST debug after SA   (default)
+//   --parse     lex + parse
+//   --validate  lex + parse + SA   (default)
 //   --compile   alias for the latest stage (currently --validate)
-static int run(const std::string &inputSourcePath, const std::string &stage)
+//
+// Flags:
+//   --debugAST  print AST after parse / validate (off by default)
+static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -48,7 +51,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage)
 
     if (stage == "parse")
     {
-        dbg.print(p);
+        if (debugAST) dbg.print(p);
         return 0;
     }
 
@@ -56,7 +59,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage)
     {
         SemanticAnalyzer semanticAnalyzer;
         semanticAnalyzer.validate(p);
-        dbg.print(p);
+        if (debugAST) dbg.print(p);
         return 0;
     }
 
@@ -68,17 +71,19 @@ int main(int argc, char **argv)
 {
     std::string stage = "validate";
     std::string path;
+    bool debugAST = false;
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
-        if (a.rfind("--", 0) == 0) stage = a.substr(2);
+        if (a == "--debugAST") debugAST = true;
+        else if (a.rfind("--", 0) == 0) stage = a.substr(2);
         else path = a;
     }
     if (path.empty())
     {
-        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--compile] <source.c>\n";
+        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--compile] [--debugAST] <source.c>\n";
         return 1;
     }
 
-    return run(path, stage);
+    return run(path, stage, debugAST);
 }
