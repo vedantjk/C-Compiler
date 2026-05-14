@@ -341,8 +341,76 @@ class SemanticAnalyzer
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<MemberExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
-            x->isLvalue = false;
+            analyzeExpr(x->object);
+            const auto& objType = x->object->resolvedType;
+            const int objLine = x->object->getLine();
+            const int objCol  = x->object->getCol();
+
+            auto recoverAsInt = [&]() {
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = true;
+            };
+
+            if (x->isArrow && !isPointer(objType))
+            {
+                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
+                          << ": '->' needs pointer, received: " << objType->toString() << ".\n";
+            }
+            else if (!x->isArrow && isPointer(objType))
+            {
+                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
+                          << ": '.' needs object, received: " << objType->toString() << ".\n";
+            }
+
+            std::shared_ptr<StructType> baseType;
+            if (auto ptr = std::dynamic_pointer_cast<PointerType>(objType))
+                baseType = std::dynamic_pointer_cast<StructType>(ptr->getInner());
+            else
+                baseType = std::dynamic_pointer_cast<StructType>(objType);
+
+            if (!baseType)
+            {
+                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
+                          << ": expected struct or pointer to struct, got "
+                          << objType->toString() << ".\n";
+                recoverAsInt();
+                return;
+            }
+
+            auto baseSymbol = symbolTable.find(baseType->getName(), Kind::STRUCT_TAG);
+            if (!baseSymbol)
+            {
+                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
+                          << ": struct not defined: " << baseType->getName() << ".\n";
+                recoverAsInt();
+                return;
+            }
+
+            auto structNode = std::dynamic_pointer_cast<StructDecl>(baseSymbol->node.lock());
+            // should never fire.
+            if (!structNode)
+            {
+                std::cerr << "Internal error at line " << objLine << ", col " << objCol
+                          << ": struct '" << baseType->getName()
+                          << "' has no associated declaration.\n";
+                recoverAsInt();
+                return;
+            }
+
+            auto it = std::find_if(structNode->fields.begin(), structNode->fields.end(),
+                [&](const StructField& f) { return f.name == x->field; });
+
+            if (it == structNode->fields.end())
+            {
+                std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                          << ": member '" << x->field << "' not defined in struct '"
+                          << structNode->name << "'.\n";
+                recoverAsInt();
+                return;
+            }
+
+            x->resolvedType = it->type;
+            x->isLvalue = true;
         }else if (auto x = std::dynamic_pointer_cast<SizeOfExpr>(expr))
         {
             if (x->expr)

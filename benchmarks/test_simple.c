@@ -3,6 +3,11 @@ struct Point {
     int y;
 };
 
+struct Node {
+    int val;
+    struct Node *child;
+};
+
 int printf(char *fmt, ...);
 int add(int a, int b);
 
@@ -359,6 +364,60 @@ int ternaryTest() {
     /* --- invalid: ternary result is not lvalue --- */
     &(a ? b : 1);
     (a ? b : 1) = 5;
+
+    return 0;
+}
+
+int memberTest() {
+    int i;
+    int *ip;
+    struct Point s;
+    struct Point *ps;
+    struct Node n;
+    struct Node *pn;
+
+    /* --- valid: simple . and -> --- */
+    s.x;
+    ps->x;
+    n.val;
+    pn->val;
+
+    /* --- valid: pointer-typed fields --- */
+    n.child;
+    pn->child;
+
+    /* --- valid: chained access --- */
+    n.child->val;
+    pn->child->val;
+    pn->child->child->val;
+    n.child->child->val;
+
+    /* --- valid: member is lvalue --- */
+    s.x = 7;
+    ps->x = 8;
+    &s.y;
+    &pn->val;
+
+    /* --- valid: chained member also lvalue --- */
+    pn->child->val = 9;
+    &n.child->val;
+
+    /* --- invalid: no such field --- */
+    s.nope;
+    ps->nope;
+    pn->child->nope;
+
+    /* --- invalid: '.' used on pointer (need '->') --- */
+    ps.x;
+    pn.val;
+
+    /* --- invalid: '->' used on non-pointer (need '.') --- */
+    s->x;
+    n->val;
+
+    /* --- invalid: LHS is not struct / pointer-to-struct --- */
+    i.x;
+    ip->x;          /* int* peeled gives int, not a struct */
 
     return 0;
 }
