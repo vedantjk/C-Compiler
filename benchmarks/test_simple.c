@@ -99,6 +99,59 @@ void voidWithValue() {
     return 5;
 }
 
+int unary() {
+    int a;
+    int b;
+    int *p;
+    struct Point s;
+
+    /* --- valid --- */
+    -a;
+    +a;
+    ~a;
+    !a;
+    !p;
+    *p;
+    &a;
+    &p;
+    ++a;
+    a++;
+    --a;
+    a--;
+    ++p;
+    p--;
+    *&a;       /* &a is int*, *(int*) is int lvalue */
+    &*p;       /* *p is int lvalue, &(int lvalue) is int* */
+    !!a;
+
+    /* --- invalid: arithmetic on pointer --- */
+    -p;
+    ~p;
+
+    /* --- invalid: ! on struct (not scalar) --- */
+    !s;
+
+    /* --- invalid: deref non-pointer --- */
+    *a;
+    *5;
+
+    /* --- invalid: addr-of non-lvalue --- */
+    &5;
+    &(a + b);
+
+    /* --- invalid: ++/-- on non-lvalue --- */
+    ++5;
+    (a + b)++;
+
+    /* --- invalid: result of ++ is not lvalue --- */
+    &(a++);
+
+    /* --- invalid: ++ on struct (lvalue but not scalar) --- */
+    ++s;
+
+    return 0;
+}
+
 int main() {
     return 0;
 }

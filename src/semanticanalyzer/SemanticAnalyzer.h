@@ -285,8 +285,65 @@ class SemanticAnalyzer
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<UnaryExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
-            x->isLvalue = false;
+            analyzeExpr(x->operand);
+            if (x->op == "-" || x->op == "+" || x->op == "~")
+            {
+                if (!isInteger(x->operand->resolvedType))
+                {
+                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required integer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                }
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }else if (x->op == "!")
+            {
+                if (!isScalar(x->operand->resolvedType))
+                {
+                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required integer or pointer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                }
+                x->resolvedType = IntType::getInstance();
+                x->isLvalue = false;
+            }else if (x->op == "*")
+            {
+                auto resolvedType = x->operand->resolvedType;
+                if (!isPointer(resolvedType))
+                {
+                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required pointer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                    // to make sure nothing crashes downstream
+                    x->resolvedType = IntType::getInstance();
+                    x->isLvalue = true;
+                }
+                if (const auto pointerType = std::dynamic_pointer_cast<PointerType>(resolvedType))
+                {
+                    x->resolvedType = pointerType->getInner();
+                    x->isLvalue = true;
+                }
+            }else if (x->op == "&")
+            {
+                if (!x->operand->isLvalue)
+                {
+                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required lvalue, received rvalue of type '" << x->operand->resolvedType->toString() << "'.\n";
+                }
+                x->resolvedType = std::make_shared<PointerType>(x->operand->resolvedType);
+                x->isLvalue = false;
+            }else if (x->op == "++" || x->op == "--")
+            {
+                if (!x->operand->isLvalue)
+                {
+                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required lvalue, received rvalue of type '" << x->operand->resolvedType->toString() << "'.\n";
+                }
+                if (!isScalar(x->operand->resolvedType))
+                {
+                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": required integer or pointer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                }
+                x->resolvedType = x->operand->resolvedType;
+                x->isLvalue = false;
+            }
         }else if (auto x = std::dynamic_pointer_cast<VariableExpr>(expr))
         {
             auto sym = symbolTable.find(x->name, Kind::VARIABLE);
