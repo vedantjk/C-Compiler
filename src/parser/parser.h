@@ -606,7 +606,8 @@ class Parser
         }
         expect(RIGHT_BRACE);
         expect(SEMI_COLON);
-        return std::make_shared<StructDecl>(structType->toString(), fields, line, col, structType);
+        auto actualStructType = std::dynamic_pointer_cast<StructType>(structType);
+        return std::make_shared<StructDecl>(actualStructType->getName(), fields, line, col, structType);
     }
 
     std::shared_ptr<Program> ParseProgram() { 

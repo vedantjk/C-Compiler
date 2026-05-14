@@ -29,7 +29,7 @@ public:
 
     void print(std::ostream& out, int tab) const override
     {
-        out<<name<<" {\n";
+        out<<"struct "<<name<<" {\n";
         for (auto field : fields)
         {
             for (int i = 0; i<tab; i++) out<<" ";
