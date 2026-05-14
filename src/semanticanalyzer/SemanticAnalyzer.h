@@ -375,7 +375,36 @@ class SemanticAnalyzer
             x->isLvalue = true;
         }else if (auto x = std::dynamic_pointer_cast<TernaryExpr>(expr))
         {
-            x->resolvedType = IntType::getInstance();
+            analyzeExpr(x->condition);
+            analyzeExpr(x->thenBranch);
+            analyzeExpr(x->elseBranch);
+
+            if (!isScalar(x->condition->resolvedType))
+            {
+                std::cerr << "Semantic error at line " << x->condition->getLine() << ", col " << x->condition->getCol()
+                    << ": required integer or pointer condition, received '" << x->condition->resolvedType->toString() << "'.\n";
+            }
+
+            const auto tType = x->thenBranch->resolvedType;
+            const auto eType = x->elseBranch->resolvedType;
+
+            if (tType->equals(*eType))
+            {
+                x->resolvedType = tType;
+            }else if (isPointer(tType) && isNullPointerConstant(x->elseBranch))
+            {
+                x->resolvedType = tType;
+            }else if (isPointer(eType) && isNullPointerConstant(x->thenBranch))
+            {
+                x->resolvedType = eType;
+            }else
+            {
+                std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
+                    << ": ternary branches have incompatible types, then: '" << tType->toString()
+                    << "', else: '" << eType->toString() << "'.\n";
+                x->resolvedType = tType;
+            }
+
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<UnaryExpr>(expr))
         {

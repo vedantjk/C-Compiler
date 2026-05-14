@@ -320,6 +320,49 @@ int subscriptTest() {
     return 0;
 }
 
+int ternaryTest() {
+    int a;
+    int b;
+    int *p;
+    int *q;
+    char *cp;
+    struct Point s;
+
+    /* --- valid: int condition, matching int branches --- */
+    a ? 1 : 2;
+
+    /* --- valid: pointer condition --- */
+    p ? 1 : 2;
+
+    /* --- valid: assign result, both branches int --- */
+    a = b ? 1 : 2;
+
+    /* --- valid: matching pointer branches --- */
+    a = p ? 0 : 0;
+    p ? p : q;
+
+    /* --- valid: pointer + null-pointer-constant on either side --- */
+    p = a ? p : 0;
+    p = a ? 0 : p;
+
+    /* --- valid: nested ternary --- */
+    a ? (b ? 1 : 2) : 3;
+
+    /* --- invalid: condition is struct (not scalar) --- */
+    s ? 1 : 2;
+
+    /* --- invalid: branches are incompatible --- */
+    a ? p : 5;        /* pointer vs non-null int */
+    a ? p : cp;       /* int* vs char* */
+    a ? a : s;        /* int vs struct */
+
+    /* --- invalid: ternary result is not lvalue --- */
+    &(a ? b : 1);
+    (a ? b : 1) = 5;
+
+    return 0;
+}
+
 int main() {
     return 0;
 }
