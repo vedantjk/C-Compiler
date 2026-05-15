@@ -63,6 +63,7 @@ class SemanticAnalyzer
 {
     SymbolTable symbolTable;
     std::shared_ptr<Type> currentReturnType;
+    int loopDepth = 0;
     public:
     SemanticAnalyzer() = default;
 
@@ -173,7 +174,7 @@ class SemanticAnalyzer
 
             if (x->op == "=")
             {
-                if (!lType->equals(*rType) && !(isPointer(lType) && isNullPointerConstant(x->rhs)))
+                if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(x->rhs)))
                 {
                     std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
                         <<": Left expression and right expression are not same type, left type: "
@@ -626,6 +627,13 @@ class SemanticAnalyzer
 
     void analyzeReturnStmt(const std::shared_ptr<ReturnStmt> &stmt)
     {
+        if (!currentReturnType)
+        {
+            std::cerr << "Semantic error at line " <<stmt->getLine() << ", col "
+            << stmt->col << ": return statement not inside a function.\n";
+
+            return;
+        }
         if (stmt->returnExpression != nullptr)
         {
             analyzeExpr(stmt->returnExpression);
@@ -643,6 +651,99 @@ class SemanticAnalyzer
         }
     }
 
+    void analyzeIfStmt(const std::shared_ptr<IfStmt> &ifStmt)
+    {
+        analyzeExpr(ifStmt->condition);
+
+        if (!isScalar(ifStmt->condition->resolvedType))
+        {
+            std::cerr << "Semantic error at line " << ifStmt->condition->getLine() << ", col " << ifStmt->condition->getCol()
+            << ": expected pointer or integer type, got - " << ifStmt->condition->resolvedType->toString() <<"\n";
+        }
+
+        symbolTable.enterScope();
+        analyzeStatements(ifStmt->thenBlock);
+        symbolTable.exitScope();
+
+        if (ifStmt->elseBlock)
+        {
+            symbolTable.enterScope();
+            analyzeStatements(ifStmt->elseBlock);
+            symbolTable.exitScope();
+        }
+
+    }
+
+    void analyzeWhileStmt(const std::shared_ptr<WhileStmt> &whileStmt)
+    {
+        analyzeExpr(whileStmt->condition);
+
+        if (!isScalar(whileStmt->condition->resolvedType))
+        {
+            std::cerr << "Semantic error at line " << whileStmt->condition->getLine() << ", col " << whileStmt->condition->getCol()
+            << ": expected pointer or integer type, got - " << whileStmt->condition->resolvedType->toString() <<"\n";
+        }
+
+        loopDepth+=1;
+        symbolTable.enterScope();
+        analyzeStatements(whileStmt->whileBlock);
+        symbolTable.exitScope();
+        loopDepth-=1;
+    }
+
+    void analyzeDoWhileStmt(const std::shared_ptr<DoWhileStmt> &doWhileStmt)
+    {
+        analyzeExpr(doWhileStmt->condition);
+
+        if (!isScalar(doWhileStmt->condition->resolvedType))
+        {
+            std::cerr << "Semantic error at line " << doWhileStmt->condition->getLine() << ", col " << doWhileStmt->condition->getCol()
+            << ": expected pointer or integer type, got - " << doWhileStmt->condition->resolvedType->toString() <<"\n";
+        }
+
+        loopDepth+=1;
+        symbolTable.enterScope();
+        analyzeStatements(doWhileStmt->block);
+        symbolTable.exitScope();
+        loopDepth-=1;
+    }
+
+    void analyzeForStmt(const std::shared_ptr<ForStmt> &forStmt)
+    {
+        if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->initialization))
+        {
+            analyzeExprStmt(x);
+        }
+        if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->condition))
+        {
+            analyzeExprStmt(x);
+            if (!isScalar(x->expr->resolvedType))
+            {
+                std::cerr << "Semantic error at line " << x->expr->getLine() << ", col " << x->expr->getCol()
+                << " condition in for loop must be pointer or integer got - " << x->expr->resolvedType->toString() <<"\n";
+            }
+        }
+        if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->update))
+        {
+            analyzeExprStmt(x);
+        }
+
+        loopDepth+=1;
+        symbolTable.enterScope();
+        analyzeStatements(forStmt->forBlock);
+        symbolTable.exitScope();
+        loopDepth-=1;
+    }
+
+    void analyzeBreakContinueStmt(const std::shared_ptr<Statement> &stmt)
+    {
+        if (loopDepth <= 0)
+        {
+            std::cerr << "Semantic error at line " << stmt->getLine() << ", col " << stmt->getCol()
+            <<" , no loop statements found\n";
+        }
+    }
+
     void analyzeStatements(const std::shared_ptr<BlockStmt>& blockStmt)
     {
         for (const auto& statement : blockStmt->statements)
@@ -655,12 +756,28 @@ class SemanticAnalyzer
                 analyzeExprStmt(x);
             }else if (auto x = std::dynamic_pointer_cast<BlockStmt>(statement))
             {
-                symbolTable.enterScope();
                 analyzeStatements(x);
-                symbolTable.exitScope();
             }else if (auto x = std::dynamic_pointer_cast<ReturnStmt>(statement))
             {
                 analyzeReturnStmt(x);
+            }else if (auto x = std::dynamic_pointer_cast<IfStmt>(statement))
+            {
+                analyzeIfStmt(x);
+            }else if (auto x = std::dynamic_pointer_cast<WhileStmt>(statement))
+            {
+                analyzeWhileStmt(x);
+            }else if (auto x = std::dynamic_pointer_cast<DoWhileStmt>(statement))
+            {
+                analyzeDoWhileStmt(x);
+            }else if (auto x = std::dynamic_pointer_cast<ForStmt>(statement))
+            {
+                analyzeForStmt(x);
+            }else if (auto x = std::dynamic_pointer_cast<BreakStmt>(statement))
+            {
+                analyzeBreakContinueStmt(x);
+            }else if (auto x = std::dynamic_pointer_cast<ContinueStmt>(statement))
+            {
+                analyzeBreakContinueStmt(x);
             }
         }
     }

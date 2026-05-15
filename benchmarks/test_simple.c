@@ -422,6 +422,177 @@ int memberTest() {
     return 0;
 }
 
+int ifTest() {
+    int i;
+    int *p;
+    char c;
+    struct Point s;
+
+    /* --- valid: int / char / pointer condition --- */
+    if (i) { i = 1; }
+    if (c) { c = 1; }
+    if (p) { i = 1; }
+
+    /* --- valid: expression-producing-scalar condition --- */
+    if (i < 5) { i = 1; }
+    if (i == 0) { i = 1; }
+    if (*p) { i = 1; }
+    if (i && p) { i = 1; }
+    if (i ? 1 : 0) { i = 1; }
+    if (add(1, 2)) { i = 1; }
+    if (sizeof(int)) { i = 1; }
+    if (s.x) { i = 1; }
+
+    /* --- valid: with else --- */
+    if (i) { i = 1; } else { i = 2; }
+
+    /* --- valid: body has its own scope (inner i shadows outer) --- */
+    if (i) { int i; i = 9; }
+
+    /* --- invalid: struct condition --- */
+    if (s) { i = 1; }
+
+    /* --- invalid: struct condition with else --- */
+    if (s) { i = 1; } else { i = 2; }
+
+    /* --- invalid: condition propagates inner error --- */
+    if (nope) { i = 1; }
+
+    /* --- invalid: error in then-block --- */
+    if (i) { undeclared = 1; }
+
+    /* --- invalid: error in else-block --- */
+    if (i) { i = 1; } else { undeclared = 1; }
+
+    return 0;
+}
+
+int whileTest() {
+    int i;
+    int *p;
+    struct Point s;
+
+    /* --- valid: scalar conditions --- */
+    while (i) { i = i - 1; }
+    while (p) { i = 1; }
+    while (i < 10) { i = i + 1; }
+    while (*p) { i = 1; }
+
+    /* --- valid: empty-effect body, just exercises analysis --- */
+    while (i) { i; }
+
+    /* --- invalid: struct condition --- */
+    while (s) { i = 1; }
+
+    /* --- invalid: inner error in condition --- */
+    while (nope) { i = 1; }
+
+    /* --- invalid: inner error in body --- */
+    while (i) { undeclared = 1; }
+
+    return 0;
+}
+
+int doWhileTest() {
+    int i;
+    int *p;
+    struct Point s;
+
+    /* --- valid: scalar conditions --- */
+    do { i = i - 1; } while (i);
+    do { i = 1; } while (p);
+    do { i = 1; } while (i < 10);
+
+    /* --- invalid: struct condition --- */
+    do { i = 1; } while (s);
+
+    /* --- invalid: inner error in body --- */
+    do { undeclared = 1; } while (i);
+
+    /* --- invalid: inner error in condition --- */
+    do { i = 1; } while (nope);
+
+    return 0;
+}
+
+int forTest() {
+    int i;
+    int j;
+    int *p;
+    struct Point s;
+
+    /* --- valid: classic for --- */
+    for (i = 0; i < 10; i = i + 1) { j = i; }
+
+    /* --- valid: pointer condition --- */
+    for (i = 0; p; i = i + 1) { j = 1; }
+
+    /* --- valid: init/update can be any expression (side effect) --- */
+    for (i = i + 1; i < 5; j = j + 1) { i = i + 1; }
+
+    /* --- valid: assignment-expression in update --- */
+    for (i = 0; i < 3; i = i + 1) { j = i; }
+
+    /* --- invalid: struct condition --- */
+    for (i = 0; s; i = i + 1) { j = 1; }
+
+    /* --- invalid: inner error in init --- */
+    for (nope = 0; i < 5; i = i + 1) { j = 1; }
+
+    /* --- invalid: inner error in update --- */
+    for (i = 0; i < 5; nope = nope + 1) { j = 1; }
+
+    /* --- invalid: inner error in body --- */
+    for (i = 0; i < 5; i = i + 1) { undeclared = 1; }
+
+    return 0;
+}
+
+int breakContinueTest() {
+    int i;
+    int j;
+
+    /* --- valid: directly inside while body --- */
+    while (i) { break; }
+    while (i) { continue; }
+
+    /* --- valid: directly inside do-while body --- */
+    do { break; } while (i);
+    do { continue; } while (i);
+
+    /* --- valid: directly inside for body --- */
+    for (i = 0; i < 5; i = i + 1) { break; }
+    for (i = 0; i < 5; i = i + 1) { continue; }
+
+    /* --- valid: inside if inside loop --- */
+    while (i) { if (j) { break; } }
+    for (i = 0; i < 5; i = i + 1) { if (j) { continue; } }
+
+    /* --- valid: nested loops; break exits innermost only --- */
+    while (i) {
+        while (j) { break; }
+    }
+
+    /* --- valid: deeply nested blocks inside a loop --- */
+    while (i) {
+        { { break; } }
+    }
+
+    /* --- invalid: break at function top-level (no loop) --- */
+    break;
+
+    /* --- invalid: continue at function top-level --- */
+    continue;
+
+    /* --- invalid: break inside if at function top-level (no loop) --- */
+    if (i) { break; }
+
+    /* --- invalid: continue inside nested block at function top-level --- */
+    { { continue; } }
+
+    return 0;
+}
+
 int main() {
     return 0;
 }
