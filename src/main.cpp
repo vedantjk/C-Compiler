@@ -9,6 +9,12 @@
 #include <stdexcept>
 #include <string>
 
+static const std::string PRELUDE_SOURCE =
+    "void *malloc(int size);\n"
+    "void free(void *p);\n"
+    "int printf(char *fmt, ...);\n"
+    "int scanf(char *fmt, ...);\n";
+
 // Stages, in pipeline order. Default is the last one wired up.
 //   --lex       lex only; print tokens
 //   --parse     lex + parse
@@ -57,6 +63,14 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
     if (stage == "validate" || stage == "compile")
     {
+        Diagnostic::DiagnosticEngine preludeDiag;
+        Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
+        Parser preludeParser{preludeLexer.generateTokens()};
+        std::shared_ptr<Program> preludeProgram = preludeParser.ParseProgram();
+        p->nodes.insert(p->nodes.begin(),
+                        preludeProgram->nodes.begin(),
+                        preludeProgram->nodes.end());
+
         SemanticAnalyzer semanticAnalyzer;
         semanticAnalyzer.validate(p);
         if (debugAST) dbg.print(p);

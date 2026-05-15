@@ -573,18 +573,23 @@ class SemanticAnalyzer
         }else
         {
             auto functionType = std::dynamic_pointer_cast<FunctionType>(checkFunctionExistence->type);
-            if (functionType->paramTypes.size() != expr->parameters.size())
+            if ( (functionType->isVariadic && functionType->paramTypes.size() > expr->parameters.size())
+                || (!functionType->isVariadic && functionType->paramTypes.size() != expr->parameters.size()))
             {
                 std::cerr << "Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": function call has " << expr->parameters.size() << " parameters. Expected " << functionType->paramTypes.size() << "\n";
             }else
             {
-                for (int i = 0; i < expr->parameters.size(); i++)
+                for (int i = 0; i < functionType->paramTypes.size(); i++)
                 {
                     analyzeExpr(expr->parameters[i]);
-                    if (!functionType->paramTypes[i]->equals(*expr->parameters[i]->resolvedType))
+                    if (!canDecayTo(expr->parameters[i]->resolvedType, functionType->paramTypes[i]))
                     {
                         std::cerr <<"Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": mismatched param types, expected " <<functionType->paramTypes[i]->toString() << " got " << expr->parameters[i]->resolvedType->toString() << "\n";
                     }
+                }
+                for (int i = functionType->paramTypes.size(); i < expr->parameters.size(); i++)
+                {
+                    analyzeExpr(expr->parameters[i]);
                 }
             }
             expr->resolvedType = functionType->returnType;

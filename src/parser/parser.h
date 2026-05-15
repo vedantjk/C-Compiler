@@ -552,7 +552,7 @@ class Parser
         std::vector<Parameter> parameters;
         bool variadic = false;
 
-        if(peek()!=RIGHT_PAREN && peek()!=VOID && peek()!=ELLIPSIS){
+        if(peek()!=RIGHT_PAREN && !(peek()==VOID && peekNext()==RIGHT_PAREN) && peek()!=ELLIPSIS){
             parseParam(parameters);
             while(peek() == COMMA){
                 consume(); // comma
@@ -560,7 +560,7 @@ class Parser
                 parseParam(parameters);
             }
         }
-        if (peek() == VOID) consume();
+        if (peek() == VOID && peekNext() == RIGHT_PAREN) consume();
         if (peek() == ELLIPSIS)
         {
             if (parameters.empty())

@@ -8,7 +8,6 @@ struct Node {
     struct Node *child;
 };
 
-int printf(char *fmt, ...);
 int add(int a, int b);
 
 int g;
@@ -589,6 +588,55 @@ int breakContinueTest() {
 
     /* --- invalid: continue inside nested block at function top-level --- */
     { { continue; } }
+
+    return 0;
+}
+
+int variadicTest() {
+    int i;
+    int *ip;
+    char *cp;
+    char buf[10];
+    struct Point s;
+
+    /* --- valid: variadic with zero trailing args (named param only) --- */
+    printf("hi\n");
+
+    /* --- valid: array-to-pointer decay on the named param ("hi" is char[3] -> char*) --- */
+    printf("hi");
+
+    /* --- valid: variadic tail with scalar args --- */
+    printf("%d", 1);
+    printf("%d %d %d", 1, 2, 3);
+    printf("%s", cp);
+    printf("%d %s", i, cp);
+
+    /* --- valid: array decay on a non-literal char array (buf is char[10] -> char*) --- */
+    printf("%s", buf);
+
+    /* --- valid: passing a string literal as the variadic-tail arg (still char[N], still decays) --- */
+    printf("%s", "x");
+
+    /* --- invalid: variadic with too few args (zero, named param missing) --- */
+    printf();
+
+    /* --- invalid: non-variadic with extra args (unchanged behavior) --- */
+    add(1, 2, 3);
+
+    /* --- invalid: non-variadic with too few args --- */
+    add(1);
+
+    /* --- invalid: named param wrong type (struct passed where char* expected) --- */
+    printf(s);
+
+    /* --- invalid: inner error in named param --- */
+    printf(nope);
+
+    /* --- invalid: inner error in variadic tail (should still be analyzed) --- */
+    printf("%d", undeclared);
+
+    /* --- invalid: non-variadic with wrong arg type (pointer where int expected) --- */
+    add(ip, 2);
 
     return 0;
 }

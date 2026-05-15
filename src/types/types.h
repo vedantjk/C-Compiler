@@ -175,3 +175,14 @@ public:
     }
 
 };
+
+inline bool canDecayTo(std::shared_ptr<Type>& from, const std::shared_ptr<Type>& to)
+{
+    if (from->equals(*to)) return true;
+    auto p = std::dynamic_pointer_cast<ArrayType>(from);
+    if (!p) return false;
+    auto q = std::dynamic_pointer_cast<PointerType>(to);
+    if (!q) return false;
+    if (!p->getInner()->equals(*q->getInner())) return false;
+    return true;
+}
