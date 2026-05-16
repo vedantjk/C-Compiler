@@ -655,6 +655,20 @@ class SemanticAnalyzer
     {
         const auto variableSymbol = std::make_shared<Symbol>(variable->name, variable->type, variable->getLine(), variable->getCol(), Kind::VARIABLE);
         check(variable->name, variableSymbol, Kind::VARIABLE, variable->getLine(), variable->getCol(), variable);
+
+        if (variable->initialization)
+        {
+            analyzeExpr(variable->initialization);
+            auto lType = variable->type;
+            auto rType = variable->initialization->resolvedType;
+            if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(variable->initialization)))
+            {
+                error(variable->getLine(), variable->getCol(),
+                      "Left expression and right expression are not same type, left type: " +
+                      lType->toString() + ", right type: " + rType->toString() + ".");
+            }
+        }
+
     }
 
     void analyzeDeclareStmt(const std::shared_ptr<DeclareStmt> &stmt)
