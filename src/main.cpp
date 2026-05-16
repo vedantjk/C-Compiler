@@ -35,7 +35,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
     buffer << inputFile.rdbuf();
     inputFile.close();
 
-    Diagnostic::DiagnosticEngine diagnosticEngine;
+    Diagnostic::DiagnosticEngine diagnosticEngine{inputSourcePath};
     Lexer lexer{buffer.str(), diagnosticEngine};
     auto tokens = lexer.generateTokens();
 
@@ -63,7 +63,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
     if (stage == "validate" || stage == "compile")
     {
-        Diagnostic::DiagnosticEngine preludeDiag;
+        Diagnostic::DiagnosticEngine preludeDiag{"<prelude>"};
         Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
         Parser preludeParser{preludeLexer.generateTokens()};
         std::shared_ptr<Program> preludeProgram = preludeParser.ParseProgram();
@@ -71,8 +71,13 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
                         preludeProgram->nodes.begin(),
                         preludeProgram->nodes.end());
 
-        SemanticAnalyzer semanticAnalyzer;
+        SemanticAnalyzer semanticAnalyzer{diagnosticEngine};
         semanticAnalyzer.validate(p);
+        if (diagnosticEngine.hasErrors())
+        {
+            diagnosticEngine.print();
+            return 1;
+        }
         if (debugAST) dbg.print(p);
         return 0;
     }

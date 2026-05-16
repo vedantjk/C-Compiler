@@ -10,6 +10,7 @@
 #include "../ast/TopLevelNodes/VarDecl.h"
 #include "../symboltable/SymbolTable.h"
 #include "../ast/Statements/ReturnStmt.h"
+#include "../utils/diagnostic.h"
 
 inline bool isArithmeticOp(const std::string& op)
 {
@@ -62,10 +63,16 @@ inline bool isScalar(const std::shared_ptr<Type>& t)
 class SemanticAnalyzer
 {
     SymbolTable symbolTable;
+    Diagnostic::DiagnosticEngine& diag;
     std::shared_ptr<Type> currentReturnType;
     int loopDepth = 0;
     public:
-    SemanticAnalyzer() = default;
+    explicit SemanticAnalyzer(Diagnostic::DiagnosticEngine& diag) : diag(diag) {}
+
+    void error(int line, int col, const std::string& msg)
+    {
+        diag.report(Diagnostic::DiagLevel::SEMANTIC, {line, col}, msg);
+    }
 
     void check(const std::string &name, const std::shared_ptr<Symbol> &symbol, const Kind kind,
                const int line, const int col, const std::shared_ptr<ASTNode>& node)
@@ -73,7 +80,10 @@ class SemanticAnalyzer
         if (!symbolTable.insert(name, symbol, kind))
         {
             const auto existing = symbolTable.find(name, kind);
-            std::cerr << "Semantic error at line " << line<<", col "<<col <<": redeclaration of "<< kindToString(kind) <<" '"<< name <<"'. Previous declaration ("<< kindToString(existing->kind) <<") at line "<<existing->line<<".\n";
+            error(line, col,
+                  std::string("redeclaration of ") + kindToString(kind) + " '" + name +
+                  "'. Previous declaration (" + kindToString(existing->kind) +
+                  ") at line " + std::to_string(existing->line) + ".");
             return;
         }
         node->symbol = symbol;
@@ -97,26 +107,28 @@ class SemanticAnalyzer
       }
 
       if (existing->kind != Kind::FUNCTION) {
-          std::cerr << "Semantic error at line " << node->getLine() << ", col " << node->getCol()
-                    << ": '" << node->name << "' redeclared as different kind ("
-                    << kindToString(existing->kind) << " at line " << existing->line << ").\n";
+          error(node->getLine(), node->getCol(),
+                "'" + node->name + "' redeclared as different kind (" +
+                kindToString(existing->kind) + " at line " +
+                std::to_string(existing->line) + ").");
           return;
       }
 
       if (!existing->type->equals(*fnType)) {
-          std::cerr << "Semantic error at line " << node->getLine() << ", col " << node->getCol()
-                    << ": conflicting types for '" << node->name
-                    << "' (was " << existing->type->toString()
-                    << ", now " << fnType->toString() << ").\n";
+          error(node->getLine(), node->getCol(),
+                "conflicting types for '" + node->name +
+                "' (was " + existing->type->toString() +
+                ", now " + fnType->toString() + ").");
           return;
       }
 
       if (node->statements) {
           auto prevNode = std::dynamic_pointer_cast<Function>(existing->node.lock());
           if (prevNode && prevNode->statements) {
-              std::cerr << "Semantic error at line " << node->getLine() << ", col " << node->getCol()
-                        << ": redefinition of '" << node->name
-                        << "' (previous definition at line " << existing->line << ").\n";
+              error(node->getLine(), node->getCol(),
+                    "redefinition of '" + node->name +
+                    "' (previous definition at line " +
+                    std::to_string(existing->line) + ").");
               return;
           }
           existing->node = node;     // this body is now the canonical decl
@@ -168,53 +180,60 @@ class SemanticAnalyzer
             const auto rType = x->rhs->resolvedType;
             if (!x->lhs->isLvalue)
             {
-                std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
-                    <<": Left expression must be an lvalue, got rvalue of type: " << lType->toString() << ".\n";
+                error(x->lhs->getLine(), x->lhs->getCol(),
+                      "Left expression must be an lvalue, got rvalue of type: " +
+                      lType->toString() + ".");
             }
 
             if (x->op == "=")
             {
                 if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(x->rhs)))
                 {
-                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
-                        <<": Left expression and right expression are not same type, left type: "
-                        << lType->toString() << ", right type: " << rType->toString() << ".\n";
+                    error(x->lhs->getLine(), x->lhs->getCol(),
+                          "Left expression and right expression are not same type, left type: " +
+                          lType->toString() + ", right type: " + rType->toString() + ".");
                 }
             }else if (x->op == "+=" || x->op == "-=")
             {
                 if (!isScalar(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
-                        <<": Arithmetic assignment needs integer or pointer for left expression, got " << lType->toString() << ".\n";
+                    error(x->lhs->getLine(), x->lhs->getCol(),
+                          "Arithmetic assignment needs integer or pointer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isInteger(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->rhs->getLine() <<", col "<<x->rhs->getCol()
-                        <<": Arithmetic assignment needs integer for right expression, got " << rType->toString() << ".\n";
+                    error(x->rhs->getLine(), x->rhs->getCol(),
+                          "Arithmetic assignment needs integer for right expression, got " +
+                          rType->toString() + ".");
                 }
             }else if (x->op == "*=" || x->op == "/=" || x->op == "%=")
             {
                 if (!isInteger(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
-                        <<": Arithmetic assignment needs integer for left expression, got " << lType->toString() << ".\n";
+                    error(x->lhs->getLine(), x->lhs->getCol(),
+                          "Arithmetic assignment needs integer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isInteger(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->rhs->getLine() <<", col "<<x->rhs->getCol()
-                        <<": Arithmetic assignment needs integer for right expression, got " << rType->toString() << ".\n";
+                    error(x->rhs->getLine(), x->rhs->getCol(),
+                          "Arithmetic assignment needs integer for right expression, got " +
+                          rType->toString() + ".");
                 }
             }else if (x->op == "&=" || x->op == "^=" || x->op == "|=" || x->op == "<<=" || x->op == ">>=")
             {
                 if (!isInteger(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->lhs->getLine() <<", col "<<x->lhs->getCol()
-                        <<": Bitwise assignment needs integer for left expression, got " << lType->toString() << ".\n";
+                    error(x->lhs->getLine(), x->lhs->getCol(),
+                          "Bitwise assignment needs integer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isInteger(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->rhs->getLine() <<", col "<<x->rhs->getCol()
-                        <<": Bitwise assignment needs integer for right expression, got " << rType->toString() << ".\n";
+                    error(x->rhs->getLine(), x->rhs->getCol(),
+                          "Bitwise assignment needs integer for right expression, got " +
+                          rType->toString() + ".");
                 }
             }
 
@@ -232,13 +251,15 @@ class SemanticAnalyzer
             {
                 if (!isInteger(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
-                        <<": Arithmetic operator needs integer for left expression, got " << lType->toString() << ".\n";
+                    error(x->left->getLine(), x->left->getCol(),
+                          "Arithmetic operator needs integer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isInteger(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
-                        <<": Arithmetic operator needs integer for right expression, got " << rType->toString() << ".\n";
+                    error(x->right->getLine(), x->right->getCol(),
+                          "Arithmetic operator needs integer for right expression, got " +
+                          rType->toString() + ".");
                 }
                 x->resolvedType = IntType::getInstance();
                 x->isLvalue = false;
@@ -248,13 +269,15 @@ class SemanticAnalyzer
 
                 if (!isScalar(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
-                        <<": Comparison operator needs integer or pointer for left expression, got " << lType->toString() << ".\n";
+                    error(x->left->getLine(), x->left->getCol(),
+                          "Comparison operator needs integer or pointer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isScalar(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
-                        <<": Comparison operator needs integer or pointer for right expression, got " << rType->toString() << ".\n";
+                    error(x->right->getLine(), x->right->getCol(),
+                          "Comparison operator needs integer or pointer for right expression, got " +
+                          rType->toString() + ".");
                 }
 
                 if (isScalar(lType) && isScalar(rType))
@@ -264,9 +287,9 @@ class SemanticAnalyzer
 
                     if (bothPtr && !lType->equals(*rType))
                     {
-                        std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
-                            <<": Comparison operator needs matching pointer types, left: " << lType->toString()
-                            <<", right: " << rType->toString() << ".\n";
+                        error(x->right->getLine(), x->right->getCol(),
+                              "Comparison operator needs matching pointer types, left: " +
+                              lType->toString() + ", right: " + rType->toString() + ".");
                     }
                     else if (!bothArith && !bothPtr)
                     {
@@ -275,9 +298,9 @@ class SemanticAnalyzer
                           || (isPointer(rType) && isNullPointerConstant(x->left)));
                         if (!nullOK)
                         {
-                            std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
-                                <<": Comparison operator needs both arithmetic or both pointer, left: " << lType->toString()
-                                <<", right: " << rType->toString() << ".\n";
+                            error(x->right->getLine(), x->right->getCol(),
+                                  "Comparison operator needs both arithmetic or both pointer, left: " +
+                                  lType->toString() + ", right: " + rType->toString() + ".");
                         }
                     }
                 }
@@ -288,13 +311,15 @@ class SemanticAnalyzer
             {
                 if (!isScalar(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
-                        <<": Logical operator needs integer or pointer for left expression, got " << lType->toString() << ".\n";
+                    error(x->left->getLine(), x->left->getCol(),
+                          "Logical operator needs integer or pointer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isScalar(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
-                        <<": Logical operator needs integer or pointer for right expression, got " << rType->toString() << ".\n";
+                    error(x->right->getLine(), x->right->getCol(),
+                          "Logical operator needs integer or pointer for right expression, got " +
+                          rType->toString() + ".");
                 }
 
                 x->resolvedType = IntType::getInstance();
@@ -303,13 +328,15 @@ class SemanticAnalyzer
             {
                 if (!isInteger(lType))
                 {
-                    std::cerr << "Semantic error at line "<< x->left->getLine() <<", col "<<x->left->getCol()
-                        <<": Bitwise operator needs integer for left expression, got " << lType->toString() << ".\n";
+                    error(x->left->getLine(), x->left->getCol(),
+                          "Bitwise operator needs integer for left expression, got " +
+                          lType->toString() + ".");
                 }
                 if (!isInteger(rType))
                 {
-                    std::cerr << "Semantic error at line "<< x->right->getLine() <<", col "<<x->right->getCol()
-                        <<": Bitwise operator needs integer for right expression, got " << rType->toString() << ".\n";
+                    error(x->right->getLine(), x->right->getCol(),
+                          "Bitwise operator needs integer for right expression, got " +
+                          rType->toString() + ".");
                 }
 
                 x->resolvedType = IntType::getInstance();
@@ -326,9 +353,10 @@ class SemanticAnalyzer
 
             if (!isScalar(x->operand->resolvedType) || (!isScalar(x->type) && !isVoid(x->type)))
             {
-                std::cerr << "Semantic error at line "<< x->getLine() <<", col "<<x->getCol()
-                        <<": Cannot cast to or from struct, got " << x->operand->resolvedType->toString()
-                        << " and " << x->type->toString() << ".\n";
+                error(x->getLine(), x->getCol(),
+                      "Cannot cast to or from struct, got " +
+                      x->operand->resolvedType->toString() +
+                      " and " + x->type->toString() + ".");
             }
 
             x->resolvedType = x->type;
@@ -354,13 +382,13 @@ class SemanticAnalyzer
 
             if (x->isArrow && !isPointer(objType))
             {
-                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
-                          << ": '->' needs pointer, received: " << objType->toString() << ".\n";
+                error(objLine, objCol,
+                      "'->' needs pointer, received: " + objType->toString() + ".");
             }
             else if (!x->isArrow && isPointer(objType))
             {
-                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
-                          << ": '.' needs object, received: " << objType->toString() << ".\n";
+                error(objLine, objCol,
+                      "'.' needs object, received: " + objType->toString() + ".");
             }
 
             std::shared_ptr<StructType> baseType;
@@ -371,9 +399,9 @@ class SemanticAnalyzer
 
             if (!baseType)
             {
-                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
-                          << ": expected struct or pointer to struct, got "
-                          << objType->toString() << ".\n";
+                error(objLine, objCol,
+                      "expected struct or pointer to struct, got " +
+                      objType->toString() + ".");
                 recoverAsInt();
                 return;
             }
@@ -381,8 +409,8 @@ class SemanticAnalyzer
             auto baseSymbol = symbolTable.find(baseType->getName(), Kind::STRUCT_TAG);
             if (!baseSymbol)
             {
-                std::cerr << "Semantic error at line " << objLine << ", col " << objCol
-                          << ": struct not defined: " << baseType->getName() << ".\n";
+                error(objLine, objCol,
+                      "struct not defined: " + baseType->getName() + ".");
                 recoverAsInt();
                 return;
             }
@@ -391,9 +419,9 @@ class SemanticAnalyzer
             // should never fire.
             if (!structNode)
             {
-                std::cerr << "Internal error at line " << objLine << ", col " << objCol
-                          << ": struct '" << baseType->getName()
-                          << "' has no associated declaration.\n";
+                error(objLine, objCol,
+                      "internal: struct '" + baseType->getName() +
+                      "' has no associated declaration.");
                 recoverAsInt();
                 return;
             }
@@ -403,9 +431,9 @@ class SemanticAnalyzer
 
             if (it == structNode->fields.end())
             {
-                std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                          << ": member '" << x->field << "' not defined in struct '"
-                          << structNode->name << "'.\n";
+                error(x->getLine(), x->getCol(),
+                      "member '" + x->field + "' not defined in struct '" +
+                      structNode->name + "'.");
                 recoverAsInt();
                 return;
             }
@@ -426,8 +454,9 @@ class SemanticAnalyzer
 
             if (!isInteger(x->index->resolvedType))
             {
-                std::cerr << "Semantic error at line " << x->index->getLine() << ", col " << x->index->getCol()
-                    << ": required integer index, received '" << x->index->resolvedType->toString() << "'.\n";
+                error(x->index->getLine(), x->index->getCol(),
+                      "required integer index, received '" +
+                      x->index->resolvedType->toString() + "'.");
             }
 
             auto lt = x->lvalue->resolvedType;
@@ -436,8 +465,9 @@ class SemanticAnalyzer
             else if (auto ptr = std::dynamic_pointer_cast<PointerType>(lt)) finalType = ptr->getInner();
             else
             {
-                std::cerr<< "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required pointer or array type, received '" << x->lvalue->resolvedType->toString() << "'.\n";
+                error(x->getLine(), x->getCol(),
+                      "required pointer or array type, received '" +
+                      x->lvalue->resolvedType->toString() + "'.");
             }
 
             x->resolvedType = finalType;
@@ -450,8 +480,9 @@ class SemanticAnalyzer
 
             if (!isScalar(x->condition->resolvedType))
             {
-                std::cerr << "Semantic error at line " << x->condition->getLine() << ", col " << x->condition->getCol()
-                    << ": required integer or pointer condition, received '" << x->condition->resolvedType->toString() << "'.\n";
+                error(x->condition->getLine(), x->condition->getCol(),
+                      "required integer or pointer condition, received '" +
+                      x->condition->resolvedType->toString() + "'.");
             }
 
             const auto tType = x->thenBranch->resolvedType;
@@ -468,9 +499,9 @@ class SemanticAnalyzer
                 x->resolvedType = eType;
             }else
             {
-                std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": ternary branches have incompatible types, then: '" << tType->toString()
-                    << "', else: '" << eType->toString() << "'.\n";
+                error(x->getLine(), x->getCol(),
+                      "ternary branches have incompatible types, then: '" +
+                      tType->toString() + "', else: '" + eType->toString() + "'.");
                 x->resolvedType = tType;
             }
 
@@ -482,8 +513,9 @@ class SemanticAnalyzer
             {
                 if (!isInteger(x->operand->resolvedType))
                 {
-                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required integer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                    error(x->getLine(), x->getCol(),
+                          "required integer operand, received '" +
+                          x->operand->resolvedType->toString() + "'.");
                 }
                 x->resolvedType = IntType::getInstance();
                 x->isLvalue = false;
@@ -491,8 +523,9 @@ class SemanticAnalyzer
             {
                 if (!isScalar(x->operand->resolvedType))
                 {
-                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required integer or pointer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                    error(x->getLine(), x->getCol(),
+                          "required integer or pointer operand, received '" +
+                          x->operand->resolvedType->toString() + "'.");
                 }
                 x->resolvedType = IntType::getInstance();
                 x->isLvalue = false;
@@ -501,8 +534,9 @@ class SemanticAnalyzer
                 auto resolvedType = x->operand->resolvedType;
                 if (!isPointer(resolvedType))
                 {
-                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required pointer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                    error(x->getLine(), x->getCol(),
+                          "required pointer operand, received '" +
+                          x->operand->resolvedType->toString() + "'.");
                     // to make sure nothing crashes downstream
                     x->resolvedType = IntType::getInstance();
                     x->isLvalue = true;
@@ -516,8 +550,9 @@ class SemanticAnalyzer
             {
                 if (!x->operand->isLvalue)
                 {
-                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required lvalue, received rvalue of type '" << x->operand->resolvedType->toString() << "'.\n";
+                    error(x->getLine(), x->getCol(),
+                          "required lvalue, received rvalue of type '" +
+                          x->operand->resolvedType->toString() + "'.");
                 }
                 x->resolvedType = std::make_shared<PointerType>(x->operand->resolvedType);
                 x->isLvalue = false;
@@ -525,13 +560,15 @@ class SemanticAnalyzer
             {
                 if (!x->operand->isLvalue)
                 {
-                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required lvalue, received rvalue of type '" << x->operand->resolvedType->toString() << "'.\n";
+                    error(x->getLine(), x->getCol(),
+                          "required lvalue, received rvalue of type '" +
+                          x->operand->resolvedType->toString() + "'.");
                 }
                 if (!isScalar(x->operand->resolvedType))
                 {
-                    std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": required integer or pointer operand, received '" << x->operand->resolvedType->toString() << "'.\n";
+                    error(x->getLine(), x->getCol(),
+                          "required integer or pointer operand, received '" +
+                          x->operand->resolvedType->toString() + "'.");
                 }
                 x->resolvedType = x->operand->resolvedType;
                 x->isLvalue = false;
@@ -543,8 +580,8 @@ class SemanticAnalyzer
 
             if (!sym)
             {
-                std::cerr << "Semantic error at line " << x->getLine() << ", col " << x->getCol()
-                    << ": use of undeclared identifier '" << x->name << "'.\n";
+                error(x->getLine(), x->getCol(),
+                      "use of undeclared identifier '" + x->name + "'.");
                 x->resolvedType = IntType::getInstance();  // placeholder so downstream doesn't crash
                 x->isLvalue = false;
             }
@@ -568,7 +605,8 @@ class SemanticAnalyzer
         const auto checkFunctionExistence = symbolTable.find(functionName, Kind::FUNCTION);
         if (checkFunctionExistence == nullptr)
         {
-            std::cerr << "Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": function "<<functionName<<" not declared\n";
+            error(expr->getLine(), expr->getCol(),
+                  "function " + functionName + " not declared");
             expr->resolvedType = IntType::getInstance();
         }else
         {
@@ -576,7 +614,9 @@ class SemanticAnalyzer
             if ( (functionType->isVariadic && functionType->paramTypes.size() > expr->parameters.size())
                 || (!functionType->isVariadic && functionType->paramTypes.size() != expr->parameters.size()))
             {
-                std::cerr << "Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": function call has " << expr->parameters.size() << " parameters. Expected " << functionType->paramTypes.size() << "\n";
+                error(expr->getLine(), expr->getCol(),
+                      "function call has " + std::to_string(expr->parameters.size()) +
+                      " parameters. Expected " + std::to_string(functionType->paramTypes.size()));
             }else
             {
                 for (int i = 0; i < functionType->paramTypes.size(); i++)
@@ -584,7 +624,10 @@ class SemanticAnalyzer
                     analyzeExpr(expr->parameters[i]);
                     if (!canDecayTo(expr->parameters[i]->resolvedType, functionType->paramTypes[i]))
                     {
-                        std::cerr <<"Semantic error at line "<<expr->getLine()<<", col "<<expr->getCol()<<": mismatched param types, expected " <<functionType->paramTypes[i]->toString() << " got " << expr->parameters[i]->resolvedType->toString() << "\n";
+                        error(expr->getLine(), expr->getCol(),
+                              "mismatched param types, expected " +
+                              functionType->paramTypes[i]->toString() +
+                              " got " + expr->parameters[i]->resolvedType->toString());
                     }
                 }
                 for (int i = functionType->paramTypes.size(); i < expr->parameters.size(); i++)
@@ -634,9 +677,8 @@ class SemanticAnalyzer
     {
         if (!currentReturnType)
         {
-            std::cerr << "Semantic error at line " <<stmt->getLine() << ", col "
-            << stmt->col << ": return statement not inside a function.\n";
-
+            error(stmt->getLine(), stmt->col,
+                  "return statement not inside a function.");
             return;
         }
         if (stmt->returnExpression != nullptr)
@@ -644,13 +686,16 @@ class SemanticAnalyzer
             analyzeExpr(stmt->returnExpression);
             if (!currentReturnType->equals(*stmt->returnExpression->resolvedType))
             {
-                std::cerr << "Semantic error at line " <<stmt->returnExpression->getLine() << ", col " << stmt->returnExpression->col << ": expected type - " << currentReturnType->toString() << ", got " << stmt->returnExpression->resolvedType->toString() <<"\n";
+                error(stmt->returnExpression->getLine(), stmt->returnExpression->col,
+                      "expected type - " + currentReturnType->toString() +
+                      ", got " + stmt->returnExpression->resolvedType->toString());
             }
         }else
         {
             if (auto x = std::dynamic_pointer_cast<VoidType>(currentReturnType))
             {
-                std::cerr << "Semantic error at line " << stmt->line << ", col "<< stmt->col <<": Function with void return type has non-void return type\n";
+                error(stmt->line, stmt->col,
+                      "Function with void return type has non-void return type");
             }
 
         }
@@ -662,8 +707,9 @@ class SemanticAnalyzer
 
         if (!isScalar(ifStmt->condition->resolvedType))
         {
-            std::cerr << "Semantic error at line " << ifStmt->condition->getLine() << ", col " << ifStmt->condition->getCol()
-            << ": expected pointer or integer type, got - " << ifStmt->condition->resolvedType->toString() <<"\n";
+            error(ifStmt->condition->getLine(), ifStmt->condition->getCol(),
+                  "expected pointer or integer type, got - " +
+                  ifStmt->condition->resolvedType->toString());
         }
 
         symbolTable.enterScope();
@@ -685,8 +731,9 @@ class SemanticAnalyzer
 
         if (!isScalar(whileStmt->condition->resolvedType))
         {
-            std::cerr << "Semantic error at line " << whileStmt->condition->getLine() << ", col " << whileStmt->condition->getCol()
-            << ": expected pointer or integer type, got - " << whileStmt->condition->resolvedType->toString() <<"\n";
+            error(whileStmt->condition->getLine(), whileStmt->condition->getCol(),
+                  "expected pointer or integer type, got - " +
+                  whileStmt->condition->resolvedType->toString());
         }
 
         loopDepth+=1;
@@ -702,8 +749,9 @@ class SemanticAnalyzer
 
         if (!isScalar(doWhileStmt->condition->resolvedType))
         {
-            std::cerr << "Semantic error at line " << doWhileStmt->condition->getLine() << ", col " << doWhileStmt->condition->getCol()
-            << ": expected pointer or integer type, got - " << doWhileStmt->condition->resolvedType->toString() <<"\n";
+            error(doWhileStmt->condition->getLine(), doWhileStmt->condition->getCol(),
+                  "expected pointer or integer type, got - " +
+                  doWhileStmt->condition->resolvedType->toString());
         }
 
         loopDepth+=1;
@@ -724,8 +772,9 @@ class SemanticAnalyzer
             analyzeExprStmt(x);
             if (!isScalar(x->expr->resolvedType))
             {
-                std::cerr << "Semantic error at line " << x->expr->getLine() << ", col " << x->expr->getCol()
-                << " condition in for loop must be pointer or integer got - " << x->expr->resolvedType->toString() <<"\n";
+                error(x->expr->getLine(), x->expr->getCol(),
+                      "condition in for loop must be pointer or integer got - " +
+                      x->expr->resolvedType->toString());
             }
         }
         if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->update))
@@ -744,8 +793,8 @@ class SemanticAnalyzer
     {
         if (loopDepth <= 0)
         {
-            std::cerr << "Semantic error at line " << stmt->getLine() << ", col " << stmt->getCol()
-            <<" , no loop statements found\n";
+            error(stmt->getLine(), stmt->getCol(),
+                  "no loop statements found");
         }
     }
 
@@ -809,7 +858,8 @@ class SemanticAnalyzer
             const auto paramSymbol = std::make_shared<Symbol>(param.name, param.type, param.line, param.col, Kind::PARAMETER);
             if (!symbolTable.insert(param.name, paramSymbol, Kind::PARAMETER))
             {
-                std::cerr << "Semantic error at line " << param.line << ", col " << param.col << ": duplicate parameter '" << param.name << "'\n";
+                error(param.line, param.col,
+                      "duplicate parameter '" + param.name + "'");
             }
         }
         if (node->statements)

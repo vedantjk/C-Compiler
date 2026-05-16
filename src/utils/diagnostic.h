@@ -8,13 +8,15 @@ namespace Diagnostic{
 
     enum class DiagLevel {
         LEXER,
-        PARSER
+        PARSER,
+        SEMANTIC
     };
 
-    inline const char* to_string(DiagLevel level) {                                                                                  
+    inline const char* to_string(DiagLevel level) {
         switch (level) {
-            case DiagLevel::LEXER:  return "Lexer";                                                                           
-            case DiagLevel::PARSER: return "Parser";
+            case DiagLevel::LEXER:    return "Lexer";
+            case DiagLevel::PARSER:   return "Parser";
+            case DiagLevel::SEMANTIC: return "Semantic";
         }
         return "Unknown";
     }
@@ -27,18 +29,16 @@ namespace Diagnostic{
     struct Diagnostic{
         DiagLevel level;
         Location location;
-        std::string message; 
-        
-        void print() const{
-            std::cerr<<to_string(level)<< " error at line "<< location.line<<" and column "<< location.column<<". msg: "<<message<<std::endl;
-        }
+        std::string message;
     };
 
     class DiagnosticEngine{
         std::vector<Diagnostic> errors;
+        std::string filename;
     public:
         DiagnosticEngine() = default;
-        DiagnosticEngine(const DiagnosticEngine&) = delete;                                                                   
+        explicit DiagnosticEngine(std::string filename) : filename(std::move(filename)) {}
+        DiagnosticEngine(const DiagnosticEngine&) = delete;
         DiagnosticEngine& operator=(const DiagnosticEngine&) = delete;
         void report(DiagLevel level, Location loc, std::string msg);
         bool hasErrors() const;

@@ -4,16 +4,18 @@ namespace Diagnostic
 {
 void DiagnosticEngine::report(DiagLevel level, Location loc, std::string msg)
 {
-    this->errors.push_back(Diagnostic{level, loc, msg});
+    this->errors.push_back(Diagnostic{level, loc, std::move(msg)});
 }
 
-bool DiagnosticEngine::hasErrors() const { return this->errors.size() > 0; }
+bool DiagnosticEngine::hasErrors() const { return !this->errors.empty(); }
 
 void DiagnosticEngine::print()
 {
-    for (const auto &error : this->errors)
+    const std::string src = filename.empty() ? std::string("<input>") : filename;
+    for (const auto &e : this->errors)
     {
-        error.print();
+        std::cerr << src << ':' << e.location.line << ':' << e.location.column
+                  << ": error: " << e.message << '\n';
     }
 }
 } // namespace Diagnostic
