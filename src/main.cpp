@@ -104,5 +104,13 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    return run(path, stage, debugAST);
+    try
+    {
+        return run(path, stage, debugAST);
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << path << ": error: " << e.what() << "\n";
+        return 1;
+    }
 }
