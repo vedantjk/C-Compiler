@@ -1,2 +1,2 @@
-Semantic error at line 1: not all control flow paths in 'foo' return a value.
-Semantic error at line 5: not all control flow paths in 'bar' return a value.
+benchmarks/sa/sa13/sa13.c:1:4: error: not all control flow paths in 'foo' return a value.
+benchmarks/sa/sa13/sa13.c:5:4: error: not all control flow paths in 'bar' return a value.

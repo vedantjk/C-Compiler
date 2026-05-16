@@ -728,6 +728,40 @@ class SemanticAnalyzer
     {
         const auto structSymbol = std::make_shared<Symbol>(structDecl->name, structDecl->baseType, structDecl->getLine(), structDecl->getCol(), Kind::STRUCT_TAG);
         check(structDecl->name, structSymbol, Kind::STRUCT_TAG, structDecl->getLine(), structDecl->getCol(), structDecl);
+
+        std::unordered_map<std::string, int> seen;
+        for (const auto& f : structDecl->fields)
+        {
+            auto it = seen.find(f.name);
+            if (it != seen.end())
+            {
+                error(f.line, f.column,
+                      "redeclaration of struct field '" + f.name +
+                      "'. Previous declaration at line " +
+                      std::to_string(it->second) + ".");
+            }
+            else
+            {
+                seen.emplace(f.name, f.line);
+            }
+        }
+    }
+
+    bool returnsAlways(const std::shared_ptr<Statement>& stmt)
+    {
+        if (!stmt) return false;
+        if (std::dynamic_pointer_cast<ReturnStmt>(stmt)) return true;
+        if (auto b = std::dynamic_pointer_cast<BlockStmt>(stmt))
+        {
+            if (b->statements.empty()) return false;
+            return returnsAlways(b->statements.back());
+        }
+        if (auto i = std::dynamic_pointer_cast<IfStmt>(stmt))
+        {
+            if (!i->elseBlock) return false;
+            return returnsAlways(i->thenBlock) && returnsAlways(i->elseBlock);
+        }
+        return false;
     }
 
     void analyzeVarDecl(const std::shared_ptr<VarDecl> &variable)
@@ -1002,6 +1036,12 @@ class SemanticAnalyzer
         if (node->statements)
         {
             analyzeStatements(node->statements);
+            if (!isVoid(node->type) && !returnsAlways(node->statements))
+            {
+                error(node->getLine(), node->getCol(),
+                      "not all control flow paths in '" + node->name +
+                      "' return a value.");
+            }
         }
 
         symbolTable.exitScope();

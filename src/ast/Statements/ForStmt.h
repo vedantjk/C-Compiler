@@ -21,9 +21,9 @@ public:
             out<<"  ";
         }
         out<<"for( ";
-        initialization->print(out, tab);
-        condition->print(out, tab);
-        update->print(out, tab);
+        if (initialization) initialization->print(out, tab); else out<<";";
+        if (condition) condition->print(out, tab); else out<<";";
+        if (update) update->print(out, tab);
         out<<"){\n";
         forBlock->print(out, tab+1);
         for(int i = 0; i<tab;i++){

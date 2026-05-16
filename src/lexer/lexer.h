@@ -70,14 +70,41 @@
         return input[current + 1];
     }
 
+    static bool isValidEscape(char c){
+        // C89 simple escapes plus octal-digit start and hex prefix.
+        switch (c){
+            case 'n': case 't': case 'r': case '\\':
+            case '\'': case '"': case 'a': case 'b':
+            case 'f': case 'v': case '?':
+            case '0': case '1': case '2': case '3':
+            case '4': case '5': case '6': case '7':
+            case 'x': case 'X':
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // ============================================================
     // Token scanners — invoked once the leading char(s) identify the token kind
     // ============================================================
 
     void string(){
         while(peek() != '"' && !isAtEnd()){
-            if(peek() == '\\') advance();
-            advance();
+            if (peek() == '\n'){
+                error(line, col, "newline in string literal");
+                return;
+            }
+            if(peek() == '\\') {
+                advance();
+                if (isAtEnd()) break;
+                if (!isValidEscape(peek())){
+                    error(line, col, "invalid escape sequence in string literal");
+                }
+                advance();
+            } else {
+                advance();
+            }
         }
 
         if(isAtEnd()){
@@ -180,7 +207,10 @@
         if(peek() == '\\'){
             advance(); // consume backslash
             if(isAtEnd()){ error(line, col, "Unterminated character constant"); return; }
-            advance(); // consume escape char
+            if (!isValidEscape(peek())){
+                error(line, col, "invalid escape sequence in character constant");
+            }
+            advance(); // consume escape char (even if invalid, for recovery)
         } else {
             advance(); // consume the character
         }

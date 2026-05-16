@@ -363,15 +363,16 @@ class Parser
     std::vector<std::shared_ptr<VarDecl>> parseVarDecl(const std::shared_ptr<Type>& type, bool global = false)
     {
         std::vector<std::shared_ptr<VarDecl>> variables;
-        while(peek() != SEMI_COLON && peek() != EOF_TOKEN){
+        while (true) {
             auto [finalType, name, variable_line, variable_col] = parseDeclarator(type);
             std::shared_ptr<Expression> initialization;
             if(peek() == ASSIGN){
                 consume();
                 initialization = parseInitializers();
             }
-            if(peek() == COMMA) consume();
             variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name, finalType, initialization, global));
+            if (peek() == COMMA) { consume(); continue; }
+            break;
         }
         expect(SEMI_COLON);
         return variables;
@@ -452,9 +453,14 @@ class Parser
     std::shared_ptr<ForStmt> parseForStmt(){
         Token forStart = expect(FOR);
         expect(LEFT_PAREN);
-        std::shared_ptr<Statement> initialization = parseExprStatement(true);
-        std::shared_ptr<Statement> condition = parseExprStatement(true);
-        std::shared_ptr<Statement> update = parseExprStatement(false);
+        std::shared_ptr<Statement> initialization;
+        if (peek() == SEMI_COLON) consume();
+        else initialization = parseExprStatement(true);
+        std::shared_ptr<Statement> condition;
+        if (peek() == SEMI_COLON) consume();
+        else condition = parseExprStatement(true);
+        std::shared_ptr<Statement> update;
+        if (peek() != RIGHT_PAREN) update = parseExprStatement(false);
         expect(RIGHT_PAREN);
         if (peek() != LEFT_BRACE)
         {
@@ -487,6 +493,22 @@ class Parser
                     throw std::logic_error("cannot add declarations after statements.");
                 }
                 auto [type, line, col] = parseBaseType();
+                if (peek() == IDENTIFIER && peekNext() == LEFT_PAREN)
+                {
+                    // local function declaration — parse and discard. C89 allows
+                    // forward decls inside blocks; we lex the prototype away
+                    // since the real definition lives at file scope.
+                    consume(); // function name
+                    consume(); // (
+                    int depth = 1;
+                    while (depth > 0 && peek() != EOF_TOKEN) {
+                        if (peek() == LEFT_PAREN) depth++;
+                        else if (peek() == RIGHT_PAREN) depth--;
+                        consume();
+                    }
+                    expect(SEMI_COLON);
+                    continue;
+                }
                 statements.emplace_back(parseDeclareStmt(type, line, col));
                 continue;
             }
@@ -638,7 +660,23 @@ class Parser
                 {
                     nodes.emplace_back(parseStructDecl(type, line, col));
                 }
-            } // add pointer support later
+                else
+                {
+                    throw std::logic_error(
+                        "Expected identifier or '{' at file scope, got " +
+                        std::string(tokenTypeToString(peek())) +
+                        " at line " + std::to_string(tokens[cur_token].line) +
+                        ", col " + std::to_string(tokens[cur_token].col));
+                }
+            }
+            else
+            {
+                throw std::logic_error(
+                    "Unexpected token at file scope: " +
+                    std::string(tokenTypeToString(peek())) +
+                    " at line " + std::to_string(tokens[cur_token].line) +
+                    ", col " + std::to_string(tokens[cur_token].col));
+            }
 
         }
         return std::make_shared<Program>(nodes);
