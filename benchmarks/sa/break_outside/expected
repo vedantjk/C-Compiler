@@ -1,2 +1,2 @@
-Semantic error at line 2: 'break' statement not in a loop.
-Semantic error at line 9: 'continue' statement not in a loop.
+benchmarks/sa/break_outside/break_outside.c:2:10: error: no loop statements found
+benchmarks/sa/break_outside/break_outside.c:9:17: error: no loop statements found

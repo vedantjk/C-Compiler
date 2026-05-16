@@ -1,5 +1,5 @@
-Semantic error at line 9: assignment requires an lvalue on the left-hand side.
-Semantic error at line 10: assignment requires an lvalue on the left-hand side.
-Semantic error at line 11: address-of requires an lvalue operand.
-Semantic error at line 12: address-of requires an lvalue operand.
-Semantic error at line 13: increment requires an lvalue operand.
+benchmarks/sa/lvalue/lvalue.c:9:6: error: Left expression must be an lvalue, got rvalue of type: int.
+benchmarks/sa/lvalue/lvalue.c:10:7: error: Left expression must be an lvalue, got rvalue of type: int.
+benchmarks/sa/lvalue/lvalue.c:11:6: error: required lvalue, received rvalue of type 'int'.
+benchmarks/sa/lvalue/lvalue.c:12:6: error: required lvalue, received rvalue of type 'int'.
+benchmarks/sa/lvalue/lvalue.c:13:7: error: required lvalue, received rvalue of type 'int'.

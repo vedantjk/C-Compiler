@@ -1,5 +1,14 @@
-Semantic error at line 15: field 't' not defined in struct 'C'.
-Semantic error at line 16: cannot access field 'd' on non-struct type 'int'.
-Semantic error at line 17: field 'd' not defined in struct 'C'.
-Semantic error at line 18: field 't' not defined in struct 'C'.
-Semantic error at line 19: field 'd' not defined in struct 'C'.
+benchmarks/sa/sa9/sa9.c:16:6: error: member 't' not defined in struct 'C'.
+benchmarks/sa/sa9/sa9.c:17:6: error: '->' needs pointer, received: int.
+benchmarks/sa/sa9/sa9.c:17:6: error: expected struct or pointer to struct, got int.
+benchmarks/sa/sa9/sa9.c:18:6: error: member 'd' not defined in struct 'C'.
+benchmarks/sa/sa9/sa9.c:18:6: error: '->' needs pointer, received: int.
+benchmarks/sa/sa9/sa9.c:18:6: error: expected struct or pointer to struct, got int.
+benchmarks/sa/sa9/sa9.c:18:6: error: '->' needs pointer, received: int.
+benchmarks/sa/sa9/sa9.c:18:6: error: expected struct or pointer to struct, got int.
+benchmarks/sa/sa9/sa9.c:19:10: error: member 't' not defined in struct 'C'.
+benchmarks/sa/sa9/sa9.c:20:10: error: member 'd' not defined in struct 'C'.
+benchmarks/sa/sa9/sa9.c:20:10: error: '->' needs pointer, received: int.
+benchmarks/sa/sa9/sa9.c:20:10: error: expected struct or pointer to struct, got int.
+benchmarks/sa/sa9/sa9.c:20:10: error: '->' needs pointer, received: int.
+benchmarks/sa/sa9/sa9.c:20:10: error: expected struct or pointer to struct, got int.

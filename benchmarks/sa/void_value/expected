@@ -1,3 +1,4 @@
-Semantic error at line 7: cannot assign void value to variable of type 'int'.
-Semantic error at line 8: condition expression cannot be of type 'void'.
-Semantic error at line 11: arithmetic operand cannot be of type 'void'.
+benchmarks/sa/void_value/void_value.c:2:11: error: Function with void return type has non-void return type
+benchmarks/sa/void_value/void_value.c:7:6: error: Left expression and right expression are not same type, left type: int, right type: void.
+benchmarks/sa/void_value/void_value.c:8:16: error: expected pointer or integer type, got - void
+benchmarks/sa/void_value/void_value.c:11:16: error: Arithmetic operator needs integer or pointer for left expression, got void.

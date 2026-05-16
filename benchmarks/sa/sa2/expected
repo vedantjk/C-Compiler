@@ -1,1 +1,1 @@
-Semantic error at line 2: redeclaration of variable 'myVar'. Previous declaration at line 1.
+benchmarks/sa/sa2/sa2.c:2:10: error: redeclaration of variable 'myVar'. Previous declaration (variable) at line 1.

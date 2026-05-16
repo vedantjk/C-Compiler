@@ -128,6 +128,7 @@ public:
         if (size != a->size) return false;
         return inner->equals(*a->inner);
     }
+    [[nodiscard]] size_t getSize() const { return size; }
 };
 
 class FunctionType : public Type

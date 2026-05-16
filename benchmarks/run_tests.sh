@@ -96,9 +96,9 @@ fi
 classify() {
     local p="$1"
     case "$p" in
-        */benchmarks/nlsandler/parse_valid/*) echo parse_valid ;;
-        */benchmarks/nlsandler/parse_invalid/*) echo parse_invalid ;;
-        */benchmarks/sa/*) echo sa ;;
+        *benchmarks/nlsandler/parse_valid/*) echo parse_valid ;;
+        *benchmarks/nlsandler/parse_invalid/*) echo parse_invalid ;;
+        *benchmarks/sa/*) echo sa ;;
         *) echo other ;;
     esac
 }
