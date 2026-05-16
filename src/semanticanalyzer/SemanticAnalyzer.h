@@ -193,7 +193,12 @@ class SemanticAnalyzer
 
             if (x->op == "=")
             {
-                if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(x->rhs)))
+                bool sameStruct = std::dynamic_pointer_cast<StructType>(lType)
+                               && std::dynamic_pointer_cast<StructType>(rType)
+                               && lType->equals(*rType);
+                if (!(isScalar(lType) && isScalar(rType))
+                    && !(isPointer(lType) && isNullPointerConstant(x->rhs))
+                    && !sameStruct)
                 {
                     error(x->lhs->getLine(), x->lhs->getCol(),
                           "Left expression and right expression are not same type, left type: " +
@@ -509,6 +514,15 @@ class SemanticAnalyzer
             if (x->expr)
                 analyzeExpr(x->expr);
 
+            if (auto st = std::dynamic_pointer_cast<StructType>(x->type))
+            {
+                if (!symbolTable.find(st->getName(), Kind::STRUCT_TAG))
+                {
+                    error(x->getLine(), x->getCol(),
+                          "sizeof references undeclared struct '" + st->getName() + "'.");
+                }
+            }
+
             x->resolvedType = IntType::getInstance();
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(expr))
@@ -641,6 +655,7 @@ class SemanticAnalyzer
         {
             auto sym = symbolTable.find(x->name, Kind::VARIABLE);
             if (!sym) sym = symbolTable.find(x->name, Kind::PARAMETER);
+            if (!sym) sym = symbolTable.find(x->name, Kind::FUNCTION);
 
             if (!sym)
             {
@@ -652,7 +667,7 @@ class SemanticAnalyzer
             else
             {
                 x->resolvedType = sym->type;
-                x->isLvalue = true;
+                x->isLvalue = sym->kind != Kind::FUNCTION;
                 x->symbol = sym;
             }
         }else
@@ -761,9 +776,14 @@ class SemanticAnalyzer
                     && isInteger(rArr->getInner())
                     && rArr->getSize() <= lArr->getSize();
 
+                bool sameStruct = std::dynamic_pointer_cast<StructType>(lType)
+                               && std::dynamic_pointer_cast<StructType>(rType)
+                               && lType->equals(*rType);
+
                 if (!(isScalar(lType) && (isScalar(rType) || canDecayTo(rType, lType))) &&
                     !(isPointer(lType) && isNullPointerConstant(variable->initialization)) &&
-                    !stringInit)
+                    !stringInit &&
+                    !sameStruct)
                 {
                     error(variable->getLine(), variable->getCol(),
                           "Left expression and right expression are not same type, left type: " +
