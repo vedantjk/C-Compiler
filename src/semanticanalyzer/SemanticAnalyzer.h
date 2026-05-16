@@ -49,6 +49,12 @@ inline bool isPointer(const std::shared_ptr<Type>& t)
     return x != nullptr;
 }
 
+inline bool isArray(const std::shared_ptr<Type>& t)
+{
+    const auto x = std::dynamic_pointer_cast<ArrayType>(t);
+    return x != nullptr;
+}
+
 inline bool isVoid(const std::shared_ptr<Type>& t)
 {
     const auto x = std::dynamic_pointer_cast<VoidType>(t);
@@ -420,6 +426,10 @@ class SemanticAnalyzer
             analyzeFunctionCallExpr(x);
         }else if (auto x = std::dynamic_pointer_cast<InitExpr>(expr))
         {
+            for (const auto& element : x->elements)
+            {
+                analyzeExpr(element);
+            }
             x->resolvedType = IntType::getInstance();
             x->isLvalue = false;
         }else if (auto x = std::dynamic_pointer_cast<MemberExpr>(expr))
@@ -713,13 +723,42 @@ class SemanticAnalyzer
         if (variable->initialization)
         {
             analyzeExpr(variable->initialization);
-            auto lType = variable->type;
-            auto rType = variable->initialization->resolvedType;
-            if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(variable->initialization)))
+            if (auto x = std::dynamic_pointer_cast<InitExpr>(variable->initialization))
             {
-                error(variable->getLine(), variable->getCol(),
-                      "Left expression and right expression are not same type, left type: " +
-                      lType->toString() + ", right type: " + rType->toString() + ".");
+                if (!isArray(variable->type))
+                {
+                    error(variable->getLine(), variable->getCol(),
+                        "Init expression requires array as LHS, got " +
+                        variable->type->toString());
+                    return;
+                }
+                std::shared_ptr<ArrayType> initArrayType = std::dynamic_pointer_cast<ArrayType>(variable->type);
+                auto innerType = initArrayType->getInner();
+                for (const auto& element : x->elements)
+                {
+                    if (!innerType->equals(*element->resolvedType))
+                    {
+                        error(variable->getLine(), variable->getCol(),
+                            "Mismatch in init elements, expected " +
+                            innerType->toString() + " received, " + element->resolvedType->toString());
+                    }
+                }
+                if (initArrayType->getSize() < x->elements.size())
+                {
+                    error(variable->getLine(), variable->getCol(),
+                        "Mismatch in init elements, expected " +
+                        std::to_string(initArrayType->getSize()) + " received, " + std::to_string(x->elements.size()));
+                }
+            }else
+            {
+                auto lType = variable->type;
+                auto rType = variable->initialization->resolvedType;
+                if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(variable->initialization)))
+                {
+                    error(variable->getLine(), variable->getCol(),
+                          "Left expression and right expression are not same type, left type: " +
+                          lType->toString() + ", right type: " + rType->toString() + ".");
+                }
             }
         }
 
