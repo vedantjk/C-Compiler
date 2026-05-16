@@ -753,7 +753,17 @@ class SemanticAnalyzer
             {
                 auto lType = variable->type;
                 auto rType = variable->initialization->resolvedType;
-                if (!(isScalar(lType) && isScalar(rType)) && !(isPointer(lType) && isNullPointerConstant(variable->initialization)))
+
+                auto lArr = std::dynamic_pointer_cast<ArrayType>(lType);
+                auto rArr = std::dynamic_pointer_cast<ArrayType>(rType);
+                bool stringInit = lArr && rArr
+                    && isInteger(lArr->getInner())
+                    && isInteger(rArr->getInner())
+                    && rArr->getSize() <= lArr->getSize();
+
+                if (!(isScalar(lType) && (isScalar(rType) || canDecayTo(rType, lType))) &&
+                    !(isPointer(lType) && isNullPointerConstant(variable->initialization)) &&
+                    !stringInit)
                 {
                     error(variable->getLine(), variable->getCol(),
                           "Left expression and right expression are not same type, left type: " +
