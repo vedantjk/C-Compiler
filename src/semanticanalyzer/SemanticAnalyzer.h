@@ -249,20 +249,74 @@ class SemanticAnalyzer
 
             if (isArithmeticOp(x->binaryOp))
             {
-                if (!isInteger(lType))
+                if (x->binaryOp == "+" || x->binaryOp == "-")
                 {
-                    error(x->left->getLine(), x->left->getCol(),
-                          "Arithmetic operator needs integer for left expression, got " +
-                          lType->toString() + ".");
-                }
-                if (!isInteger(rType))
+                    if (!isScalar(lType))
+                    {
+                        error(x->left->getLine(), x->left->getCol(),
+                              "Arithmetic operator needs integer or pointer for left expression, got " +
+                              lType->toString() + ".");
+                    }
+                    if (!isScalar(rType))
+                    {
+                        error(x->right->getLine(), x->right->getCol(),
+                              "Arithmetic operator needs integer or pointer for right expression, got " +
+                              rType->toString() + ".");
+                    }
+
+                    bool leftIsPointer = isPointer(lType);
+                    bool rightIsPointer = isPointer(rType);
+
+                    if (!leftIsPointer && !rightIsPointer)
+                    {
+                        x->resolvedType = IntType::getInstance();
+                    }else if (leftIsPointer && !rightIsPointer)
+                    {
+                        x->resolvedType = lType;
+                    }else if (!leftIsPointer && rightIsPointer)
+                    {
+                        if (x->binaryOp == "-")
+                        {
+                            error(x->right->getLine(), x->right->getCol(),
+                                "'-' Cannot have rhs as a pointer, got " +
+                                rType->toString() + ".");
+                        }
+                        x->resolvedType = rType;
+                    }else if (leftIsPointer && rightIsPointer)
+                    {
+                        if (x->binaryOp == "+")
+                        {
+                            error(x->right->getLine(), x->right->getCol(),
+                                "'+' Cannot add pointers, got " +
+                                rType->toString() + ".");
+                        }
+                        if (!lType->equals(*rType) && x->binaryOp == "-")
+                        {
+                            error(x->right->getLine(), x->right->getCol(),
+                                "Need pointers of same type for subtraction, got lhs:" +
+                                lType->toString() + ", rhs " + rType->toString() + ".");
+                        }
+                        x->resolvedType = IntType::getInstance();
+                    }
+
+                    x->isLvalue = false;
+                }else
                 {
-                    error(x->right->getLine(), x->right->getCol(),
-                          "Arithmetic operator needs integer for right expression, got " +
-                          rType->toString() + ".");
+                    if (!isInteger(lType))
+                    {
+                        error(x->left->getLine(), x->left->getCol(),
+                              "Arithmetic operator needs integer for left expression, got " +
+                              lType->toString() + ".");
+                    }
+                    if (!isInteger(rType))
+                    {
+                        error(x->right->getLine(), x->right->getCol(),
+                              "Arithmetic operator needs integer for right expression, got " +
+                              rType->toString() + ".");
+                    }
+                    x->resolvedType = IntType::getInstance();
+                    x->isLvalue = false;
                 }
-                x->resolvedType = IntType::getInstance();
-                x->isLvalue = false;
             }else if (isComparisonOp(x->binaryOp))
             {
                 const bool isEquality = (x->binaryOp == "==" || x->binaryOp == "!=");
