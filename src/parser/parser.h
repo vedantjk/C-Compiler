@@ -153,7 +153,7 @@ class Parser
             expect(RIGHT_BRACKET);
             dims.push_back(std::stoul(sz.lexeme));
         }
-        for (unsigned long long & dim : std::views::reverse(dims)) {
+        for (const auto & dim : std::views::reverse(dims)) {
             base = std::make_shared<ArrayType>(base, dim);
         }
     }
