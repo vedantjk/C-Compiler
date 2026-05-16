@@ -23,10 +23,20 @@ jobs:
       - name: Run tests (ASan)
         run: ./build/test_lexer
 
-      - name: Build tests (no sanitizer, for valgrind)
+      - name: Build cc89 + test_lexer (no sanitizer)
         run: |
           cmake -S . -B build-valgrind
-          cmake --build build-valgrind --target test_lexer
+          cmake --build build-valgrind
 
       - name: Run tests (Valgrind)
         run: valgrind --leak-check=full --error-exitcode=1 ./build-valgrind/test_lexer
+
+      - name: Parser suite
+        env:
+          CC89: ${{ github.workspace }}/build-valgrind/cc89
+        run: bash benchmarks/run_tests.sh --stage parse
+
+      - name: SA suite
+        env:
+          CC89: ${{ github.workspace }}/build-valgrind/cc89
+        run: bash benchmarks/run_tests.sh --stage validate benchmarks/sa
