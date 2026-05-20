@@ -182,7 +182,13 @@ run_one() {
     if [[ $ok -eq 1 && $sa_check_stderr -eq 1 ]]; then
         local expected="${f%/*}/expected"
         if [[ -f "$expected" ]]; then
-            if ! diff -q "$stderr_file" "$expected" >/dev/null 2>&1; then
+            # cc89 prints whatever path it was invoked with in diagnostics, but
+            # `expected` files store bare paths like `benchmarks/sa/.../foo.c`.
+            # Strip any prefix up to the last `/benchmarks/` so the diff isn't
+            # defeated by cwd differences (./, /mnt/c/..., C:/...).
+            sed -i -E 's|^.*/benchmarks/|benchmarks/|' "$stderr_file"
+            # `expected` files committed with CRLF on Windows; cc89 emits LF.
+            if ! diff -q --strip-trailing-cr "$stderr_file" "$expected" >/dev/null 2>&1; then
                 ok=0
             fi
         fi
