@@ -1,5 +1,7 @@
 #include "ast/ASTNodes/Program.h"
 #include "ast/visitors/ASTDebugPrinter.h"
+#include "codegen/ast/visitors/codegenASTPrinter.h"
+#include "codegen/codegen.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semanticanalyzer/SemanticAnalyzer.h"
@@ -18,8 +20,9 @@ static const std::string PRELUDE_SOURCE =
 // Stages, in pipeline order. Default is the last one wired up.
 //   --lex       lex only; print tokens
 //   --parse     lex + parse
-//   --validate  lex + parse + SA   (default)
-//   --compile   alias for the latest stage (currently --validate)
+//   --validate  lex + parse + SA
+//   --codegen   lex + parse + SA + codegen (prints asm to stdout)   (default)
+//   --compile   alias for the latest stage (currently --codegen)
 //
 // Flags:
 //   --debugAST  print AST after parse / validate (off by default)
@@ -61,7 +64,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         return 0;
     }
 
-    if (stage == "validate" || stage == "compile")
+    if (stage == "validate" || stage == "codegen" || stage == "compile")
     {
         Diagnostic::DiagnosticEngine preludeDiag{"<prelude>"};
         Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
@@ -79,6 +82,13 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
             return 1;
         }
         if (debugAST) dbg.print(p);
+
+        if (stage == "validate") return 0;
+
+        codegenDriver driver;
+        auto cgProgram = driver.codegen(p);
+        codegenASTPrinter printer(std::cout);
+        printer.print(*cgProgram);
         return 0;
     }
 
@@ -88,7 +98,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
 int main(int argc, char **argv)
 {
-    std::string stage = "validate";
+    std::string stage = "codegen";
     std::string path;
     bool debugAST = false;
     for (int i = 1; i < argc; ++i)
@@ -100,7 +110,7 @@ int main(int argc, char **argv)
     }
     if (path.empty())
     {
-        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--compile] [--debugAST] <source.c>\n";
+        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--codegen|--compile] [--debugAST] <source.c>\n";
         return 1;
     }
 
