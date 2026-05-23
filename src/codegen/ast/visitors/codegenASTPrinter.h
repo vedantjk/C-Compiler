@@ -22,6 +22,12 @@ class codegenASTPrinter
     {
         out << "    .globl " << node.name << "\n";
         out << node.name << ":\n";
+        out << "    pushq    %rbp\n";
+        out << "    movq    %rsp, %rbp\n";
+        if (node.stackAllocation != nullptr)
+        {
+            visit(*node.stackAllocation);
+        }
         for (const auto& child : node.instructions)
         {
             out <<"    ";
@@ -51,9 +57,33 @@ class codegenASTPrinter
 
     void visit(const ReturnInstruction& node) const
     {
-        out << "ret";
+        out << "movq    %rbp, %rsp\n";
+        out << "    popq    %rbp\n";
+        out << "    ret";
     }
 
+    void visit(const UnaryOp& op) const
+    {
+        if (op == UnaryOp::Complement)
+        {
+            out << "notl";
+        }else if (op == UnaryOp::Negate)
+        {
+            out << "negl";
+        }
+    }
+
+    void visit(const UnaryInstruction& node) const
+    {
+        visit(node.op);
+        out<<"    ";
+        dispatch(*node.operand);
+    }
+
+    void visit(const AllocateStack& node) const
+    {
+        out << "    subq    $" << node.quantity << ", %rsp\n";
+    }
     void dispatch(const Instruction& node) const
     {
         if (auto* p = dynamic_cast<const MoveInstruction*>(&node))
@@ -62,7 +92,15 @@ class codegenASTPrinter
         }else if (auto* p = dynamic_cast<const ReturnInstruction*>(&node))
         {
             visit(*p);
+        }else if (auto* p = dynamic_cast<const UnaryInstruction*>(&node))
+        {
+            visit(*p);
         }
+    }
+
+    void visit(const Stack& node) const
+    {
+        out << node.depth << "(%rbp)";
     }
 
     void visit(const Immediate& node) const
@@ -72,7 +110,13 @@ class codegenASTPrinter
 
     void visit(const Register& node) const
     {
-        out << "%eax";
+        if (node.name == RegisterName::AX)
+        {
+            out << "%eax";
+        }else if (node.name == RegisterName::R10)
+        {
+            out << "%r10d";
+        }
     }
 
     void dispatch(const Operand& node) const
@@ -83,6 +127,13 @@ class codegenASTPrinter
         }else if (auto* p = dynamic_cast<const Register*>(&node))
         {
             visit(*p);
+        } else if (auto* p = dynamic_cast<const Stack*>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto* p = dynamic_cast<const PseudoRegister*>(&node))
+        {
+            throw std::runtime_error("PseudoRegister leaked past pass 2");
         }
     }
 

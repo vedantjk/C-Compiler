@@ -5,6 +5,7 @@
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semanticanalyzer/SemanticAnalyzer.h"
+#include "tacky/tacky.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -21,7 +22,8 @@ static const std::string PRELUDE_SOURCE =
 //   --lex       lex only; print tokens
 //   --parse     lex + parse
 //   --validate  lex + parse + SA
-//   --codegen   lex + parse + SA + codegen (prints asm to stdout)   (default)
+//   --tacky     lex + parse + SA + TACKY IR
+//   --codegen   lex + parse + SA + TACKY + codegen (prints asm to stdout)   (default)
 //   --compile   alias for the latest stage (currently --codegen)
 //
 // Flags:
@@ -64,7 +66,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         return 0;
     }
 
-    if (stage == "validate" || stage == "codegen" || stage == "compile")
+    if (stage == "validate" || stage == "tacky" || stage == "codegen" || stage == "compile")
     {
         Diagnostic::DiagnosticEngine preludeDiag{"<prelude>"};
         Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
@@ -85,8 +87,13 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
         if (stage == "validate") return 0;
 
+        TackyDriver tackyDriver;
+        auto tackyProg = tackyDriver.tacky(p);
+
+        if (stage == "tacky") return 0;
+
         codegenDriver driver;
-        auto cgProgram = driver.codegen(p);
+        auto cgProgram = driver.codegen(*tackyProg);
         codegenASTPrinter printer(std::cout);
         printer.print(*cgProgram);
         return 0;
@@ -110,7 +117,7 @@ int main(int argc, char **argv)
     }
     if (path.empty())
     {
-        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--codegen|--compile] [--debugAST] <source.c>\n";
+        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] [--debugAST] <source.c>\n";
         return 1;
     }
 

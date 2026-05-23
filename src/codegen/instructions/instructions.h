@@ -1,6 +1,6 @@
 #pragma once
 #include "operand.h"
-
+#include "../../utils/common.h"
 #include <memory>
 
 class Instruction
@@ -23,5 +23,19 @@ class ReturnInstruction : public Instruction
 {
     public:
     ReturnInstruction() = default;
+};
 
+class UnaryInstruction : public Instruction
+{
+    public:
+    std::unique_ptr<Operand> operand;
+    UnaryOp op;
+    UnaryInstruction(std::unique_ptr<Operand> operand, const UnaryOp op) : operand(std::move(operand)), op(op) {}
+};
+
+class AllocateStack : public Instruction
+{
+    public:
+    int quantity;
+    AllocateStack(const int quantity_) : quantity(quantity_) {}
 };
