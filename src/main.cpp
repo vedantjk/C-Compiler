@@ -5,6 +5,7 @@
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semanticanalyzer/SemanticAnalyzer.h"
+#include "tacky/ast/visitors/TackyDebugPrinter.h"
 #include "tacky/tacky.h"
 #include <fstream>
 #include <iostream>
@@ -27,8 +28,9 @@ static const std::string PRELUDE_SOURCE =
 //   --compile   alias for the latest stage (currently --codegen)
 //
 // Flags:
-//   --debugAST  print AST after parse / validate (off by default)
-static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST)
+//   --debugAST    print AST after parse / validate (off by default)
+//   --debugTacky  print TACKY IR after the tacky pass (off by default)
+static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST, bool debugTacky)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -89,6 +91,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
         TackyDriver tackyDriver;
         auto tackyProg = tackyDriver.tacky(p);
+        if (debugTacky) TackyDebugPrinter(std::cout).print(*tackyProg);
 
         if (stage == "tacky") return 0;
 
@@ -108,22 +111,24 @@ int main(int argc, char **argv)
     std::string stage = "codegen";
     std::string path;
     bool debugAST = false;
+    bool debugTacky = false;
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
         if (a == "--debugAST") debugAST = true;
+        else if (a == "--debugTacky") debugTacky = true;
         else if (a.rfind("--", 0) == 0) stage = a.substr(2);
         else path = a;
     }
     if (path.empty())
     {
-        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] [--debugAST] <source.c>\n";
+        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] [--debugAST] [--debugTacky] <source.c>\n";
         return 1;
     }
 
     try
     {
-        return run(path, stage, debugAST);
+        return run(path, stage, debugAST, debugTacky);
     }
     catch (const std::exception &e)
     {
