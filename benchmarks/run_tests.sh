@@ -11,6 +11,9 @@
 #   tacky     + IR
 #   codegen   + codegen
 #   compile   full pipeline (no flag)
+#   run       full pipeline + assemble+link+run; exit code must match system gcc.
+#             Only runs files in chapters listed in CHAPTERS_IMPLEMENTED below;
+#             other files are reported as skipped.
 #
 # Test categories (inferred from path):
 #   benchmarks/nlsandler/parse_valid/**/*.c     expect exit 0 (any stage)
@@ -37,6 +40,10 @@ VERBOSE=0
 TIMEOUT="5s"
 PATHS=()
 
+# Chapters whose codegen is complete enough to run end-to-end. Bump per chapter.
+CHAPTERS_IMPLEMENTED=(chapter_1 chapter_2)
+ARTIFACT_DIR="$REPO_ROOT/cmake-build-debug/test-artifacts"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --stage)   STAGE="$2"; shift 2 ;;
@@ -54,9 +61,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$STAGE" in
-    lex|parse|validate|tacky|codegen|compile) ;;
+    lex|parse|validate|tacky|codegen|compile|run) ;;
     *) echo "unknown stage: $STAGE" >&2; exit 2 ;;
 esac
+
+if [[ "$STAGE" == "run" ]]; then
+    if ! command -v gcc >/dev/null 2>&1; then
+        echo "stage=run needs gcc on PATH (MinGW or system)" >&2
+        exit 2
+    fi
+    mkdir -p "$ARTIFACT_DIR"
+fi
 
 # ----- locate cc89 binary -----------------------------------------------------
 find_cc89() {
@@ -136,7 +151,61 @@ fi
 # ----- run --------------------------------------------------------------------
 PASS=0
 FAIL=0
+SKIP=0
 FAILED_FILES=()
+
+# Returns 0 if the file's parent dir matches a chapter in CHAPTERS_IMPLEMENTED.
+is_chapter_implemented() {
+    local f="$1"
+    local chapter
+    chapter="$(basename "$(dirname "$f")")"
+    for c in "${CHAPTERS_IMPLEMENTED[@]}"; do
+        [[ "$c" == "$chapter" ]] && return 0
+    done
+    return 1
+}
+
+# run_one_execute: cc89 --codegen -> .s, gcc assemble+link -> .exe,
+# gcc reference build -> .ref.exe, run both, compare exit codes.
+# Only called when STAGE=run, on parse_valid files in implemented chapters.
+run_one_execute() {
+    local f="$1"
+    local base chapter artifact_base asm_file our_exe ref_exe our_exit ref_exit
+    local reason="" ok=1
+
+    base="${f##*/}"; base="${base%.c}"
+    chapter="$(basename "$(dirname "$f")")"
+    artifact_base="${chapter}_${base}"
+    asm_file="$ARTIFACT_DIR/${artifact_base}.s"
+    our_exe="$ARTIFACT_DIR/${artifact_base}.exe"
+    ref_exe="$ARTIFACT_DIR/${artifact_base}.ref.exe"
+
+    if ! timeout "$TIMEOUT" "$CC89_BIN" --codegen "$f" >"$asm_file" 2>/dev/null; then
+        ok=0; reason="cc89 --codegen failed"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w "$asm_file" -o "$our_exe" 2>/dev/null; then
+        ok=0; reason="gcc could not assemble/link cc89 output"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w "$f" -o "$ref_exe" 2>/dev/null; then
+        ok=0; reason="reference gcc build failed"
+    fi
+    if [[ $ok -eq 1 ]]; then
+        timeout "$TIMEOUT" "$our_exe" >/dev/null 2>&1; our_exit=$?
+        timeout "$TIMEOUT" "$ref_exe" >/dev/null 2>&1; ref_exit=$?
+        if [[ $our_exit -ne $ref_exit ]]; then
+            ok=0; reason="exit mismatch: cc89=$our_exit gcc=$ref_exit"
+        fi
+    fi
+
+    if [[ $ok -eq 1 ]]; then
+        PASS=$((PASS+1))
+        [[ $VERBOSE -eq 1 ]] && echo "PASS $f"
+    else
+        FAIL=$((FAIL+1))
+        FAILED_FILES+=("$f ($reason)")
+        [[ $VERBOSE -eq 1 ]] && echo "FAIL $f ($reason)"
+    fi
+}
 
 run_one() {
     local f="$1"
@@ -209,7 +278,15 @@ run_one() {
 }
 
 for f in "${TEST_FILES[@]}"; do
-    run_one "$f"
+    if [[ "$STAGE" == "run" ]]; then
+        if [[ "$(classify "$f")" != "parse_valid" ]] || ! is_chapter_implemented "$f"; then
+            SKIP=$((SKIP+1))
+            continue
+        fi
+        run_one_execute "$f"
+    else
+        run_one "$f"
+    fi
 done
 
 # ----- report -----------------------------------------------------------------
@@ -219,6 +296,9 @@ echo "stage:  $STAGE"
 echo "total:  $TOTAL"
 echo "passed: $PASS"
 echo "failed: $FAIL"
+if [[ $SKIP -gt 0 ]]; then
+    echo "skipped: $SKIP"
+fi
 
 if [[ $FAIL -gt 0 ]]; then
     echo ""
