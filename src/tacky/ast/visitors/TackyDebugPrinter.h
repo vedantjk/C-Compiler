@@ -35,6 +35,23 @@ class TackyDebugPrinter
         else if (op == UnaryOp::Negate) out << "-";
     }
 
+    void visit(BinaryOp op) const
+    {
+        switch (op)
+        {
+            case BinaryOp::Add:        out << "+";  break;
+            case BinaryOp::Subtract:   out << "-";  break;
+            case BinaryOp::Multiply:   out << "*";  break;
+            case BinaryOp::Divide:     out << "/";  break;
+            case BinaryOp::Remainder:  out << "%";  break;
+            case BinaryOp::BitwiseAnd: out << "&";  break;
+            case BinaryOp::BitwiseOr:  out << "|";  break;
+            case BinaryOp::BitwiseXor: out << "^";  break;
+            case BinaryOp::LeftShift:  out << "<<"; break;
+            case BinaryOp::RightShift: out << ">>"; break;
+        }
+    }
+
     void visit(const TackyReturn &node) const
     {
         out << "return";
@@ -54,10 +71,22 @@ class TackyDebugPrinter
         visit(node.src);
     }
 
+    void visit(const TackyBinary &node) const
+    {
+        visit(node.dst);
+        out << " = ";
+        visit(node.src1);
+        out << " ";
+        visit(node.op);
+        out << " ";
+        visit(node.src2);
+    }
+
     void dispatch(const TackyInstruction &node) const
     {
         if (auto *p = dynamic_cast<const TackyReturn *>(&node)) { visit(*p); return; }
         if (auto *p = dynamic_cast<const TackyUnary *>(&node))  { visit(*p); return; }
+        if (auto *p = dynamic_cast<const TackyBinary *>(&node)) { visit(*p); return; }
         throw std::runtime_error("TackyDebugPrinter: unknown TackyInstruction kind");
     }
 

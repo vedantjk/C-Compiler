@@ -2,6 +2,7 @@
 #include "../ast/ASTNodes/Program.h"
 #include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Expressions/UnaryExpr.h"
+#include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Statements/BlockStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/TopLevelNodes/Function.h"
@@ -48,6 +49,51 @@ class TackyDriver
         return dst;
     }
 
+    TackyVal processBinaryExpr(const std::shared_ptr<BinaryExpr>& binaryExpr, std::vector<std::unique_ptr<TackyInstruction>>& instructions)
+    {
+        BinaryOp op;
+        if (binaryExpr->binaryOp == "+")
+        {
+            op = BinaryOp::Add;
+        }else if (binaryExpr->binaryOp == "-")
+        {
+            op = BinaryOp::Subtract;
+        }else if (binaryExpr->binaryOp == "*")
+        {
+            op = BinaryOp::Multiply;
+        }else if (binaryExpr->binaryOp == "/")
+        {
+            op = BinaryOp::Divide;
+        }else if (binaryExpr->binaryOp == "%")
+        {
+            op = BinaryOp::Remainder;
+        }else if (binaryExpr->binaryOp == "&")
+        {
+            op = BinaryOp::BitwiseAnd;
+        }else if (binaryExpr->binaryOp == "|")
+        {
+            op = BinaryOp::BitwiseOr;
+        }else if (binaryExpr->binaryOp == "^")
+        {
+            op = BinaryOp::BitwiseXor;
+        }else if (binaryExpr->binaryOp == "<<")
+        {
+            op = BinaryOp::LeftShift;
+        }else if (binaryExpr->binaryOp == ">>")
+        {
+            op = BinaryOp::RightShift;
+        }
+        else throw std::runtime_error("unhandled binary op: " + binaryExpr->binaryOp);
+
+        auto v1 = processExpression(binaryExpr->left, instructions);
+        auto v2 = processExpression(binaryExpr->right, instructions);
+        TackyVar dst{makeTemp()};
+
+        instructions.push_back(std::make_unique<TackyBinary>(binaryExpr->line, binaryExpr->col, op, std::move(v1), std::move(v2), dst));
+
+        return dst;
+    }
+
     TackyVal processExpression(const std::shared_ptr<Expression>& expression, std::vector<std::unique_ptr<TackyInstruction>>& instructions)
     {
         if (const auto& p = std::dynamic_pointer_cast<UnaryExpr>(expression))
@@ -57,6 +103,10 @@ class TackyDriver
         if (const auto &p = std::dynamic_pointer_cast<IntLiterals>(expression))
         {
             return processIntLiteral(p);
+        }
+        if (const auto& p = std::dynamic_pointer_cast<BinaryExpr>(expression))
+        {
+            return processBinaryExpr(p, instructions);
         }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
