@@ -7,7 +7,9 @@ enum class RegisterName
     AX,
     R10,
     DX,
-    R11
+    R11,
+    CL,
+    CX
 };
 
 class Operand

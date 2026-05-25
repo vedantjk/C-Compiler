@@ -84,6 +84,21 @@ class codegenASTPrinter
         }else if (op == BinaryOp::Multiply)
         {
             out << "imull";
+        }else if (op == BinaryOp::BitwiseAnd)
+        {
+            out << "andl";
+        }else if (op == BinaryOp::BitwiseOr)
+        {
+            out <<"orl";
+        }else if (op == BinaryOp::BitwiseXor)
+        {
+            out << "xorl";
+        }else if (op == BinaryOp::LeftShift)
+        {
+            out << "shll";
+        }else if (op == BinaryOp::RightShift)
+        {
+            out << "sarl";
         }
     }
 
@@ -103,9 +118,8 @@ class codegenASTPrinter
     {
         if (node.preStackFixInstruction!=nullptr)
         {
-            out << "    ";
             visit(*node.preStackFixInstruction);
-            out << "\n";
+            out << "\n    ";
         }
         visit(node.op);
         out << "    ";
@@ -124,9 +138,8 @@ class codegenASTPrinter
     {
         if (node.scratchRegisterInstruction!=nullptr)
         {
-            out << "    ";
             visit(*node.scratchRegisterInstruction);
-            out << "\n";
+            out << "\n    ";
         }
 
         out << "idivl    ";
@@ -185,6 +198,12 @@ class codegenASTPrinter
         }else if (node.name == RegisterName::R11)
         {
             out << "%r11d";
+        }else if (node.name == RegisterName::CL)
+        {
+            out << "%cl";
+        }else if (node.name == RegisterName::CX)
+        {
+            out << "%ecx";
         }
     }
 

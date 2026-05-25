@@ -197,7 +197,9 @@ class codegenDriver
                 m->scratchRegisterInstruction = std::make_unique<MoveInstruction>(std::move(m->operand), std::make_unique<Register>(RegisterName::R10));
                 m->operand = std::move(scratchRegister);
                 rewritten.push_back(std::move(instr));
-            }else if (auto* m = dynamic_cast<BinaryInstruction*>(instr.get()); m && (m->op == BinaryOp::Add || m->op == BinaryOp::Subtract) && isStack(*m->src) && isStack(*m->dst))
+            }else if (auto* m = dynamic_cast<BinaryInstruction*>(instr.get()); m
+                && (m->op == BinaryOp::Add || m->op == BinaryOp::Subtract || m->op == BinaryOp::BitwiseAnd || m->op == BinaryOp::BitwiseOr || m->op == BinaryOp::BitwiseXor)
+                && isStack(*m->src) && isStack(*m->dst))
             {
                 // Mov M1, M2  →  Mov M1, R10 ; Mov R10, M2
                 auto r10a = std::make_unique<Register>(RegisterName::R10);
@@ -216,6 +218,14 @@ class codegenDriver
                 m->preStackFixInstruction = std::make_unique<MoveInstruction>(std::move(dstcopy1), std::move(r11a));
                 m->dst = std::move(r11b);
                 m->postStackFixInstruction = std::make_unique<MoveInstruction>(std::move(r11c), std::move(dstcopy2));
+                rewritten.push_back(std::move(instr));
+            }else if (auto* m = dynamic_cast<BinaryInstruction*>(instr.get()); m && (m->op == BinaryOp::LeftShift || m->op == BinaryOp::RightShift)
+                && !isImmediate(*m->src))
+            {
+                auto ecxRegister = std::make_unique<Register>(RegisterName::CX);
+                auto clRegister  = std::make_unique<Register>(RegisterName::CL);
+                m->preStackFixInstruction = std::make_unique<MoveInstruction>(std::move(m->src), std::move(ecxRegister));
+                m->src = std::move(clRegister);
                 rewritten.push_back(std::move(instr));
             }
             else
