@@ -5,26 +5,30 @@
 
 class DoWhileStmt : public Statement
 {
-public:
+  public:
     std::shared_ptr<BlockStmt> block;
     std::shared_ptr<Expression> condition;
 
-    DoWhileStmt(std::shared_ptr<BlockStmt> block, std::shared_ptr<Expression> condition, int line, int column) :
-    Statement(line, column), block(std::move(block)), condition(std::move(condition)) {}
+    DoWhileStmt(std::shared_ptr<BlockStmt> block, std::shared_ptr<Expression> condition, int line,
+                int column)
+        : Statement(line, column), block(std::move(block)), condition(std::move(condition))
+    {
+    }
 
     void print(std::ostream &out, int tab) const override
     {
-        for(int i = 0; i<tab;i++){
-            out<<"  ";
+        for (int i = 0; i < tab; i++)
+        {
+            out << "  ";
         }
         out << "do{\n";
-        block->print(out, tab+1);
-        for(int i = 0; i<tab;i++){
-            out<<"  ";
+        block->print(out, tab + 1);
+        for (int i = 0; i < tab; i++)
+        {
+            out << "  ";
         }
         out << "}while(";
-        condition->print(out, tab+1);
-        out<<");\n";
+        condition->print(out, tab + 1);
+        out << ");\n";
     }
 };
-

@@ -4,14 +4,14 @@
 
 class TackyConstant
 {
-    public:
+  public:
     std::string value;
-      explicit TackyConstant(std::string value_) : value(std::move(value_)) {};
+    explicit TackyConstant(std::string value_) : value(std::move(value_)) {};
 };
 
 class TackyVar
 {
-    public:
+  public:
     std::string name;
     TackyVar(std::string name_) : name(std::move(name_)) {};
 };

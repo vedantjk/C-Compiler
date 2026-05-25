@@ -5,8 +5,8 @@
 
 #include "lexer.h"
 
-#include <sstream>
 #include <functional>
+#include <sstream>
 
 // ============================================================
 // Test infrastructure
@@ -14,13 +14,14 @@
 
 static int g_passed = 0;
 static int g_failed = 0;
-static int g_total  = 0;
+static int g_total = 0;
 
 // Run the lexer on input, return token vector directly.
-std::vector<Token> tokenize(const std::string& input) {
+std::vector<Token> tokenize(const std::string &input)
+{
     // Suppress stderr during tokenization so lexer errors
     // don't pollute test output for non-error tests.
-    std::streambuf* old_cerr = std::cerr.rdbuf();
+    std::streambuf *old_cerr = std::cerr.rdbuf();
     std::ostringstream suppress;
     std::cerr.rdbuf(suppress.rdbuf());
 
@@ -33,32 +34,45 @@ std::vector<Token> tokenize(const std::string& input) {
 }
 
 // Run the lexer, returning both tokens and any error output (from stderr).
-struct TokenizeResult {
+struct TokenizeResult
+{
     std::vector<Token> tokens;
     std::string errors;
 };
 
-TokenizeResult tokenize_with_errors(const std::string& input) {
-    std::streambuf* old_cerr = std::cerr.rdbuf();
+TokenizeResult tokenize_with_errors(const std::string &input)
+{
+    std::streambuf *old_cerr = std::cerr.rdbuf();
     std::ostringstream capture;
     std::cerr.rdbuf(capture.rdbuf());
 
     Diagnostic::DiagnosticEngine diag;
     Lexer lexer(input, diag);
     auto tokens = lexer.generateTokens();
-    diag.print();  // flush diagnostics to captured stderr
+    diag.print(); // flush diagnostics to captured stderr
 
     std::cerr.rdbuf(old_cerr);
     return {std::move(tokens), capture.str()};
 }
 
-void runTest(const std::string& name, std::function<bool()> fn) {
+void runTest(const std::string &name, std::function<bool()> fn)
+{
     g_total++;
     bool ok = false;
-    try { ok = fn(); } catch (...) { ok = false; }
-    if (ok) {
+    try
+    {
+        ok = fn();
+    }
+    catch (...)
+    {
+        ok = false;
+    }
+    if (ok)
+    {
         g_passed++;
-    } else {
+    }
+    else
+    {
         g_failed++;
         std::cerr << "  FAIL: " << name << std::endl;
     }
@@ -66,48 +80,69 @@ void runTest(const std::string& name, std::function<bool()> fn) {
 
 #define TEST(name, body) runTest(name, [&]() -> bool { body })
 
-#define EXPECT(cond) do { if (!(cond)) { \
-    std::cerr << "    Expected: " #cond << std::endl; return false; \
-} } while(0)
+#define EXPECT(cond)                                                                               \
+    do                                                                                             \
+    {                                                                                              \
+        if (!(cond))                                                                               \
+        {                                                                                          \
+            std::cerr << "    Expected: " #cond << std::endl;                                      \
+            return false;                                                                          \
+        }                                                                                          \
+    } while (0)
 
 // Compare token at index i: constructs "TYPE lexeme" from Token fields.
-#define EXPECT_TOKEN(toks, i, exp) do { \
-    if ((i) >= (int)(toks).size()) { \
-        std::cerr << "    [" << (i) << "] OUT_OF_BOUNDS (size=" \
-                  << (toks).size() << ")" << std::endl; \
-        return false; \
-    } \
-    std::string _got = std::string(tokenTypeToString((toks)[(i)].type)) \
-                       + " " + (toks)[(i)].lexeme; \
-    std::string _exp = (exp); \
-    if (_got != _exp) { \
-        std::cerr << "    [" << (i) << "] expected: \"" << _exp \
-                  << "\"  got: \"" << _got << "\"" << std::endl; \
-        return false; \
-    } \
-} while(0)
+#define EXPECT_TOKEN(toks, i, exp)                                                                 \
+    do                                                                                             \
+    {                                                                                              \
+        if ((i) >= (int)(toks).size())                                                             \
+        {                                                                                          \
+            std::cerr << "    [" << (i) << "] OUT_OF_BOUNDS (size=" << (toks).size() << ")"        \
+                      << std::endl;                                                                \
+            return false;                                                                          \
+        }                                                                                          \
+        std::string _got =                                                                         \
+            std::string(tokenTypeToString((toks)[(i)].type)) + " " + (toks)[(i)].lexeme;           \
+        std::string _exp = (exp);                                                                  \
+        if (_got != _exp)                                                                          \
+        {                                                                                          \
+            std::cerr << "    [" << (i) << "] expected: \"" << _exp << "\"  got: \"" << _got       \
+                      << "\"" << std::endl;                                                        \
+            return false;                                                                          \
+        }                                                                                          \
+    } while (0)
 
 // ============================================================
 // 1. Keywords  (all 32 C89 keywords)
 // ============================================================
-void test_keywords() {
+void test_keywords()
+{
     std::cerr << "\n--- Keywords ---" << std::endl;
-    struct { const char* src; const char* type; } kws[] = {
-        {"auto","AUTO"},       {"break","BREAK"},     {"case","CASE"},
-        {"char","CHAR"},       {"const","CONST"},     {"continue","CONTINUE"},
-        {"default","DEFAULT"}, {"do","DO"},           {"double","DOUBLE"},
-        {"else","ELSE"},       {"enum","ENUM"},       {"extern","EXTERN"},
-        {"float","FLOAT"},     {"for","FOR"},         {"goto","GOTO"},
-        {"if","IF"},           {"int","INT"},         {"long","LONG"},
-        {"register","REGISTER"},{"return","RETURN"},  {"short","SHORT"},
-        {"signed","SIGNED"},   {"sizeof","SIZEOF"},   {"static","STATIC"},
-        {"struct","STRUCT"},   {"switch","SWITCH"},   {"typedef","TYPEDEF"},
-        {"union","UNION"},     {"unsigned","UNSIGNED"},{"void","VOID"},
-        {"volatile","VOLATILE"},{"while","WHILE"},
+    struct
+    {
+        const char *src;
+        const char *type;
+    } kws[] = {
+        {"auto", "AUTO"},         {"break", "BREAK"},
+        {"case", "CASE"},         {"char", "CHAR"},
+        {"const", "CONST"},       {"continue", "CONTINUE"},
+        {"default", "DEFAULT"},   {"do", "DO"},
+        {"double", "DOUBLE"},     {"else", "ELSE"},
+        {"enum", "ENUM"},         {"extern", "EXTERN"},
+        {"float", "FLOAT"},       {"for", "FOR"},
+        {"goto", "GOTO"},         {"if", "IF"},
+        {"int", "INT"},           {"long", "LONG"},
+        {"register", "REGISTER"}, {"return", "RETURN"},
+        {"short", "SHORT"},       {"signed", "SIGNED"},
+        {"sizeof", "SIZEOF"},     {"static", "STATIC"},
+        {"struct", "STRUCT"},     {"switch", "SWITCH"},
+        {"typedef", "TYPEDEF"},   {"union", "UNION"},
+        {"unsigned", "UNSIGNED"}, {"void", "VOID"},
+        {"volatile", "VOLATILE"}, {"while", "WHILE"},
     };
-    for (auto& kw : kws) {
+    for (auto &kw : kws)
+    {
         std::string name = std::string("keyword '") + kw.src + "'";
-        std::string exp  = std::string(kw.type) + " " + kw.src;
+        std::string exp = std::string(kw.type) + " " + kw.src;
         TEST(name, {
             auto t = tokenize(kw.src);
             EXPECT_TOKEN(t, 0, exp);
@@ -130,7 +165,8 @@ void test_keywords() {
 // ============================================================
 // 2. Identifiers
 // ============================================================
-void test_identifiers() {
+void test_identifiers()
+{
     std::cerr << "\n--- Identifiers ---" << std::endl;
 
     TEST("single letter", {
@@ -189,7 +225,8 @@ void test_identifiers() {
 // ============================================================
 // 3. Integer constants
 // ============================================================
-void test_integer_constants() {
+void test_integer_constants()
+{
     std::cerr << "\n--- Integer Constants ---" << std::endl;
 
     TEST("zero", {
@@ -250,7 +287,8 @@ void test_integer_constants() {
 // ============================================================
 // 4. Float constants
 // ============================================================
-void test_float_constants() {
+void test_float_constants()
+{
     std::cerr << "\n--- Float Constants ---" << std::endl;
 
     TEST("simple float", {
@@ -302,7 +340,8 @@ void test_float_constants() {
 // ============================================================
 // 5. Character constants
 // ============================================================
-void test_char_constants() {
+void test_char_constants()
+{
     std::cerr << "\n--- Character Constants ---" << std::endl;
 
     // C89: L?'(\\.|[^\\'])+'
@@ -361,7 +400,8 @@ void test_char_constants() {
 // ============================================================
 // 6. String literals
 // ============================================================
-void test_string_literals() {
+void test_string_literals()
+{
     std::cerr << "\n--- String Literals ---" << std::endl;
 
     TEST("simple string", {
@@ -400,36 +440,26 @@ void test_string_literals() {
 // ============================================================
 // 7. Single-character punctuation & operators
 // ============================================================
-void test_single_char_tokens() {
+void test_single_char_tokens()
+{
     std::cerr << "\n--- Single-char Tokens ---" << std::endl;
 
-    struct { const char* src; const char* exp; } cases[] = {
-        {"(",  "LEFT_PAREN ("},
-        {")",  "RIGHT_PAREN )"},
-        {"{",  "LEFT_BRACE {"},
-        {"}",  "RIGHT_BRACE }"},
-        {",",  "COMMA ,"},
-        {".",  "DOT ."},
-        {"-",  "MINUS -"},
-        {"+",  "PLUS +"},
-        {";",  "SEMI_COLON ;"},
-        {"*",  "ASTERISK *"},
-        {"/",  "SLASH /"},
-        {"!",  "EXCLAMATION !"},
-        {"=",  "ASSIGN ="},
-        {"<",  "LESS_THAN <"},
-        {">",  "GREATER_THAN >"},
-        {"[",  "LEFT_BRACKET ["},
-        {"]",  "RIGHT_BRACKET ]"},
-        {"~",  "TILDE ~"},
-        {"&",  "AMPERSAND &"},
-        {"|",  "PIPE |"},
-        {"^",  "CARET ^"},
-        {"%",  "PERCENT %"},
-        {"?",  "QUESTION_MARK ?"},
-        {":",  "COLON :"},
+    struct
+    {
+        const char *src;
+        const char *exp;
+    } cases[] = {
+        {"(", "LEFT_PAREN ("},   {")", "RIGHT_PAREN )"},   {"{", "LEFT_BRACE {"},
+        {"}", "RIGHT_BRACE }"},  {",", "COMMA ,"},         {".", "DOT ."},
+        {"-", "MINUS -"},        {"+", "PLUS +"},          {";", "SEMI_COLON ;"},
+        {"*", "ASTERISK *"},     {"/", "SLASH /"},         {"!", "EXCLAMATION !"},
+        {"=", "ASSIGN ="},       {"<", "LESS_THAN <"},     {">", "GREATER_THAN >"},
+        {"[", "LEFT_BRACKET ["}, {"]", "RIGHT_BRACKET ]"}, {"~", "TILDE ~"},
+        {"&", "AMPERSAND &"},    {"|", "PIPE |"},          {"^", "CARET ^"},
+        {"%", "PERCENT %"},      {"?", "QUESTION_MARK ?"}, {":", "COLON :"},
     };
-    for (auto& c : cases) {
+    for (auto &c : cases)
+    {
         std::string name = std::string("'") + c.src + "'";
         TEST(name, {
             auto t = tokenize(c.src);
@@ -442,31 +472,25 @@ void test_single_char_tokens() {
 // ============================================================
 // 8. Two-character operators
 // ============================================================
-void test_two_char_operators() {
+void test_two_char_operators()
+{
     std::cerr << "\n--- Two-char Operators ---" << std::endl;
 
-    struct { const char* src; const char* exp; } cases[] = {
-        {"!=", "NE_OP !="},
-        {"==", "EQ_OP =="},
-        {"<=", "LE_OP <="},
-        {">=", "GE_OP >="},
-        {"++", "INC_OP ++"},
-        {"--", "DEC_OP --"},
-        {"->", "PTR_OP ->"},
-        {"&&", "AND_OP &&"},
-        {"||", "OR_OP ||"},
-        {"<<", "LEFT_OP <<"},
-        {">>", "RIGHT_OP >>"},
-        {"+=", "ADD_ASSIGN +="},
-        {"-=", "SUB_ASSIGN -="},
-        {"*=", "MUL_ASSIGN *="},
-        {"/=", "DIV_ASSIGN /="},
-        {"%=", "MOD_ASSIGN %="},
-        {"&=", "AND_ASSIGN &="},
-        {"^=", "XOR_ASSIGN ^="},
+    struct
+    {
+        const char *src;
+        const char *exp;
+    } cases[] = {
+        {"!=", "NE_OP !="},      {"==", "EQ_OP =="},      {"<=", "LE_OP <="},
+        {">=", "GE_OP >="},      {"++", "INC_OP ++"},     {"--", "DEC_OP --"},
+        {"->", "PTR_OP ->"},     {"&&", "AND_OP &&"},     {"||", "OR_OP ||"},
+        {"<<", "LEFT_OP <<"},    {">>", "RIGHT_OP >>"},   {"+=", "ADD_ASSIGN +="},
+        {"-=", "SUB_ASSIGN -="}, {"*=", "MUL_ASSIGN *="}, {"/=", "DIV_ASSIGN /="},
+        {"%=", "MOD_ASSIGN %="}, {"&=", "AND_ASSIGN &="}, {"^=", "XOR_ASSIGN ^="},
         {"|=", "OR_ASSIGN |="},
     };
-    for (auto& c : cases) {
+    for (auto &c : cases)
+    {
         std::string name = std::string("'") + c.src + "'";
         TEST(name, {
             auto t = tokenize(c.src);
@@ -479,7 +503,8 @@ void test_two_char_operators() {
 // ============================================================
 // 9. Three-character tokens
 // ============================================================
-void test_three_char_tokens() {
+void test_three_char_tokens()
+{
     std::cerr << "\n--- Three-char Tokens ---" << std::endl;
 
     TEST("ellipsis '...'", {
@@ -502,7 +527,8 @@ void test_three_char_tokens() {
 // ============================================================
 // 10. Comments
 // ============================================================
-void test_comments() {
+void test_comments()
+{
     std::cerr << "\n--- Comments ---" << std::endl;
 
     TEST("line comment skipped", {
@@ -555,7 +581,8 @@ void test_comments() {
 // ============================================================
 // 11. Whitespace handling
 // ============================================================
-void test_whitespace() {
+void test_whitespace()
+{
     std::cerr << "\n--- Whitespace ---" << std::endl;
 
     TEST("spaces between tokens", {
@@ -608,7 +635,8 @@ void test_whitespace() {
 // ============================================================
 // 12. Multi-token sequences
 // ============================================================
-void test_sequences() {
+void test_sequences()
+{
     std::cerr << "\n--- Multi-token Sequences ---" << std::endl;
 
     TEST("variable declaration", {
@@ -679,36 +707,37 @@ void test_sequences() {
 // ============================================================
 // 13. C89 code snippets
 // ============================================================
-void test_c89_snippets() {
+void test_c89_snippets()
+{
     std::cerr << "\n--- C89 Snippets ---" << std::endl;
 
     TEST("minimal main", {
         auto t = tokenize("int main() { return 0; }");
-        EXPECT_TOKEN(t, 0,  "INT int");
-        EXPECT_TOKEN(t, 1,  "IDENTIFIER main");
-        EXPECT_TOKEN(t, 2,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 3,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 4,  "LEFT_BRACE {");
-        EXPECT_TOKEN(t, 5,  "RETURN return");
-        EXPECT_TOKEN(t, 6,  "CONSTANT 0");
-        EXPECT_TOKEN(t, 7,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 8,  "RIGHT_BRACE }");
-        EXPECT_TOKEN(t, 9,  "EOF_TOKEN ");
+        EXPECT_TOKEN(t, 0, "INT int");
+        EXPECT_TOKEN(t, 1, "IDENTIFIER main");
+        EXPECT_TOKEN(t, 2, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 3, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 4, "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 5, "RETURN return");
+        EXPECT_TOKEN(t, 6, "CONSTANT 0");
+        EXPECT_TOKEN(t, 7, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 8, "RIGHT_BRACE }");
+        EXPECT_TOKEN(t, 9, "EOF_TOKEN ");
         return true;
     });
 
     TEST("if-else block", {
         auto t = tokenize("if (x != 0) { y = 1; } else { y = 0; }");
-        EXPECT_TOKEN(t, 0,  "IF if");
-        EXPECT_TOKEN(t, 1,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 3,  "NE_OP !=");
-        EXPECT_TOKEN(t, 4,  "CONSTANT 0");
-        EXPECT_TOKEN(t, 5,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 6,  "LEFT_BRACE {");
-        EXPECT_TOKEN(t, 7,  "IDENTIFIER y");
-        EXPECT_TOKEN(t, 8,  "ASSIGN =");
-        EXPECT_TOKEN(t, 9,  "CONSTANT 1");
+        EXPECT_TOKEN(t, 0, "IF if");
+        EXPECT_TOKEN(t, 1, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 3, "NE_OP !=");
+        EXPECT_TOKEN(t, 4, "CONSTANT 0");
+        EXPECT_TOKEN(t, 5, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 6, "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 7, "IDENTIFIER y");
+        EXPECT_TOKEN(t, 8, "ASSIGN =");
+        EXPECT_TOKEN(t, 9, "CONSTANT 1");
         EXPECT_TOKEN(t, 10, "SEMI_COLON ;");
         EXPECT_TOKEN(t, 11, "RIGHT_BRACE }");
         EXPECT_TOKEN(t, 12, "ELSE else");
@@ -724,16 +753,16 @@ void test_c89_snippets() {
 
     TEST("while loop", {
         auto t = tokenize("while (i < 10) { i = i + 1; }");
-        EXPECT_TOKEN(t, 0,  "WHILE while");
-        EXPECT_TOKEN(t, 1,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER i");
-        EXPECT_TOKEN(t, 3,  "LESS_THAN <");
-        EXPECT_TOKEN(t, 4,  "CONSTANT 10");
-        EXPECT_TOKEN(t, 5,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 6,  "LEFT_BRACE {");
-        EXPECT_TOKEN(t, 7,  "IDENTIFIER i");
-        EXPECT_TOKEN(t, 8,  "ASSIGN =");
-        EXPECT_TOKEN(t, 9,  "IDENTIFIER i");
+        EXPECT_TOKEN(t, 0, "WHILE while");
+        EXPECT_TOKEN(t, 1, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER i");
+        EXPECT_TOKEN(t, 3, "LESS_THAN <");
+        EXPECT_TOKEN(t, 4, "CONSTANT 10");
+        EXPECT_TOKEN(t, 5, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 6, "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 7, "IDENTIFIER i");
+        EXPECT_TOKEN(t, 8, "ASSIGN =");
+        EXPECT_TOKEN(t, 9, "IDENTIFIER i");
         EXPECT_TOKEN(t, 10, "PLUS +");
         EXPECT_TOKEN(t, 11, "CONSTANT 1");
         EXPECT_TOKEN(t, 12, "SEMI_COLON ;");
@@ -744,16 +773,16 @@ void test_c89_snippets() {
 
     TEST("for loop (uses ; and comparison)", {
         auto t = tokenize("for (i = 0; i < 10; i = i + 1) {}");
-        EXPECT_TOKEN(t, 0,  "FOR for");
-        EXPECT_TOKEN(t, 1,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER i");
-        EXPECT_TOKEN(t, 3,  "ASSIGN =");
-        EXPECT_TOKEN(t, 4,  "CONSTANT 0");
-        EXPECT_TOKEN(t, 5,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 6,  "IDENTIFIER i");
-        EXPECT_TOKEN(t, 7,  "LESS_THAN <");
-        EXPECT_TOKEN(t, 8,  "CONSTANT 10");
-        EXPECT_TOKEN(t, 9,  "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 0, "FOR for");
+        EXPECT_TOKEN(t, 1, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER i");
+        EXPECT_TOKEN(t, 3, "ASSIGN =");
+        EXPECT_TOKEN(t, 4, "CONSTANT 0");
+        EXPECT_TOKEN(t, 5, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 6, "IDENTIFIER i");
+        EXPECT_TOKEN(t, 7, "LESS_THAN <");
+        EXPECT_TOKEN(t, 8, "CONSTANT 10");
+        EXPECT_TOKEN(t, 9, "SEMI_COLON ;");
         EXPECT_TOKEN(t, 10, "IDENTIFIER i");
         EXPECT_TOKEN(t, 11, "ASSIGN =");
         EXPECT_TOKEN(t, 12, "IDENTIFIER i");
@@ -781,21 +810,19 @@ void test_c89_snippets() {
     });
 
     TEST("multiline function", {
-        auto t = tokenize(
-            "int add(int a, int b) {\n"
-            "    return a + b;\n"
-            "}\n"
-        );
-        EXPECT_TOKEN(t, 0,  "INT int");
-        EXPECT_TOKEN(t, 1,  "IDENTIFIER add");
-        EXPECT_TOKEN(t, 2,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 3,  "INT int");
-        EXPECT_TOKEN(t, 4,  "IDENTIFIER a");
-        EXPECT_TOKEN(t, 5,  "COMMA ,");
-        EXPECT_TOKEN(t, 6,  "INT int");
-        EXPECT_TOKEN(t, 7,  "IDENTIFIER b");
-        EXPECT_TOKEN(t, 8,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 9,  "LEFT_BRACE {");
+        auto t = tokenize("int add(int a, int b) {\n"
+                          "    return a + b;\n"
+                          "}\n");
+        EXPECT_TOKEN(t, 0, "INT int");
+        EXPECT_TOKEN(t, 1, "IDENTIFIER add");
+        EXPECT_TOKEN(t, 2, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 3, "INT int");
+        EXPECT_TOKEN(t, 4, "IDENTIFIER a");
+        EXPECT_TOKEN(t, 5, "COMMA ,");
+        EXPECT_TOKEN(t, 6, "INT int");
+        EXPECT_TOKEN(t, 7, "IDENTIFIER b");
+        EXPECT_TOKEN(t, 8, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 9, "LEFT_BRACE {");
         EXPECT_TOKEN(t, 10, "RETURN return");
         EXPECT_TOKEN(t, 11, "IDENTIFIER a");
         EXPECT_TOKEN(t, 12, "PLUS +");
@@ -810,7 +837,8 @@ void test_c89_snippets() {
 // ============================================================
 // 14. Error cases
 // ============================================================
-void test_errors() {
+void test_errors()
+{
     std::cerr << "\n--- Error Cases ---" << std::endl;
 
     TEST("unterminated string", {
@@ -831,8 +859,9 @@ void test_errors() {
     TEST("tokens still produced after error", {
         auto r = tokenize_with_errors("@ 42");
         bool hasConst = false;
-        for (auto& tok : r.tokens)
-            if (tok.type == CONSTANT && tok.lexeme == "42") hasConst = true;
+        for (auto &tok : r.tokens)
+            if (tok.type == CONSTANT && tok.lexeme == "42")
+                hasConst = true;
         EXPECT(hasConst);
         return true;
     });
@@ -871,7 +900,8 @@ void test_errors() {
 // ============================================================
 // 15. Number parsing edge cases
 // ============================================================
-void test_number_edge_cases() {
+void test_number_edge_cases()
+{
     std::cerr << "\n--- Number Edge Cases ---" << std::endl;
 
     TEST("hex mixed case", {
@@ -918,7 +948,8 @@ void test_number_edge_cases() {
 // ============================================================
 // 16. Operator disambiguation (maximal munch)
 // ============================================================
-void test_operator_disambiguation() {
+void test_operator_disambiguation()
+{
     std::cerr << "\n--- Operator Disambiguation ---" << std::endl;
 
     TEST("a+++b is a ++ + b", {
@@ -970,7 +1001,8 @@ void test_operator_disambiguation() {
 // ============================================================
 // 17. Parser-readiness: realistic C89 programs
 // ============================================================
-void test_parser_readiness() {
+void test_parser_readiness()
+{
     std::cerr << "\n--- Parser-Readiness Snippets ---" << std::endl;
 
     TEST("pointer declaration and dereference", {
@@ -1065,16 +1097,16 @@ void test_parser_readiness() {
     });
     TEST("compound assignment operators", {
         auto t = tokenize("x += 1; y -= 2; z *= 3; w /= 4; v %= 5;");
-        EXPECT_TOKEN(t, 0,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 1,  "ADD_ASSIGN +=");
-        EXPECT_TOKEN(t, 2,  "CONSTANT 1");
-        EXPECT_TOKEN(t, 3,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 4,  "IDENTIFIER y");
-        EXPECT_TOKEN(t, 5,  "SUB_ASSIGN -=");
-        EXPECT_TOKEN(t, 6,  "CONSTANT 2");
-        EXPECT_TOKEN(t, 7,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 8,  "IDENTIFIER z");
-        EXPECT_TOKEN(t, 9,  "MUL_ASSIGN *=");
+        EXPECT_TOKEN(t, 0, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 1, "ADD_ASSIGN +=");
+        EXPECT_TOKEN(t, 2, "CONSTANT 1");
+        EXPECT_TOKEN(t, 3, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 4, "IDENTIFIER y");
+        EXPECT_TOKEN(t, 5, "SUB_ASSIGN -=");
+        EXPECT_TOKEN(t, 6, "CONSTANT 2");
+        EXPECT_TOKEN(t, 7, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 8, "IDENTIFIER z");
+        EXPECT_TOKEN(t, 9, "MUL_ASSIGN *=");
         EXPECT_TOKEN(t, 10, "CONSTANT 3");
         EXPECT_TOKEN(t, 11, "SEMI_COLON ;");
         EXPECT_TOKEN(t, 12, "IDENTIFIER w");
@@ -1089,62 +1121,62 @@ void test_parser_readiness() {
     });
     TEST("bitwise operators in expression", {
         auto t = tokenize("x = a | b & c ^ ~d;");
-        EXPECT_TOKEN(t, 0,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 1,  "ASSIGN =");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER a");
-        EXPECT_TOKEN(t, 3,  "PIPE |");
-        EXPECT_TOKEN(t, 4,  "IDENTIFIER b");
-        EXPECT_TOKEN(t, 5,  "AMPERSAND &");
-        EXPECT_TOKEN(t, 6,  "IDENTIFIER c");
-        EXPECT_TOKEN(t, 7,  "CARET ^");
-        EXPECT_TOKEN(t, 8,  "TILDE ~");
-        EXPECT_TOKEN(t, 9,  "IDENTIFIER d");
+        EXPECT_TOKEN(t, 0, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 1, "ASSIGN =");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER a");
+        EXPECT_TOKEN(t, 3, "PIPE |");
+        EXPECT_TOKEN(t, 4, "IDENTIFIER b");
+        EXPECT_TOKEN(t, 5, "AMPERSAND &");
+        EXPECT_TOKEN(t, 6, "IDENTIFIER c");
+        EXPECT_TOKEN(t, 7, "CARET ^");
+        EXPECT_TOKEN(t, 8, "TILDE ~");
+        EXPECT_TOKEN(t, 9, "IDENTIFIER d");
         EXPECT_TOKEN(t, 10, "SEMI_COLON ;");
         return true;
     });
     TEST("shift operators", {
         auto t = tokenize("x = a << 2; y = b >> 3;");
-        EXPECT_TOKEN(t, 0,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 1,  "ASSIGN =");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER a");
-        EXPECT_TOKEN(t, 3,  "LEFT_OP <<");
-        EXPECT_TOKEN(t, 4,  "CONSTANT 2");
-        EXPECT_TOKEN(t, 5,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 6,  "IDENTIFIER y");
-        EXPECT_TOKEN(t, 7,  "ASSIGN =");
-        EXPECT_TOKEN(t, 8,  "IDENTIFIER b");
-        EXPECT_TOKEN(t, 9,  "RIGHT_OP >>");
+        EXPECT_TOKEN(t, 0, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 1, "ASSIGN =");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER a");
+        EXPECT_TOKEN(t, 3, "LEFT_OP <<");
+        EXPECT_TOKEN(t, 4, "CONSTANT 2");
+        EXPECT_TOKEN(t, 5, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 6, "IDENTIFIER y");
+        EXPECT_TOKEN(t, 7, "ASSIGN =");
+        EXPECT_TOKEN(t, 8, "IDENTIFIER b");
+        EXPECT_TOKEN(t, 9, "RIGHT_OP >>");
         EXPECT_TOKEN(t, 10, "CONSTANT 3");
         EXPECT_TOKEN(t, 11, "SEMI_COLON ;");
         return true;
     });
     TEST("struct definition", {
         auto t = tokenize("struct point { int x; int y; };");
-        EXPECT_TOKEN(t, 0,  "STRUCT struct");
-        EXPECT_TOKEN(t, 1,  "IDENTIFIER point");
-        EXPECT_TOKEN(t, 2,  "LEFT_BRACE {");
-        EXPECT_TOKEN(t, 3,  "INT int");
-        EXPECT_TOKEN(t, 4,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 5,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 6,  "INT int");
-        EXPECT_TOKEN(t, 7,  "IDENTIFIER y");
-        EXPECT_TOKEN(t, 8,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 9,  "RIGHT_BRACE }");
+        EXPECT_TOKEN(t, 0, "STRUCT struct");
+        EXPECT_TOKEN(t, 1, "IDENTIFIER point");
+        EXPECT_TOKEN(t, 2, "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 3, "INT int");
+        EXPECT_TOKEN(t, 4, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 5, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 6, "INT int");
+        EXPECT_TOKEN(t, 7, "IDENTIFIER y");
+        EXPECT_TOKEN(t, 8, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 9, "RIGHT_BRACE }");
         EXPECT_TOKEN(t, 10, "SEMI_COLON ;");
         return true;
     });
     TEST("for loop with increment operator", {
         auto t = tokenize("for (i = 0; i < n; i++) {}");
-        EXPECT_TOKEN(t, 0,  "FOR for");
-        EXPECT_TOKEN(t, 1,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER i");
-        EXPECT_TOKEN(t, 3,  "ASSIGN =");
-        EXPECT_TOKEN(t, 4,  "CONSTANT 0");
-        EXPECT_TOKEN(t, 5,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 6,  "IDENTIFIER i");
-        EXPECT_TOKEN(t, 7,  "LESS_THAN <");
-        EXPECT_TOKEN(t, 8,  "IDENTIFIER n");
-        EXPECT_TOKEN(t, 9,  "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 0, "FOR for");
+        EXPECT_TOKEN(t, 1, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER i");
+        EXPECT_TOKEN(t, 3, "ASSIGN =");
+        EXPECT_TOKEN(t, 4, "CONSTANT 0");
+        EXPECT_TOKEN(t, 5, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 6, "IDENTIFIER i");
+        EXPECT_TOKEN(t, 7, "LESS_THAN <");
+        EXPECT_TOKEN(t, 8, "IDENTIFIER n");
+        EXPECT_TOKEN(t, 9, "SEMI_COLON ;");
         EXPECT_TOKEN(t, 10, "IDENTIFIER i");
         EXPECT_TOKEN(t, 11, "INC_OP ++");
         EXPECT_TOKEN(t, 12, "RIGHT_PAREN )");
@@ -1154,37 +1186,35 @@ void test_parser_readiness() {
     });
     TEST("logical operators", {
         auto t = tokenize("if (a && b || !c) {}");
-        EXPECT_TOKEN(t, 0,  "IF if");
-        EXPECT_TOKEN(t, 1,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER a");
-        EXPECT_TOKEN(t, 3,  "AND_OP &&");
-        EXPECT_TOKEN(t, 4,  "IDENTIFIER b");
-        EXPECT_TOKEN(t, 5,  "OR_OP ||");
-        EXPECT_TOKEN(t, 6,  "EXCLAMATION !");
-        EXPECT_TOKEN(t, 7,  "IDENTIFIER c");
-        EXPECT_TOKEN(t, 8,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 9,  "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 0, "IF if");
+        EXPECT_TOKEN(t, 1, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER a");
+        EXPECT_TOKEN(t, 3, "AND_OP &&");
+        EXPECT_TOKEN(t, 4, "IDENTIFIER b");
+        EXPECT_TOKEN(t, 5, "OR_OP ||");
+        EXPECT_TOKEN(t, 6, "EXCLAMATION !");
+        EXPECT_TOKEN(t, 7, "IDENTIFIER c");
+        EXPECT_TOKEN(t, 8, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 9, "LEFT_BRACE {");
         EXPECT_TOKEN(t, 10, "RIGHT_BRACE }");
         return true;
     });
     TEST("function with multiple params and body", {
-        auto t = tokenize(
-            "int max(int a, int b) {\n"
-            "    if (a > b)\n"
-            "        return a;\n"
-            "    return b;\n"
-            "}\n"
-        );
-        EXPECT_TOKEN(t, 0,  "INT int");
-        EXPECT_TOKEN(t, 1,  "IDENTIFIER max");
-        EXPECT_TOKEN(t, 2,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 3,  "INT int");
-        EXPECT_TOKEN(t, 4,  "IDENTIFIER a");
-        EXPECT_TOKEN(t, 5,  "COMMA ,");
-        EXPECT_TOKEN(t, 6,  "INT int");
-        EXPECT_TOKEN(t, 7,  "IDENTIFIER b");
-        EXPECT_TOKEN(t, 8,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 9,  "LEFT_BRACE {");
+        auto t = tokenize("int max(int a, int b) {\n"
+                          "    if (a > b)\n"
+                          "        return a;\n"
+                          "    return b;\n"
+                          "}\n");
+        EXPECT_TOKEN(t, 0, "INT int");
+        EXPECT_TOKEN(t, 1, "IDENTIFIER max");
+        EXPECT_TOKEN(t, 2, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 3, "INT int");
+        EXPECT_TOKEN(t, 4, "IDENTIFIER a");
+        EXPECT_TOKEN(t, 5, "COMMA ,");
+        EXPECT_TOKEN(t, 6, "INT int");
+        EXPECT_TOKEN(t, 7, "IDENTIFIER b");
+        EXPECT_TOKEN(t, 8, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 9, "LEFT_BRACE {");
         EXPECT_TOKEN(t, 10, "IF if");
         EXPECT_TOKEN(t, 11, "LEFT_PAREN (");
         EXPECT_TOKEN(t, 12, "IDENTIFIER a");
@@ -1213,38 +1243,36 @@ void test_parser_readiness() {
     });
     TEST("do-while loop", {
         auto t = tokenize("do { x++; } while (x < 10);");
-        EXPECT_TOKEN(t, 0,  "DO do");
-        EXPECT_TOKEN(t, 1,  "LEFT_BRACE {");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 3,  "INC_OP ++");
-        EXPECT_TOKEN(t, 4,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 5,  "RIGHT_BRACE }");
-        EXPECT_TOKEN(t, 6,  "WHILE while");
-        EXPECT_TOKEN(t, 7,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 8,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 9,  "LESS_THAN <");
+        EXPECT_TOKEN(t, 0, "DO do");
+        EXPECT_TOKEN(t, 1, "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 3, "INC_OP ++");
+        EXPECT_TOKEN(t, 4, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 5, "RIGHT_BRACE }");
+        EXPECT_TOKEN(t, 6, "WHILE while");
+        EXPECT_TOKEN(t, 7, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 8, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 9, "LESS_THAN <");
         EXPECT_TOKEN(t, 10, "CONSTANT 10");
         EXPECT_TOKEN(t, 11, "RIGHT_PAREN )");
         EXPECT_TOKEN(t, 12, "SEMI_COLON ;");
         return true;
     });
     TEST("switch-case", {
-        auto t = tokenize(
-            "switch (x) {\n"
-            "    case 1: break;\n"
-            "    default: break;\n"
-            "}\n"
-        );
-        EXPECT_TOKEN(t, 0,  "SWITCH switch");
-        EXPECT_TOKEN(t, 1,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 2,  "IDENTIFIER x");
-        EXPECT_TOKEN(t, 3,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 4,  "LEFT_BRACE {");
-        EXPECT_TOKEN(t, 5,  "CASE case");
-        EXPECT_TOKEN(t, 6,  "CONSTANT 1");
-        EXPECT_TOKEN(t, 7,  "COLON :");
-        EXPECT_TOKEN(t, 8,  "BREAK break");
-        EXPECT_TOKEN(t, 9,  "SEMI_COLON ;");
+        auto t = tokenize("switch (x) {\n"
+                          "    case 1: break;\n"
+                          "    default: break;\n"
+                          "}\n");
+        EXPECT_TOKEN(t, 0, "SWITCH switch");
+        EXPECT_TOKEN(t, 1, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 2, "IDENTIFIER x");
+        EXPECT_TOKEN(t, 3, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 4, "LEFT_BRACE {");
+        EXPECT_TOKEN(t, 5, "CASE case");
+        EXPECT_TOKEN(t, 6, "CONSTANT 1");
+        EXPECT_TOKEN(t, 7, "COLON :");
+        EXPECT_TOKEN(t, 8, "BREAK break");
+        EXPECT_TOKEN(t, 9, "SEMI_COLON ;");
         EXPECT_TOKEN(t, 10, "DEFAULT default");
         EXPECT_TOKEN(t, 11, "COLON :");
         EXPECT_TOKEN(t, 12, "BREAK break");
@@ -1254,28 +1282,28 @@ void test_parser_readiness() {
     });
     TEST("goto statement", {
         auto t = tokenize("goto done; done: return 0;");
-        EXPECT_TOKEN(t, 0,  "GOTO goto");
-        EXPECT_TOKEN(t, 1,  "IDENTIFIER done");
-        EXPECT_TOKEN(t, 2,  "SEMI_COLON ;");
-        EXPECT_TOKEN(t, 3,  "IDENTIFIER done");
-        EXPECT_TOKEN(t, 4,  "COLON :");
-        EXPECT_TOKEN(t, 5,  "RETURN return");
-        EXPECT_TOKEN(t, 6,  "CONSTANT 0");
-        EXPECT_TOKEN(t, 7,  "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 0, "GOTO goto");
+        EXPECT_TOKEN(t, 1, "IDENTIFIER done");
+        EXPECT_TOKEN(t, 2, "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 3, "IDENTIFIER done");
+        EXPECT_TOKEN(t, 4, "COLON :");
+        EXPECT_TOKEN(t, 5, "RETURN return");
+        EXPECT_TOKEN(t, 6, "CONSTANT 0");
+        EXPECT_TOKEN(t, 7, "SEMI_COLON ;");
         return true;
     });
     TEST("variadic function declaration", {
         auto t = tokenize("int printf(char *fmt, ...);");
-        EXPECT_TOKEN(t, 0,  "INT int");
-        EXPECT_TOKEN(t, 1,  "IDENTIFIER printf");
-        EXPECT_TOKEN(t, 2,  "LEFT_PAREN (");
-        EXPECT_TOKEN(t, 3,  "CHAR char");
-        EXPECT_TOKEN(t, 4,  "ASTERISK *");
-        EXPECT_TOKEN(t, 5,  "IDENTIFIER fmt");
-        EXPECT_TOKEN(t, 6,  "COMMA ,");
-        EXPECT_TOKEN(t, 7,  "ELLIPSIS ...");
-        EXPECT_TOKEN(t, 8,  "RIGHT_PAREN )");
-        EXPECT_TOKEN(t, 9,  "SEMI_COLON ;");
+        EXPECT_TOKEN(t, 0, "INT int");
+        EXPECT_TOKEN(t, 1, "IDENTIFIER printf");
+        EXPECT_TOKEN(t, 2, "LEFT_PAREN (");
+        EXPECT_TOKEN(t, 3, "CHAR char");
+        EXPECT_TOKEN(t, 4, "ASTERISK *");
+        EXPECT_TOKEN(t, 5, "IDENTIFIER fmt");
+        EXPECT_TOKEN(t, 6, "COMMA ,");
+        EXPECT_TOKEN(t, 7, "ELLIPSIS ...");
+        EXPECT_TOKEN(t, 8, "RIGHT_PAREN )");
+        EXPECT_TOKEN(t, 9, "SEMI_COLON ;");
         return true;
     });
 }
@@ -1283,7 +1311,8 @@ void test_parser_readiness() {
 // ============================================================
 // main
 // ============================================================
-int main() {
+int main()
+{
     std::cerr << "C89 Lexer Test Suite" << std::endl;
     std::cerr << "====================" << std::endl;
 

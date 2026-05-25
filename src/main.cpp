@@ -13,11 +13,10 @@
 #include <stdexcept>
 #include <string>
 
-static const std::string PRELUDE_SOURCE =
-    "void *malloc(int size);\n"
-    "void free(void *p);\n"
-    "int printf(char *fmt, ...);\n"
-    "int scanf(char *fmt, ...);\n";
+static const std::string PRELUDE_SOURCE = "void *malloc(int size);\n"
+                                          "void free(void *p);\n"
+                                          "int printf(char *fmt, ...);\n"
+                                          "int scanf(char *fmt, ...);\n";
 
 // Stages, in pipeline order. Default is the last one wired up.
 //   --lex       lex only; print tokens
@@ -30,7 +29,8 @@ static const std::string PRELUDE_SOURCE =
 // Flags:
 //   --debugAST    print AST after parse / validate (off by default)
 //   --debugTacky  print TACKY IR after the tacky pass (off by default)
-static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST, bool debugTacky)
+static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST,
+               bool debugTacky)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -54,7 +54,8 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
     if (stage == "lex")
     {
-        for (const auto &token : tokens) std::cout << token.toString() << "\n";
+        for (const auto &token : tokens)
+            std::cout << token.toString() << "\n";
         return 0;
     }
 
@@ -64,7 +65,8 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
     if (stage == "parse")
     {
-        if (debugAST) dbg.print(p);
+        if (debugAST)
+            dbg.print(p);
         return 0;
     }
 
@@ -74,8 +76,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
         Parser preludeParser{preludeLexer.generateTokens()};
         std::shared_ptr<Program> preludeProgram = preludeParser.ParseProgram();
-        p->nodes.insert(p->nodes.begin(),
-                        preludeProgram->nodes.begin(),
+        p->nodes.insert(p->nodes.begin(), preludeProgram->nodes.begin(),
                         preludeProgram->nodes.end());
 
         SemanticAnalyzer semanticAnalyzer{diagnosticEngine};
@@ -85,15 +86,19 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
             diagnosticEngine.print();
             return 1;
         }
-        if (debugAST) dbg.print(p);
+        if (debugAST)
+            dbg.print(p);
 
-        if (stage == "validate") return 0;
+        if (stage == "validate")
+            return 0;
 
         TackyDriver tackyDriver;
         auto tackyProg = tackyDriver.tacky(p);
-        if (debugTacky) TackyDebugPrinter(std::cout).print(*tackyProg);
+        if (debugTacky)
+            TackyDebugPrinter(std::cout).print(*tackyProg);
 
-        if (stage == "tacky") return 0;
+        if (stage == "tacky")
+            return 0;
 
         codegenDriver driver;
         auto cgProgram = driver.codegen(*tackyProg);
@@ -115,14 +120,19 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
-        if (a == "--debugAST") debugAST = true;
-        else if (a == "--debugTacky") debugTacky = true;
-        else if (a.rfind("--", 0) == 0) stage = a.substr(2);
-        else path = a;
+        if (a == "--debugAST")
+            debugAST = true;
+        else if (a == "--debugTacky")
+            debugTacky = true;
+        else if (a.rfind("--", 0) == 0)
+            stage = a.substr(2);
+        else
+            path = a;
     }
     if (path.empty())
     {
-        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] [--debugAST] [--debugTacky] <source.c>\n";
+        std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] "
+                     "[--debugAST] [--debugTacky] <source.c>\n";
         return 1;
     }
 

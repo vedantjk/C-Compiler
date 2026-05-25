@@ -1,13 +1,13 @@
 #pragma once
 
 #include "./Statement.h"
+#include <iostream>
 #include <memory>
 #include <vector>
-#include <iostream>
 
 class BlockStmt : public Statement
 {
-public:
+  public:
     std::vector<std::shared_ptr<Statement>> statements;
 
     BlockStmt(int line_, int col_, std::vector<std::shared_ptr<Statement>> statements_)
@@ -15,9 +15,7 @@ public:
     {
     }
 
-    int returnStatementsSize() const{
-        return statements.size();
-    }
+    int returnStatementsSize() const { return statements.size(); }
 
     void print(std::ostream &out, int tab) const override
     {

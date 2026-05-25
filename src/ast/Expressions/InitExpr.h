@@ -4,20 +4,24 @@
 #include <vector>
 class InitExpr : public Expression
 {
-public:
+  public:
     std::vector<std::shared_ptr<Expression>> elements;
 
-    InitExpr(std::vector<std::shared_ptr<Expression>> elements, int line, int col) : Expression(line,col), elements(elements) {}
+    InitExpr(std::vector<std::shared_ptr<Expression>> elements, int line, int col)
+        : Expression(line, col), elements(elements)
+    {
+    }
 
     void print(std::ostream &out, int tab) const override
     {
-        out<<"{";
+        out << "{";
         for (int i = 0; i < static_cast<int>(elements.size()); i++)
         {
             elements[i]->print(out, tab);
-            if (i != static_cast<int>(elements.size()-1)) out <<",";
+            if (i != static_cast<int>(elements.size() - 1))
+                out << ",";
         }
 
-        out<<"}";
+        out << "}";
     }
 };

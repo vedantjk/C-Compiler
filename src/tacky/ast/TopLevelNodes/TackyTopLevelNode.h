@@ -3,6 +3,6 @@
 
 class TackyTopLevelNode : public TackyASTNode
 {
-    public:
+  public:
     TackyTopLevelNode(const int line_, const int col_) : TackyASTNode(line_, col_) {};
 };

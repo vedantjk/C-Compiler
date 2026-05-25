@@ -14,36 +14,35 @@ enum class RegisterName
 
 class Operand
 {
-    public:
+  public:
     Operand() = default;
     virtual ~Operand() = default;
 };
 
 class Immediate : public Operand
 {
-    public:
+  public:
     std::string value;
-      explicit Immediate(std::string value_) : value(std::move(value_)) {} ;
-
+    explicit Immediate(std::string value_) : value(std::move(value_)) {};
 };
 
 class Register : public Operand
 {
-    public:
+  public:
     RegisterName name;
-      explicit Register(const RegisterName name) : name(name) {} ;
+    explicit Register(const RegisterName name) : name(name) {};
 };
 
 class PseudoRegister : public Operand
 {
-    public:
+  public:
     std::string name;
-      explicit PseudoRegister(std::string name_) : name(std::move(name_)) {} ;
+    explicit PseudoRegister(std::string name_) : name(std::move(name_)) {};
 };
 
 class Stack : public Operand
 {
-    public:
+  public:
     int depth;
-      explicit Stack(const int depth_) : depth(depth_) {} ;
+    explicit Stack(const int depth_) : depth(depth_) {};
 };

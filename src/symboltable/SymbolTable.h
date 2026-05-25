@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../types/types.h"
 #include "../ast/ASTNodes/ASTNode.h"
+#include "../types/types.h"
 #include <unordered_map>
 #include <vector>
 
@@ -17,10 +17,14 @@ inline std::string kindToString(Kind kind)
 {
     switch (kind)
     {
-        case Kind::VARIABLE:   return "variable";
-        case Kind::FUNCTION:   return "function";
-        case Kind::PARAMETER:  return "parameter";
-        case Kind::STRUCT_TAG: return "struct";
+    case Kind::VARIABLE:
+        return "variable";
+    case Kind::FUNCTION:
+        return "function";
+    case Kind::PARAMETER:
+        return "parameter";
+    case Kind::STRUCT_TAG:
+        return "struct";
     }
     return "unknown";
 }
@@ -32,16 +36,19 @@ struct Symbol
     Kind kind;
     int line, column;
     std::weak_ptr<ASTNode> node;
-    Symbol(std::string name, std::shared_ptr<Type> type, int line, int column, Kind kind) :
-    name(std::move(name)), type(std::move(type)), kind(kind), line(line), column(column)  {}
+    Symbol(std::string name, std::shared_ptr<Type> type, int line, int column, Kind kind)
+        : name(std::move(name)), type(std::move(type)), kind(kind), line(line), column(column)
+    {
+    }
 };
 
 class Scope
 {
     std::unordered_map<std::string, std::shared_ptr<Symbol>> ordinary, tags;
-    public:
 
-    std::shared_ptr<Symbol> find(const std::string &name, Kind kind) const {
+  public:
+    std::shared_ptr<Symbol> find(const std::string &name, Kind kind) const
+    {
         if (kind == Kind::STRUCT_TAG)
         {
             auto it = tags.find(name);
@@ -53,11 +60,13 @@ class Scope
 
     bool insert(const std::string &name, const std::shared_ptr<Symbol> &symbol, Kind kind)
     {
-        if (find(name, kind) != nullptr) return false;
+        if (find(name, kind) != nullptr)
+            return false;
         if (kind == Kind::STRUCT_TAG)
         {
             tags[name] = symbol;
-        }else
+        }
+        else
         {
             ordinary[name] = symbol;
         }
@@ -68,15 +77,13 @@ class Scope
 class SymbolTable
 {
     std::vector<Scope> scopes;
-    public:
-    SymbolTable()
-    {
-        scopes.emplace_back();
-    }
+
+  public:
+    SymbolTable() { scopes.emplace_back(); }
 
     bool insert(const std::string &name, std::shared_ptr<Symbol> symbol, Kind kind)
     {
-        return scopes[scopes.size()-1].insert(name, symbol, kind);
+        return scopes[scopes.size() - 1].insert(name, symbol, kind);
     }
 
     std::shared_ptr<Symbol> find(const std::string &name, Kind kind) const
@@ -84,18 +91,13 @@ class SymbolTable
         for (auto it = scopes.rbegin(); it != scopes.rend(); ++it)
         {
             auto sym = it->find(name, kind);
-            if (sym) return sym;
+            if (sym)
+                return sym;
         }
         return nullptr;
     }
 
-    void enterScope()
-    {
-        scopes.emplace_back();
-    }
+    void enterScope() { scopes.emplace_back(); }
 
-    void exitScope()
-    {
-        scopes.pop_back();
-    }
+    void exitScope() { scopes.pop_back(); }
 };

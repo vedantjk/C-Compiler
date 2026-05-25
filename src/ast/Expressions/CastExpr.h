@@ -5,15 +5,16 @@
 
 class CastExpr : public Expression
 {
-public:
+  public:
     std::shared_ptr<Type> type;
     std::shared_ptr<Expression> operand;
 
-    CastExpr(std::shared_ptr<Type> type, std::shared_ptr<Expression> operand, int line, int column) : Expression(line, column), type(type), operand(operand) {};
+    CastExpr(std::shared_ptr<Type> type, std::shared_ptr<Expression> operand, int line, int column)
+        : Expression(line, column), type(type), operand(operand) {};
 
     void print(std::ostream &out, int tab) const override
     {
-        out<<"("<<type->toString()<<")";
+        out << "(" << type->toString() << ")";
         operand->print(out, tab);
     }
 };
