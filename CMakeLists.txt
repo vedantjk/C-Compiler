@@ -8,13 +8,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Compiler warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-set(SOURCES
-    src/main.cpp
-    src/lexer/lexer.cpp
-    src/utils/diagnostic.cpp
-)
+# All compiler sources: every .cpp under src/, excluding test files (which
+# carry their own main()). CONFIGURE_DEPENDS re-scans for added/removed files
+# on each build, so this never needs hand-editing again.
+file(GLOB_RECURSE CC89_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
+list(FILTER CC89_SOURCES EXCLUDE REGEX "/tests/")
 
-add_executable(cc89 ${SOURCES})
+add_executable(cc89 ${CC89_SOURCES})
 
 target_include_directories(cc89 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -26,11 +26,17 @@ add_executable(test_lexer
 )
 target_include_directories(test_lexer PRIVATE ${CMAKE_SOURCE_DIR}/src/lexer)
 
-# Auto-format sources before building
-find_program(CLANG_FORMAT clang-format)
+# Auto-format ALL sources (including headers) before building cc89.
+# clang-format isn't on PATH here, so hint the standalone LLVM install;
+# on PATH-based systems (e.g. CI) the hint is harmlessly ignored.
+find_program(CLANG_FORMAT clang-format HINTS "C:/Program Files/LLVM/bin")
 if(CLANG_FORMAT)
+    file(GLOB_RECURSE FORMAT_SOURCES CONFIGURE_DEPENDS
+        ${CMAKE_SOURCE_DIR}/src/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/*.h
+        ${CMAKE_SOURCE_DIR}/src/*.hpp)
     add_custom_target(format
-        COMMAND ${CLANG_FORMAT} -i ${SOURCES}
+        COMMAND ${CLANG_FORMAT} -i ${FORMAT_SOURCES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Running clang-format"
     )
