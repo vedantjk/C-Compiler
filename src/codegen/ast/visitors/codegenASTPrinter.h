@@ -73,6 +73,20 @@ class codegenASTPrinter
         }
     }
 
+    void visit(const BinaryOp& op) const
+    {
+        if (op == BinaryOp::Add)
+        {
+            out << "addl";
+        }else if (op == BinaryOp::Subtract)
+        {
+            out << "subl";
+        }else if (op == BinaryOp::Multiply)
+        {
+            out << "imull";
+        }
+    }
+
     void visit(const UnaryInstruction& node) const
     {
         visit(node.op);
@@ -84,6 +98,46 @@ class codegenASTPrinter
     {
         out << "    subq    $" << node.quantity << ", %rsp\n";
     }
+
+    void visit(const BinaryInstruction& node) const
+    {
+        if (node.preStackFixInstruction!=nullptr)
+        {
+            out << "    ";
+            visit(*node.preStackFixInstruction);
+            out << "\n";
+        }
+        visit(node.op);
+        out << "    ";
+        dispatch(*node.src);
+        out << ", ";
+        dispatch(*node.dst);
+        if (node.postStackFixInstruction!=nullptr)
+        {
+            out <<"\n    ";
+            visit(*node.postStackFixInstruction);
+        }
+
+    }
+
+    void visit(const IDivInstruction& node) const
+    {
+        if (node.scratchRegisterInstruction!=nullptr)
+        {
+            out << "    ";
+            visit(*node.scratchRegisterInstruction);
+            out << "\n";
+        }
+
+        out << "idivl    ";
+        dispatch(*node.operand);
+    }
+
+    void visit(const CdqInstruction& node) const
+    {
+        out << "cdq";
+    }
+
     void dispatch(const Instruction& node) const
     {
         if (auto* p = dynamic_cast<const MoveInstruction*>(&node))
@@ -93,6 +147,15 @@ class codegenASTPrinter
         {
             visit(*p);
         }else if (auto* p = dynamic_cast<const UnaryInstruction*>(&node))
+        {
+            visit(*p);
+        }else if (auto* p = dynamic_cast<const BinaryInstruction*>(&node))
+        {
+            visit(*p);
+        }else if (auto* p = dynamic_cast<const IDivInstruction*>(&node))
+        {
+            visit(*p);
+        }else if (auto* p = dynamic_cast<const CdqInstruction*>(&node))
         {
             visit(*p);
         }
@@ -116,6 +179,12 @@ class codegenASTPrinter
         }else if (node.name == RegisterName::R10)
         {
             out << "%r10d";
+        }else if (node.name == RegisterName::DX)
+        {
+            out << "%edx";
+        }else if (node.name == RegisterName::R11)
+        {
+            out << "%r11d";
         }
     }
 

@@ -39,3 +39,28 @@ class AllocateStack : public Instruction
     int quantity;
     AllocateStack(const int quantity_) : quantity(quantity_) {}
 };
+
+class BinaryInstruction : public Instruction
+{
+    public:
+    std::unique_ptr<MoveInstruction> preStackFixInstruction;
+    std::unique_ptr<MoveInstruction> postStackFixInstruction;
+    std::unique_ptr<Operand> src, dst;
+    BinaryOp op;
+    BinaryInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_, const BinaryOp op_) :
+        src(std::move(src_)), dst(std::move(dst_)), op(op_){}
+};
+
+class IDivInstruction : public Instruction
+{
+    public:
+    std::unique_ptr<Operand> operand;
+    std::unique_ptr<MoveInstruction> scratchRegisterInstruction;
+    explicit IDivInstruction(std::unique_ptr<Operand> operand_) : operand(std::move(operand_)){}
+};
+
+class CdqInstruction : public Instruction
+{
+    public:
+    explicit CdqInstruction() = default;
+};
