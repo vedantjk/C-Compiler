@@ -29,6 +29,8 @@ class TackyDebugPrinter
             out << "~";
         else if (op == UnaryOp::Negate)
             out << "-";
+        else if (op == UnaryOp::Not)
+            out << "!";
     }
 
     void visit(BinaryOp op) const
@@ -65,6 +67,24 @@ class TackyDebugPrinter
         case BinaryOp::RightShift:
             out << ">>";
             break;
+        case BinaryOp::Equal:
+            out << "==";
+            break;
+        case BinaryOp::NotEqual:
+            out << "!=";
+            break;
+        case BinaryOp::LessThan:
+            out << "<";
+            break;
+        case BinaryOp::LessOrEqual:
+            out << "<=";
+            break;
+        case BinaryOp::GreaterThan:
+            out << ">";
+            break;
+        case BinaryOp::GreaterThanOrEqual:
+            out << ">=";
+            break;
         }
     }
 
@@ -98,6 +118,31 @@ class TackyDebugPrinter
         visit(node.src2);
     }
 
+    void visit(const TackyCopy &node) const
+    {
+        visit(node.dst);
+        out << " = ";
+        visit(node.src);
+    }
+
+    void visit(const TackyJump &node) const { out << "jump " << node.identifier; }
+
+    void visit(const TackyJumpIfZero &node) const
+    {
+        out << "jump_if_zero ";
+        visit(node.condition);
+        out << ", " << node.identifier;
+    }
+
+    void visit(const TackyJumpIfNotZero &node) const
+    {
+        out << "jump_if_not_zero ";
+        visit(node.condition);
+        out << ", " << node.identifier;
+    }
+
+    void visit(const TackyLabel &node) const { out << node.identifier << ":"; }
+
     void dispatch(const TackyInstruction &node) const
     {
         if (auto *p = dynamic_cast<const TackyReturn *>(&node))
@@ -115,6 +160,31 @@ class TackyDebugPrinter
             visit(*p);
             return;
         }
+        if (auto *p = dynamic_cast<const TackyCopy *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyJump *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyJumpIfZero *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyJumpIfNotZero *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyLabel *>(&node))
+        {
+            visit(*p);
+            return;
+        }
         throw std::runtime_error("TackyDebugPrinter: unknown TackyInstruction kind");
     }
 
@@ -123,7 +193,9 @@ class TackyDebugPrinter
         out << "function " << node.name << ":\n";
         for (const auto &instr : node.instructions)
         {
-            out << "    ";
+            // Labels print flush-left as block markers; other instructions indent.
+            if (!dynamic_cast<const TackyLabel *>(instr.get()))
+                out << "    ";
             dispatch(*instr);
             out << "\n";
         }

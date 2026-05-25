@@ -15,13 +15,19 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class TackyDriver
 {
   public:
-    int tmpCounter = 0;
-    std::string makeTemp() { return "tmp." + std::to_string(tmpCounter++); }
+    std::unordered_map<std::string, int> tempCounters;
+
+    std::string makeTemp(const std::string &&name)
+    {
+        tempCounters[name]++;
+        return name + std::to_string(tempCounters[name]);
+    }
 
     TackyVal processIntLiteral(const std::shared_ptr<IntLiterals> &intLiteral)
     {
@@ -40,16 +46,70 @@ class TackyDriver
         {
             op = UnaryOp::Negate;
         }
+        else if (unaryExpr->op == "!")
+        {
+            op = UnaryOp::Not;
+        }
         else
             throw std::runtime_error("unhandled unary op: " + unaryExpr->op);
 
         TackyVal inner = processExpression(unaryExpr->operand, instructions);
-        TackyVar dst{makeTemp()};
+        TackyVar dst{makeTemp("tmp.")};
 
         instructions.push_back(std::make_unique<TackyUnary>(unaryExpr->line, unaryExpr->col, op,
                                                             std::move(inner), dst));
 
         return dst;
+    }
+
+    TackyVal processLogicalAnd(const std::shared_ptr<BinaryExpr> &binaryExpr,
+                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        TackyVar result(makeTemp("tmp."));
+        std::string false_label = makeTemp("false_label.");
+        std::string end_label = makeTemp("end_label.");
+        auto lhs = processExpression(binaryExpr->left, instructions);
+        instructions.push_back(
+            std::make_unique<TackyJumpIfZero>(binaryExpr->line, binaryExpr->col, lhs, false_label));
+        auto rhs = processExpression(binaryExpr->right, instructions);
+        instructions.push_back(
+            std::make_unique<TackyJumpIfZero>(binaryExpr->line, binaryExpr->col, rhs, false_label));
+        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
+                                                           TackyConstant("1"), result));
+        instructions.push_back(
+            std::make_unique<TackyJump>(binaryExpr->line, binaryExpr->col, end_label));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, false_label));
+        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
+                                                           TackyConstant("0"), result));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, end_label));
+        return result;
+    }
+
+    TackyVal processLogicalOr(const std::shared_ptr<BinaryExpr> &binaryExpr,
+                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        TackyVar result(makeTemp("tmp."));
+        std::string true_label = makeTemp("true_label.");
+        std::string end_label = makeTemp("end_label.");
+        auto lhs = processExpression(binaryExpr->left, instructions);
+        instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
+            binaryExpr->line, binaryExpr->col, lhs, true_label));
+        auto rhs = processExpression(binaryExpr->right, instructions);
+        instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
+            binaryExpr->line, binaryExpr->col, rhs, true_label));
+        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
+                                                           TackyConstant("0"), result));
+        instructions.push_back(
+            std::make_unique<TackyJump>(binaryExpr->line, binaryExpr->col, end_label));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, true_label));
+        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
+                                                           TackyConstant("1"), result));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, end_label));
+        return result;
     }
 
     TackyVal processBinaryExpr(const std::shared_ptr<BinaryExpr> &binaryExpr,
@@ -96,12 +156,44 @@ class TackyDriver
         {
             op = BinaryOp::RightShift;
         }
+        else if (binaryExpr->binaryOp == "==")
+        {
+            op = BinaryOp::Equal;
+        }
+        else if (binaryExpr->binaryOp == "!=")
+        {
+            op = BinaryOp::NotEqual;
+        }
+        else if (binaryExpr->binaryOp == "<")
+        {
+            op = BinaryOp::LessThan;
+        }
+        else if (binaryExpr->binaryOp == "<=")
+        {
+            op = BinaryOp::LessOrEqual;
+        }
+        else if (binaryExpr->binaryOp == ">")
+        {
+            op = BinaryOp::GreaterThan;
+        }
+        else if (binaryExpr->binaryOp == ">=")
+        {
+            op = BinaryOp::GreaterThanOrEqual;
+        }
+        else if (binaryExpr->binaryOp == "&&")
+        {
+            return processLogicalAnd(binaryExpr, instructions);
+        }
+        else if (binaryExpr->binaryOp == "||")
+        {
+            return processLogicalOr(binaryExpr, instructions);
+        }
         else
             throw std::runtime_error("unhandled binary op: " + binaryExpr->binaryOp);
 
         auto v1 = processExpression(binaryExpr->left, instructions);
         auto v2 = processExpression(binaryExpr->right, instructions);
-        TackyVar dst{makeTemp()};
+        TackyVar dst{makeTemp("tmp.")};
 
         instructions.push_back(std::make_unique<TackyBinary>(binaryExpr->line, binaryExpr->col, op,
                                                              std::move(v1), std::move(v2), dst));

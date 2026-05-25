@@ -3,7 +3,8 @@
 enum class UnaryOp
 {
     Complement,
-    Negate
+    Negate,
+    Not
 };
 
 enum class BinaryOp
@@ -17,5 +18,11 @@ enum class BinaryOp
     BitwiseOr,
     BitwiseXor,
     LeftShift,
-    RightShift
+    RightShift,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual
 };
