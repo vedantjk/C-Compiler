@@ -1085,6 +1085,17 @@ class SemanticAnalyzer
                 error(param.line, param.col, "duplicate parameter '" + param.name + "'");
             }
         }
+
+        if (node->name == "main")
+        {
+            auto &stmts = node->statements->statements;
+            if (stmts.empty() || dynamic_cast<ReturnStmt *>(stmts.back().get()) == nullptr)
+            {
+                stmts.push_back(std::make_shared<ReturnStmt>(
+                    -1, -1, std::make_shared<IntLiterals>(-1, -1, "0")));
+            }
+        }
+
         if (node->statements)
         {
             analyzeStatements(node->statements);

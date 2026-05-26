@@ -201,6 +201,22 @@ class TackyDriver
         return dst;
     }
 
+    TackyVal processVariableExpr(const std::shared_ptr<VariableExpr> &variableExpr,
+                                 std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        return TackyVar(variableExpr->name);
+    }
+
+    TackyVal processAssignExpr(const std::shared_ptr<AssignExpr> &assignExpr,
+                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        auto lhs = processExpression(assignExpr->lhs, instructions);
+        auto rhs = processExpression(assignExpr->rhs, instructions);
+        instructions.push_back(
+            std::make_unique<TackyCopy>(assignExpr->line, assignExpr->col, rhs, lhs));
+        return lhs;
+    }
+
     TackyVal processExpression(const std::shared_ptr<Expression> &expression,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -216,7 +232,21 @@ class TackyDriver
         {
             return processBinaryExpr(p, instructions);
         }
+        if (const auto &p = std::dynamic_pointer_cast<VariableExpr>(expression))
+        {
+            return processVariableExpr(p, instructions);
+        }
+        if (const auto &p = std::dynamic_pointer_cast<AssignExpr>(expression))
+        {
+            return processAssignExpr(p, instructions);
+        }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
+    }
+
+    TackyVal processVarDecl(const std::shared_ptr<VarDecl> &varDecl,
+                            std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        return TackyVar(varDecl->name);
     }
 
     void processReturnStmt(const std::shared_ptr<ReturnStmt> &returnStmt,
@@ -231,6 +261,35 @@ class TackyDriver
             std::make_unique<TackyReturn>(returnStmt->line, returnStmt->col, std::move(returnVal)));
     }
 
+    void processDeclareStmt(const std::shared_ptr<DeclareStmt> &declareStmt,
+                            std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (const auto *vars =
+                std::get_if<std::vector<std::shared_ptr<VarDecl>>>(&declareStmt->variables))
+        {
+            for (auto &vd : *vars)
+            {
+                auto var = processVarDecl(vd, instructions);
+                if (vd->initialization)
+                {
+                    auto val = processExpression(vd->initialization, instructions);
+                    instructions.push_back(
+                        std::make_unique<TackyCopy>(declareStmt->line, declareStmt->col, val, var));
+                }
+            }
+        }
+        else
+        {
+            // TODO
+        }
+    }
+
+    void processExprStmt(const std::shared_ptr<ExprStmt> &exprStmt,
+                         std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        processExpression(exprStmt->expr, instructions);
+    }
+
     void processBlockStmt(const std::shared_ptr<BlockStmt> &blockStmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -239,6 +298,14 @@ class TackyDriver
             if (const auto &p = std::dynamic_pointer_cast<ReturnStmt>(stmt))
             {
                 processReturnStmt(p, instructions);
+            }
+            else if (const auto &p = std::dynamic_pointer_cast<DeclareStmt>(stmt))
+            {
+                processDeclareStmt(p, instructions);
+            }
+            else if (const auto &p = std::dynamic_pointer_cast<ExprStmt>(stmt))
+            {
+                processExprStmt(p, instructions);
             }
         }
     }
