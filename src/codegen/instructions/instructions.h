@@ -71,3 +71,50 @@ class CdqInstruction : public Instruction
   public:
     explicit CdqInstruction() = default;
 };
+
+class CmpInstruction : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> a, b;
+    std::unique_ptr<MoveInstruction> preStackFixInstruction;
+    CmpInstruction(std::unique_ptr<Operand> a_, std::unique_ptr<Operand> b_)
+        : a(std::move(a_)), b(std::move(b_))
+    {
+    }
+};
+
+class JumpInstruction : public Instruction
+{
+  public:
+    std::string identifier;
+    explicit JumpInstruction(std::string identifier_) : identifier(std::move(identifier_)) {}
+};
+
+class JumpCCInstruction : public Instruction
+{
+  public:
+    CondCode condCode;
+    std::string identifier;
+    JumpCCInstruction(const CondCode condCode_, std::string identifier_)
+        : condCode(condCode_), identifier(std::move(identifier_))
+    {
+    }
+};
+
+class SetCCInstruction : public Instruction
+{
+  public:
+    CondCode condCode;
+    std::unique_ptr<Operand> a;
+    SetCCInstruction(const CondCode condCode_, std::unique_ptr<Operand> a_)
+        : condCode(condCode_), a(std::move(a_))
+    {
+    }
+};
+
+class Label : public Instruction
+{
+  public:
+    std::string identifier;
+    explicit Label(std::string identifier_) : identifier(std::move(identifier_)) {}
+};

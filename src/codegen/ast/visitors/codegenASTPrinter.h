@@ -30,7 +30,8 @@ class codegenASTPrinter
         }
         for (const auto &child : node.instructions)
         {
-            out << "    ";
+            if (auto *p = dynamic_cast<Label *>(child.get()); p == nullptr)
+                out << "    ";
             dispatch(*child);
             out << std::endl;
         }
@@ -156,6 +157,34 @@ class codegenASTPrinter
 
     void visit(const CdqInstruction &node) const { out << "cdq"; }
 
+    void visit(const CmpInstruction &node) const
+    {
+        if (node.preStackFixInstruction)
+        {
+            visit(*node.preStackFixInstruction);
+            out << "\n    ";
+        }
+        out << "cmpl    ";
+        dispatch(*node.a);
+        out << ", ";
+        dispatch((*node.b));
+    }
+
+    void visit(const JumpInstruction &node) const { out << "jmp    .L" << node.identifier; }
+
+    void visit(const JumpCCInstruction &node) const
+    {
+        out << "j" << condCodeToString(node.condCode) << "    .L" << node.identifier;
+    }
+
+    void visit(const SetCCInstruction &node) const
+    {
+        out << "set" << condCodeToString(node.condCode) << "    ";
+        dispatch(*node.a);
+    }
+
+    void visit(const Label &node) const { out << ".L" << node.identifier << ":"; }
+
     void dispatch(const Instruction &node) const
     {
         if (auto *p = dynamic_cast<const MoveInstruction *>(&node))
@@ -179,6 +208,26 @@ class codegenASTPrinter
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const CdqInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const CmpInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const JumpInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const JumpCCInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const SetCCInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const Label *>(&node))
         {
             visit(*p);
         }

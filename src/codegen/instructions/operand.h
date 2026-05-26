@@ -12,6 +12,33 @@ enum class RegisterName
     CX
 };
 
+enum class CondCode
+{
+    E,
+    NE,
+    G,
+    GE,
+    L,
+    LE
+};
+
+inline std::string condCodeToString(const CondCode c)
+{
+    if (c == CondCode::E)
+        return "E";
+    if (c == CondCode::NE)
+        return "NE";
+    if (c == CondCode::G)
+        return "G";
+    if (c == CondCode::GE)
+        return "GE";
+    if (c == CondCode::L)
+        return "L";
+    if (c == CondCode::LE)
+        return "LE";
+    return "";
+}
+
 class Operand
 {
   public:

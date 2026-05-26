@@ -30,12 +30,24 @@ class codegenDriver
                            std::vector<std::unique_ptr<Instruction>> &instructions)
     {
         auto src = tackyValToOperand(tackyUnary.src);
-        auto dstForMove = tackyValToOperand(tackyUnary.dst);
-        auto dstForUnary = tackyValToOperand(tackyUnary.dst);
-        instructions.push_back(
-            std::make_unique<MoveInstruction>(std::move(src), std::move(dstForMove)));
-        instructions.push_back(
-            std::make_unique<UnaryInstruction>(std::move(dstForUnary), tackyUnary.op));
+        auto dst1 = tackyValToOperand(tackyUnary.dst);
+        auto dst2 = tackyValToOperand(tackyUnary.dst);
+
+        if (tackyUnary.op == UnaryOp::Not)
+        {
+            std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+            std::unique_ptr<Operand> imm2 = std::make_unique<Immediate>("0");
+            instructions.push_back(
+                std::make_unique<CmpInstruction>(std::move(imm1), std::move(src)));
+            instructions.push_back(
+                std::make_unique<MoveInstruction>(std::move(imm2), std::move(dst1)));
+            instructions.push_back(
+                std::make_unique<SetCCInstruction>(CondCode::E, std::move(dst2)));
+            return;
+        }
+
+        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst1)));
+        instructions.push_back(std::make_unique<UnaryInstruction>(std::move(dst2), tackyUnary.op));
     }
 
     void processTackyReturn(const TackyReturn &tackyReturn,
@@ -84,6 +96,31 @@ class codegenDriver
         instructions.push_back(std::make_unique<MoveInstruction>(std::move(regDX), std::move(dst)));
     }
 
+    static bool isRelationalOp(const BinaryOp op)
+    {
+        return op == BinaryOp::Equal || op == BinaryOp::NotEqual || op == BinaryOp::LessThan ||
+               op == BinaryOp::LessOrEqual || op == BinaryOp::GreaterThan ||
+               op == BinaryOp::GreaterThanOrEqual;
+    }
+
+    static CondCode binaryOpToCondCode(const BinaryOp op)
+    {
+        if (op == BinaryOp::Equal)
+            return CondCode::E;
+        if (op == BinaryOp::NotEqual)
+            return CondCode::NE;
+        if (op == BinaryOp::LessThan)
+            return CondCode::L;
+        if (op == BinaryOp::LessOrEqual)
+            return CondCode::LE;
+        if (op == BinaryOp::GreaterThan)
+            return CondCode::G;
+        if (op == BinaryOp::GreaterThanOrEqual)
+            return CondCode::GE;
+
+        throw std::runtime_error("Illegal operation forwarded to convert to cond code");
+    }
+
     void processTackyBinary(const TackyBinary &tackyBinary,
                             std::vector<std::unique_ptr<Instruction>> &instructions)
     {
@@ -99,13 +136,66 @@ class codegenDriver
         }
         auto src1 = tackyValToOperand(tackyBinary.src1);
         auto src2 = tackyValToOperand(tackyBinary.src2);
-        auto dstForMove = tackyValToOperand(tackyBinary.dst);
-        auto dstForBinary = tackyValToOperand(tackyBinary.dst);
+        auto dst1 = tackyValToOperand(tackyBinary.dst);
+        auto dst2 = tackyValToOperand(tackyBinary.dst);
 
+        if (isRelationalOp(tackyBinary.op))
+        {
+            CondCode cc = binaryOpToCondCode(tackyBinary.op);
+            std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+            instructions.push_back(
+                std::make_unique<CmpInstruction>(std::move(src2), std::move(src1)));
+            instructions.push_back(
+                std::make_unique<MoveInstruction>(std::move(imm1), std::move(dst1)));
+            instructions.push_back(std::make_unique<SetCCInstruction>(cc, std::move(dst2)));
+            return;
+        }
+
+        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src1), std::move(dst1)));
         instructions.push_back(
-            std::make_unique<MoveInstruction>(std::move(src1), std::move(dstForMove)));
-        instructions.push_back(std::make_unique<BinaryInstruction>(
-            std::move(src2), std::move(dstForBinary), tackyBinary.op));
+            std::make_unique<BinaryInstruction>(std::move(src2), std::move(dst2), tackyBinary.op));
+    }
+
+    void processTackyJump(const TackyJump &tackyJump,
+                          std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        instructions.push_back(std::make_unique<JumpInstruction>(tackyJump.identifier));
+    }
+
+    void processTackyJumpIfZero(const TackyJumpIfZero &tackyJIZ,
+                                std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+        auto condition = tackyValToOperand(tackyJIZ.condition);
+        instructions.push_back(
+            std::make_unique<CmpInstruction>(std::move(imm1), std::move(condition)));
+        instructions.push_back(
+            std::make_unique<JumpCCInstruction>(CondCode::E, tackyJIZ.identifier));
+    }
+
+    void processTackyJumpIfNotZero(const TackyJumpIfNotZero &tackyJIZ,
+                                   std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+        auto condition = tackyValToOperand(tackyJIZ.condition);
+        instructions.push_back(
+            std::make_unique<CmpInstruction>(std::move(imm1), std::move(condition)));
+        instructions.push_back(
+            std::make_unique<JumpCCInstruction>(CondCode::NE, tackyJIZ.identifier));
+    }
+
+    void processTackyCopy(const TackyCopy &tackyCopy,
+                          std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyCopy.src);
+        auto dst = tackyValToOperand(tackyCopy.dst);
+        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst)));
+    }
+
+    void processTackyLabel(const TackyLabel &tackyLabel,
+                           std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        instructions.push_back(std::make_unique<Label>(tackyLabel.identifier));
     }
 
     void processTackyInstructions(
@@ -125,6 +215,26 @@ class codegenDriver
             else if (auto *p = dynamic_cast<TackyBinary *>(instruction.get()))
             {
                 processTackyBinary(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyJump *>(instruction.get()))
+            {
+                processTackyJump(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyJumpIfZero *>(instruction.get()))
+            {
+                processTackyJumpIfZero(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyJumpIfNotZero *>(instruction.get()))
+            {
+                processTackyJumpIfNotZero(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyCopy *>(instruction.get()))
+            {
+                processTackyCopy(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyLabel *>(instruction.get()))
+            {
+                processTackyLabel(*p, instructions);
             }
         }
     }
@@ -174,6 +284,15 @@ class codegenDriver
             else if (auto *p = dynamic_cast<IDivInstruction *>(instruction.get()))
             {
                 lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset);
+            }
+            else if (auto *p = dynamic_cast<CmpInstruction *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->b, pseudoToOffset, nextOffset);
+            }
+            else if (auto *p = dynamic_cast<SetCCInstruction *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset);
             }
         }
         if (int frameSize = -nextOffset - 4; frameSize > 0)
@@ -261,6 +380,26 @@ class codegenDriver
                 m->preStackFixInstruction =
                     std::make_unique<MoveInstruction>(std::move(m->src), std::move(ecxRegister));
                 m->src = std::move(clRegister);
+                rewritten.push_back(std::move(instr));
+            }
+            else if (auto *m = dynamic_cast<CmpInstruction *>(instr.get()))
+            {
+                if (isStack(*m->a) && isStack(*m->b))
+                {
+                    auto r10a = std::make_unique<Register>(RegisterName::R10);
+                    auto r10b = std::make_unique<Register>(RegisterName::R10);
+                    m->preStackFixInstruction =
+                        std::make_unique<MoveInstruction>(std::move(m->a), std::move(r10a));
+                    m->a = std::move(r10b);
+                }
+                else if (isImmediate(*m->b))
+                {
+                    auto r11a = std::make_unique<Register>(RegisterName::R11);
+                    auto r11b = std::make_unique<Register>(RegisterName::R11);
+                    m->preStackFixInstruction =
+                        std::make_unique<MoveInstruction>(std::move(m->b), std::move(r11a));
+                    m->b = std::move(r11b);
+                }
                 rewritten.push_back(std::move(instr));
             }
             else
