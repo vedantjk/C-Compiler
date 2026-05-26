@@ -34,6 +34,46 @@ class TackyDriver
         return TackyConstant{intLiteral->value};
     }
 
+    TackyVal processIncrementDecrement(const std::shared_ptr<UnaryExpr> &unaryExpr,
+                                       std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (unaryExpr->op == "++")
+        {
+            if (unaryExpr->isPostFix)
+            {
+                auto operand = processExpression(unaryExpr->operand, instructions);
+                auto copyVar = TackyVar(makeTemp("tmp."));
+                instructions.push_back(
+                    std::make_unique<TackyCopy>(unaryExpr->line, unaryExpr->col, operand, copyVar));
+                instructions.push_back(
+                    std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col, BinaryOp::Add,
+                                                  operand, TackyConstant("1"), operand));
+                return copyVar;
+            }
+            auto operand = processExpression(unaryExpr->operand, instructions);
+            instructions.push_back(std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col,
+                                                                 BinaryOp::Add, operand,
+                                                                 TackyConstant("1"), operand));
+            return operand;
+        }
+        if (unaryExpr->isPostFix)
+        {
+            auto operand = processExpression(unaryExpr->operand, instructions);
+            auto copyVar = TackyVar(makeTemp("tmp."));
+            instructions.push_back(
+                std::make_unique<TackyCopy>(unaryExpr->line, unaryExpr->col, operand, copyVar));
+            instructions.push_back(std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col,
+                                                                 BinaryOp::Subtract, operand,
+                                                                 TackyConstant("1"), operand));
+            return copyVar;
+        }
+        auto operand = processExpression(unaryExpr->operand, instructions);
+        instructions.push_back(std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col,
+                                                             BinaryOp::Subtract, operand,
+                                                             TackyConstant("1"), operand));
+        return operand;
+    }
+
     TackyVal processUnaryExpr(const std::shared_ptr<UnaryExpr> &unaryExpr,
                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -49,6 +89,10 @@ class TackyDriver
         else if (unaryExpr->op == "!")
         {
             op = UnaryOp::Not;
+        }
+        else if (unaryExpr->op == "++" || unaryExpr->op == "--")
+        {
+            return processIncrementDecrement(unaryExpr, instructions);
         }
         else
             throw std::runtime_error("unhandled unary op: " + unaryExpr->op);
@@ -112,84 +156,40 @@ class TackyDriver
         return result;
     }
 
+    // Maps an operator spelling to its BinaryOp. Handles plain operators, their
+    // compound-assignment forms (e.g. "+=" → Add), and relational operators.
+    static BinaryOp stringToBinaryOp(const std::string &op)
+    {
+        static const std::unordered_map<std::string, BinaryOp> table = {
+            {"+", BinaryOp::Add},         {"+=", BinaryOp::Add},
+            {"-", BinaryOp::Subtract},    {"-=", BinaryOp::Subtract},
+            {"*", BinaryOp::Multiply},    {"*=", BinaryOp::Multiply},
+            {"/", BinaryOp::Divide},      {"/=", BinaryOp::Divide},
+            {"%", BinaryOp::Remainder},   {"%=", BinaryOp::Remainder},
+            {"&", BinaryOp::BitwiseAnd},  {"&=", BinaryOp::BitwiseAnd},
+            {"|", BinaryOp::BitwiseOr},   {"|=", BinaryOp::BitwiseOr},
+            {"^", BinaryOp::BitwiseXor},  {"^=", BinaryOp::BitwiseXor},
+            {"<<", BinaryOp::LeftShift},  {"<<=", BinaryOp::LeftShift},
+            {">>", BinaryOp::RightShift}, {">>=", BinaryOp::RightShift},
+            {"==", BinaryOp::Equal},      {"!=", BinaryOp::NotEqual},
+            {"<", BinaryOp::LessThan},    {"<=", BinaryOp::LessOrEqual},
+            {">", BinaryOp::GreaterThan}, {">=", BinaryOp::GreaterThanOrEqual},
+        };
+        auto it = table.find(op);
+        if (it == table.end())
+            throw std::runtime_error("stringToBinaryOp: unknown operator '" + op + "'");
+        return it->second;
+    }
+
     TackyVal processBinaryExpr(const std::shared_ptr<BinaryExpr> &binaryExpr,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        BinaryOp op;
-        if (binaryExpr->binaryOp == "+")
-        {
-            op = BinaryOp::Add;
-        }
-        else if (binaryExpr->binaryOp == "-")
-        {
-            op = BinaryOp::Subtract;
-        }
-        else if (binaryExpr->binaryOp == "*")
-        {
-            op = BinaryOp::Multiply;
-        }
-        else if (binaryExpr->binaryOp == "/")
-        {
-            op = BinaryOp::Divide;
-        }
-        else if (binaryExpr->binaryOp == "%")
-        {
-            op = BinaryOp::Remainder;
-        }
-        else if (binaryExpr->binaryOp == "&")
-        {
-            op = BinaryOp::BitwiseAnd;
-        }
-        else if (binaryExpr->binaryOp == "|")
-        {
-            op = BinaryOp::BitwiseOr;
-        }
-        else if (binaryExpr->binaryOp == "^")
-        {
-            op = BinaryOp::BitwiseXor;
-        }
-        else if (binaryExpr->binaryOp == "<<")
-        {
-            op = BinaryOp::LeftShift;
-        }
-        else if (binaryExpr->binaryOp == ">>")
-        {
-            op = BinaryOp::RightShift;
-        }
-        else if (binaryExpr->binaryOp == "==")
-        {
-            op = BinaryOp::Equal;
-        }
-        else if (binaryExpr->binaryOp == "!=")
-        {
-            op = BinaryOp::NotEqual;
-        }
-        else if (binaryExpr->binaryOp == "<")
-        {
-            op = BinaryOp::LessThan;
-        }
-        else if (binaryExpr->binaryOp == "<=")
-        {
-            op = BinaryOp::LessOrEqual;
-        }
-        else if (binaryExpr->binaryOp == ">")
-        {
-            op = BinaryOp::GreaterThan;
-        }
-        else if (binaryExpr->binaryOp == ">=")
-        {
-            op = BinaryOp::GreaterThanOrEqual;
-        }
-        else if (binaryExpr->binaryOp == "&&")
-        {
+        if (binaryExpr->binaryOp == "&&")
             return processLogicalAnd(binaryExpr, instructions);
-        }
-        else if (binaryExpr->binaryOp == "||")
-        {
+        if (binaryExpr->binaryOp == "||")
             return processLogicalOr(binaryExpr, instructions);
-        }
-        else
-            throw std::runtime_error("unhandled binary op: " + binaryExpr->binaryOp);
+
+        BinaryOp op = stringToBinaryOp(binaryExpr->binaryOp);
 
         auto v1 = processExpression(binaryExpr->left, instructions);
         auto v2 = processExpression(binaryExpr->right, instructions);
@@ -212,8 +212,18 @@ class TackyDriver
     {
         auto lhs = processExpression(assignExpr->lhs, instructions);
         auto rhs = processExpression(assignExpr->rhs, instructions);
-        instructions.push_back(
-            std::make_unique<TackyCopy>(assignExpr->line, assignExpr->col, rhs, lhs));
+        if (assignExpr->op != "=")
+        {
+            BinaryOp op = stringToBinaryOp(assignExpr->op);
+            instructions.push_back(std::make_unique<TackyBinary>(assignExpr->line, assignExpr->col,
+                                                                 op, lhs, rhs, lhs));
+        }
+        else
+        {
+            instructions.push_back(
+                std::make_unique<TackyCopy>(assignExpr->line, assignExpr->col, rhs, lhs));
+        }
+
         return lhs;
     }
 
