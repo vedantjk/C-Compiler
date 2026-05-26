@@ -227,6 +227,30 @@ class TackyDriver
         return lhs;
     }
 
+    TackyVal processTernaryExpr(const std::shared_ptr<TernaryExpr> &ternaryExpr,
+                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        TackyVar temp = TackyVar(makeTemp("tmp."));
+        std::string false_label = makeTemp("ternary_false.");
+        std::string end_label = makeTemp("end.");
+        auto condition = processExpression(ternaryExpr->condition, instructions);
+        instructions.push_back(std::make_unique<TackyJumpIfZero>(
+            ternaryExpr->line, ternaryExpr->col, condition, false_label));
+        auto trueExpr = processExpression(ternaryExpr->thenBranch, instructions);
+        instructions.push_back(
+            std::make_unique<TackyCopy>(ternaryExpr->line, ternaryExpr->col, trueExpr, temp));
+        instructions.push_back(
+            std::make_unique<TackyJump>(ternaryExpr->line, ternaryExpr->col, end_label));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(ternaryExpr->line, ternaryExpr->col, false_label));
+        auto falseExpr = processExpression(ternaryExpr->elseBranch, instructions);
+        instructions.push_back(
+            std::make_unique<TackyCopy>(ternaryExpr->line, ternaryExpr->col, falseExpr, temp));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(ternaryExpr->line, ternaryExpr->col, end_label));
+        return temp;
+    }
+
     TackyVal processExpression(const std::shared_ptr<Expression> &expression,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -249,6 +273,10 @@ class TackyDriver
         if (const auto &p = std::dynamic_pointer_cast<AssignExpr>(expression))
         {
             return processAssignExpr(p, instructions);
+        }
+        if (const auto &p = std::dynamic_pointer_cast<TernaryExpr>(expression))
+        {
+            return processTernaryExpr(p, instructions);
         }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
@@ -300,6 +328,33 @@ class TackyDriver
         processExpression(exprStmt->expr, instructions);
     }
 
+    void processIfStmt(const std::shared_ptr<IfStmt> &ifStmt,
+                       std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        std::string end_label = makeTemp("end.");
+
+        auto condition = processExpression(ifStmt->condition, instructions);
+        if (ifStmt->elseBlock)
+        {
+            std::string else_label = makeTemp("else.");
+            instructions.push_back(std::make_unique<TackyJumpIfZero>(ifStmt->line, ifStmt->col,
+                                                                     condition, else_label));
+            processBlockStmt(ifStmt->thenBlock, instructions);
+            instructions.push_back(
+                std::make_unique<TackyJump>(ifStmt->line, ifStmt->col, end_label));
+            instructions.push_back(
+                std::make_unique<TackyLabel>(ifStmt->line, ifStmt->col, else_label));
+            processBlockStmt(ifStmt->elseBlock, instructions);
+        }
+        else
+        {
+            instructions.push_back(
+                std::make_unique<TackyJumpIfZero>(ifStmt->line, ifStmt->col, condition, end_label));
+            processBlockStmt(ifStmt->thenBlock, instructions);
+        }
+        instructions.push_back(std::make_unique<TackyLabel>(ifStmt->line, ifStmt->col, end_label));
+    }
+
     void processBlockStmt(const std::shared_ptr<BlockStmt> &blockStmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -316,6 +371,10 @@ class TackyDriver
             else if (const auto &p = std::dynamic_pointer_cast<ExprStmt>(stmt))
             {
                 processExprStmt(p, instructions);
+            }
+            else if (const auto &p = std::dynamic_pointer_cast<IfStmt>(stmt))
+            {
+                processIfStmt(p, instructions);
             }
         }
     }

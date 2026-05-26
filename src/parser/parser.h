@@ -486,11 +486,21 @@ class Parser
         if (peek() == ELSE)
         {
             consume();
-            if (peek() != LEFT_BRACE)
+            if (peek() == IF)
             {
-                throw std::logic_error("else statement expects braces");
+                // `else if ...` is parsed as `else { if ... }`: parse the nested if
+                // and wrap it in a synthetic block so it fits elseBlock's type.
+                std::vector<std::shared_ptr<Statement>> body = {parseIfStmt()};
+                elseBlock = std::make_shared<BlockStmt>(ifToken.line, ifToken.col, std::move(body));
             }
-            elseBlock = parseBlockStmt();
+            else if (peek() == LEFT_BRACE)
+            {
+                elseBlock = parseBlockStmt();
+            }
+            else
+            {
+                throw std::logic_error("else statement expects '{' or 'if'");
+            }
         }
         return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
     }
