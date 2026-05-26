@@ -154,13 +154,14 @@ FAIL=0
 SKIP=0
 FAILED_FILES=()
 
-# Returns 0 if the file's parent dir matches a chapter in CHAPTERS_IMPLEMENTED.
+# Returns 0 if the file's path contains a chapter dir in CHAPTERS_IMPLEMENTED.
+# Matching the whole path (not just the immediate parent) lets an implemented
+# chapter also cover its extra_credit/ subdir, while keeping later chapters'
+# extra_credit gated by their own (unimplemented) chapter.
 is_chapter_implemented() {
     local f="$1"
-    local chapter
-    chapter="$(basename "$(dirname "$f")")"
     for c in "${CHAPTERS_IMPLEMENTED[@]}"; do
-        [[ "$c" == "$chapter" ]] && return 0
+        [[ "$f" == *"/$c/"* ]] && return 0
     done
     return 1
 }
