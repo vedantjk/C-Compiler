@@ -1027,7 +1027,9 @@ class SemanticAnalyzer
             }
             else if (auto x = std::dynamic_pointer_cast<BlockStmt>(statement))
             {
+                symbolTable.enterScope();
                 analyzeStatements(x);
+                symbolTable.exitScope();
             }
             else if (auto x = std::dynamic_pointer_cast<ReturnStmt>(statement))
             {

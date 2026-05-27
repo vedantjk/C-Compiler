@@ -41,7 +41,7 @@ TIMEOUT="5s"
 PATHS=()
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump per chapter.
-CHAPTERS_IMPLEMENTED=(chapter_1 chapter_2 chapter_3 chapter_4 chapter_5 chapter_6)
+CHAPTERS_IMPLEMENTED=(chapter_1 chapter_2 chapter_3 chapter_4 chapter_5 chapter_6 chapter_7)
 ARTIFACT_DIR="$REPO_ROOT/cmake-build-debug/test-artifacts"
 
 while [[ $# -gt 0 ]]; do

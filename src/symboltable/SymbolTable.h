@@ -32,6 +32,7 @@ inline std::string kindToString(Kind kind)
 struct Symbol
 {
     std::string name;
+    std::string uniqueName;
     std::shared_ptr<Type> type;
     Kind kind;
     int line, column;
@@ -77,13 +78,20 @@ class Scope
 class SymbolTable
 {
     std::vector<Scope> scopes;
+    std::unordered_map<std::string, int> count;
 
   public:
     SymbolTable() { scopes.emplace_back(); }
 
     bool insert(const std::string &name, std::shared_ptr<Symbol> symbol, Kind kind)
     {
-        return scopes[scopes.size() - 1].insert(name, symbol, kind);
+        if (!scopes[scopes.size() - 1].insert(name, symbol, kind))
+            return false;
+        if (kind == Kind::VARIABLE)
+            symbol->uniqueName = name + "." + std::to_string(++count[name]);
+        else
+            symbol->uniqueName = name;
+        return true;
     }
 
     std::shared_ptr<Symbol> find(const std::string &name, Kind kind) const

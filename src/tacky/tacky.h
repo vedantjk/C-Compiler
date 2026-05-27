@@ -26,7 +26,7 @@ class TackyDriver
     std::string makeTemp(const std::string &&name)
     {
         tempCounters[name]++;
-        return name + std::to_string(tempCounters[name]);
+        return "." + name + std::to_string(tempCounters[name]);
     }
 
     TackyVal processIntLiteral(const std::shared_ptr<IntLiterals> &intLiteral)
@@ -204,7 +204,8 @@ class TackyDriver
     TackyVal processVariableExpr(const std::shared_ptr<VariableExpr> &variableExpr,
                                  std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        return TackyVar(variableExpr->name);
+        return TackyVar(variableExpr->symbol ? variableExpr->symbol->uniqueName
+                                             : variableExpr->name);
     }
 
     TackyVal processAssignExpr(const std::shared_ptr<AssignExpr> &assignExpr,
@@ -284,7 +285,7 @@ class TackyDriver
     TackyVal processVarDecl(const std::shared_ptr<VarDecl> &varDecl,
                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        return TackyVar(varDecl->name);
+        return TackyVar(varDecl->symbol ? varDecl->symbol->uniqueName : varDecl->name);
     }
 
     void processReturnStmt(const std::shared_ptr<ReturnStmt> &returnStmt,
@@ -375,6 +376,10 @@ class TackyDriver
             else if (const auto &p = std::dynamic_pointer_cast<IfStmt>(stmt))
             {
                 processIfStmt(p, instructions);
+            }
+            else if (const auto &p = std::dynamic_pointer_cast<BlockStmt>(stmt))
+            {
+                processBlockStmt(p, instructions);
             }
         }
     }
