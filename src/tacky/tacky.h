@@ -356,31 +356,138 @@ class TackyDriver
         instructions.push_back(std::make_unique<TackyLabel>(ifStmt->line, ifStmt->col, end_label));
     }
 
+    void processBreakStmt(const std::shared_ptr<BreakStmt> &breakStmt,
+                          std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        instructions.push_back(std::make_unique<TackyJump>(
+            breakStmt->line, breakStmt->col, ".break_label" + std::to_string(breakStmt->label)));
+    }
+
+    void processContinueStmt(const std::shared_ptr<ContinueStmt> &continueStmt,
+                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        instructions.push_back(
+            std::make_unique<TackyJump>(continueStmt->line, continueStmt->col,
+                                        ".continue_label" + std::to_string(continueStmt->label)));
+    }
+
+    void processDoWhileStmt(const std::shared_ptr<DoWhileStmt> &doWhileStmt,
+                            std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        std::string labelId = std::to_string(doWhileStmt->label);
+        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt->line, doWhileStmt->col,
+                                                            ".start_label" + labelId));
+        processBlockStmt(doWhileStmt->block, instructions);
+        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt->line, doWhileStmt->col,
+                                                            ".continue_label" + labelId));
+        auto result = processExpression(doWhileStmt->condition, instructions);
+        instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
+            doWhileStmt->line, doWhileStmt->col, result, ".start_label" + labelId));
+        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt->line, doWhileStmt->col,
+                                                            ".break_label" + labelId));
+    }
+
+    void processWhileStmt(const std::shared_ptr<WhileStmt> &whileStmt,
+                          std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        std::string labelId = std::to_string(whileStmt->label);
+        instructions.push_back(std::make_unique<TackyLabel>(whileStmt->line, whileStmt->col,
+                                                            ".continue_label" + labelId));
+        auto result = processExpression(whileStmt->condition, instructions);
+        instructions.push_back(std::make_unique<TackyJumpIfZero>(whileStmt->line, whileStmt->col,
+                                                                 result, ".break_label" + labelId));
+        processBlockStmt(whileStmt->whileBlock, instructions);
+        instructions.push_back(std::make_unique<TackyJump>(whileStmt->line, whileStmt->col,
+                                                           ".continue_label" + labelId));
+        instructions.push_back(std::make_unique<TackyLabel>(whileStmt->line, whileStmt->col,
+                                                            ".break_label" + labelId));
+    }
+
+    void processForStmt(const std::shared_ptr<ForStmt> &forStmt,
+                        std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        std::string labelId = std::to_string(forStmt->label);
+
+        if (forStmt->initialization)
+        {
+            processStatement(forStmt->initialization, instructions);
+        }
+        instructions.push_back(
+            std::make_unique<TackyLabel>(forStmt->line, forStmt->col, ".start_label" + labelId));
+        if (forStmt->condition)
+        {
+            auto condStmt = std::dynamic_pointer_cast<ExprStmt>(forStmt->condition);
+            auto condVal = processExpression(condStmt->expr, instructions);
+            instructions.push_back(std::make_unique<TackyJumpIfZero>(
+                forStmt->line, forStmt->col, condVal, ".break_label" + labelId));
+        }
+        if (forStmt->forBlock)
+        {
+            processBlockStmt(forStmt->forBlock, instructions);
+        }
+        instructions.push_back(
+            std::make_unique<TackyLabel>(forStmt->line, forStmt->col, ".continue_label" + labelId));
+        if (forStmt->update)
+        {
+            processStatement(forStmt->update, instructions);
+        }
+        instructions.push_back(
+            std::make_unique<TackyJump>(forStmt->line, forStmt->col, ".start_label" + labelId));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(forStmt->line, forStmt->col, ".break_label" + labelId));
+    }
+
+    void processStatement(const std::shared_ptr<Statement> &stmt,
+                          std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (const auto &p = std::dynamic_pointer_cast<ReturnStmt>(stmt))
+        {
+            processReturnStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<DeclareStmt>(stmt))
+        {
+            processDeclareStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<ExprStmt>(stmt))
+        {
+            processExprStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<IfStmt>(stmt))
+        {
+            processIfStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<BlockStmt>(stmt))
+        {
+            processBlockStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<WhileStmt>(stmt))
+        {
+            processWhileStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<DoWhileStmt>(stmt))
+        {
+            processDoWhileStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<ForStmt>(stmt))
+        {
+            processForStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<ContinueStmt>(stmt))
+        {
+            processContinueStmt(p, instructions);
+        }
+        else if (const auto &p = std::dynamic_pointer_cast<BreakStmt>(stmt))
+        {
+            processBreakStmt(p, instructions);
+        }
+    }
+
     void processBlockStmt(const std::shared_ptr<BlockStmt> &blockStmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         for (const auto &stmt : blockStmt->statements)
         {
-            if (const auto &p = std::dynamic_pointer_cast<ReturnStmt>(stmt))
-            {
-                processReturnStmt(p, instructions);
-            }
-            else if (const auto &p = std::dynamic_pointer_cast<DeclareStmt>(stmt))
-            {
-                processDeclareStmt(p, instructions);
-            }
-            else if (const auto &p = std::dynamic_pointer_cast<ExprStmt>(stmt))
-            {
-                processExprStmt(p, instructions);
-            }
-            else if (const auto &p = std::dynamic_pointer_cast<IfStmt>(stmt))
-            {
-                processIfStmt(p, instructions);
-            }
-            else if (const auto &p = std::dynamic_pointer_cast<BlockStmt>(stmt))
-            {
-                processBlockStmt(p, instructions);
-            }
+            processStatement(stmt, instructions);
         }
     }
 

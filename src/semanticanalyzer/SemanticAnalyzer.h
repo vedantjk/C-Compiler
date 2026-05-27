@@ -948,6 +948,7 @@ class SemanticAnalyzer
     {
         int prevLoopLabel = loopLabel;
         loopLabel = ++labelCounter;
+        whileStmt->label = loopLabel;
         analyzeExpr(whileStmt->condition);
 
         if (!isScalar(whileStmt->condition->resolvedType))
@@ -967,6 +968,7 @@ class SemanticAnalyzer
     {
         int prevLoopLabel = loopLabel;
         loopLabel = ++labelCounter;
+        doWhileStmt->label = loopLabel;
         analyzeExpr(doWhileStmt->condition);
 
         if (!isScalar(doWhileStmt->condition->resolvedType))
@@ -986,6 +988,7 @@ class SemanticAnalyzer
     {
         int prevLoopLabel = loopLabel;
         loopLabel = ++labelCounter;
+        forStmt->label = loopLabel;
         symbolTable.enterScope();
 
         if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->initialization))
