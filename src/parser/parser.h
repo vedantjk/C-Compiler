@@ -543,6 +543,11 @@ class Parser
         std::shared_ptr<Statement> initialization;
         if (peek() == SEMI_COLON)
             consume();
+        else if (isTypeStart(peek()))
+        {
+            auto [type, line, col] = parseBaseType();
+            initialization = parseDeclareStmt(type, line, col);
+        }
         else
             initialization = parseExprStatement(true);
         std::shared_ptr<Statement> condition;

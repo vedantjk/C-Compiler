@@ -9,6 +9,7 @@
 class WhileStmt : public Statement
 {
   public:
+    int label;
     std::shared_ptr<Expression> condition;
     std::shared_ptr<BlockStmt> whileBlock;
 

@@ -6,6 +6,7 @@
 class DoWhileStmt : public Statement
 {
   public:
+    int label;
     std::shared_ptr<BlockStmt> block;
     std::shared_ptr<Expression> condition;
 

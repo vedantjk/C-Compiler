@@ -3,6 +3,8 @@
 #include "../ast/ASTNodes/Program.h"
 #include "../ast/Expressions/FunctionCallExpr.h"
 #include "../ast/Expressions/IntLiterals.h"
+#include "../ast/Statements/BreakStmt.h"
+#include "../ast/Statements/ContinueStmt.h"
 #include "../ast/Statements/DeclareStmt.h"
 #include "../ast/Statements/ExprStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
@@ -62,7 +64,8 @@ class SemanticAnalyzer
     SymbolTable symbolTable;
     Diagnostic::DiagnosticEngine &diag;
     std::shared_ptr<Type> currentReturnType;
-    int loopDepth = 0;
+    int loopLabel = 0;
+    int labelCounter = 0;
 
   public:
     explicit SemanticAnalyzer(Diagnostic::DiagnosticEngine &diag) : diag(diag) {}
@@ -943,6 +946,8 @@ class SemanticAnalyzer
 
     void analyzeWhileStmt(const std::shared_ptr<WhileStmt> &whileStmt)
     {
+        int prevLoopLabel = loopLabel;
+        loopLabel = ++labelCounter;
         analyzeExpr(whileStmt->condition);
 
         if (!isScalar(whileStmt->condition->resolvedType))
@@ -952,15 +957,16 @@ class SemanticAnalyzer
                       whileStmt->condition->resolvedType->toString());
         }
 
-        loopDepth += 1;
         symbolTable.enterScope();
         analyzeStatements(whileStmt->whileBlock);
         symbolTable.exitScope();
-        loopDepth -= 1;
+        loopLabel = prevLoopLabel;
     }
 
     void analyzeDoWhileStmt(const std::shared_ptr<DoWhileStmt> &doWhileStmt)
     {
+        int prevLoopLabel = loopLabel;
+        loopLabel = ++labelCounter;
         analyzeExpr(doWhileStmt->condition);
 
         if (!isScalar(doWhileStmt->condition->resolvedType))
@@ -970,18 +976,25 @@ class SemanticAnalyzer
                       doWhileStmt->condition->resolvedType->toString());
         }
 
-        loopDepth += 1;
         symbolTable.enterScope();
         analyzeStatements(doWhileStmt->block);
         symbolTable.exitScope();
-        loopDepth -= 1;
+        loopLabel = prevLoopLabel;
     }
 
     void analyzeForStmt(const std::shared_ptr<ForStmt> &forStmt)
     {
+        int prevLoopLabel = loopLabel;
+        loopLabel = ++labelCounter;
+        symbolTable.enterScope();
+
         if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->initialization))
         {
             analyzeExprStmt(x);
+        }
+        else if (auto d = std::dynamic_pointer_cast<DeclareStmt>(forStmt->initialization))
+        {
+            analyzeDeclareStmt(d);
         }
         if (auto x = std::dynamic_pointer_cast<ExprStmt>(forStmt->condition))
         {
@@ -998,18 +1011,27 @@ class SemanticAnalyzer
             analyzeExprStmt(x);
         }
 
-        loopDepth += 1;
         symbolTable.enterScope();
         analyzeStatements(forStmt->forBlock);
         symbolTable.exitScope();
-        loopDepth -= 1;
+
+        symbolTable.exitScope();
+        loopLabel = prevLoopLabel;
     }
 
     void analyzeBreakContinueStmt(const std::shared_ptr<Statement> &stmt)
     {
-        if (loopDepth <= 0)
+        if (loopLabel <= 0)
         {
             error(stmt->getLine(), stmt->getCol(), "no loop statements found");
+        }
+        if (auto p = std::dynamic_pointer_cast<BreakStmt>(stmt))
+        {
+            p->label = loopLabel;
+        }
+        if (auto p = std::dynamic_pointer_cast<ContinueStmt>(stmt))
+        {
+            p->label = loopLabel;
         }
     }
 

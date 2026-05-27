@@ -7,6 +7,7 @@ class BreakStmt : public Statement
 {
 
   public:
+    int label;
     BreakStmt(int line_, int col_) : Statement(line_, col_) {}
 
     void print(std::ostream &out, int tab) const override

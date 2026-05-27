@@ -9,6 +9,7 @@
 class ForStmt : public Statement
 {
   public:
+    int label;
     std::shared_ptr<Statement> initialization;
     std::shared_ptr<Statement> condition;
     std::shared_ptr<Statement> update;
