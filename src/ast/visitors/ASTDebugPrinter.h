@@ -23,6 +23,7 @@
 #include "../Statements/DoWhileStmt.h"
 #include "../Statements/ExprStmt.h"
 #include "../Statements/ForStmt.h"
+#include "../Statements/FunctionDeclStmt.h"
 #include "../Statements/IfStmt.h"
 #include "../Statements/ReturnStmt.h"
 #include "../Statements/Statement.h"
@@ -170,6 +171,11 @@ class ASTDebugPrinter
         if (auto x = std::dynamic_pointer_cast<ReturnStmt>(node))
         {
             visitReturnStmt(x);
+            return;
+        }
+        if (auto x = std::dynamic_pointer_cast<FunctionDeclStmt>(node))
+        {
+            visitFunctionDeclStmt(x);
             return;
         }
 
@@ -402,6 +408,14 @@ class ASTDebugPrinter
         printHeader("ReturnStmt", *n);
         ++indent;
         printChild("returnExpression", n->returnExpression);
+        --indent;
+    }
+
+    void visitFunctionDeclStmt(const std::shared_ptr<FunctionDeclStmt> &n)
+    {
+        printHeader("FunctionDeclStmt", *n);
+        ++indent;
+        printChild("declaration", n->declaration);
         --indent;
     }
 

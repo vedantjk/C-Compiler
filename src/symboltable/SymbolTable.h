@@ -94,6 +94,11 @@ class SymbolTable
         return true;
     }
 
+    std::shared_ptr<Symbol> findSameScope(const std::string &name, Kind kind) const
+    {
+        return scopes.back().find(name, kind);
+    }
+
     std::shared_ptr<Symbol> find(const std::string &name, Kind kind) const
     {
         for (auto it = scopes.rbegin(); it != scopes.rend(); ++it)

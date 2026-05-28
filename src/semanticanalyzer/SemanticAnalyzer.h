@@ -94,7 +94,7 @@ class SemanticAnalyzer
     void declareFunction(const std::shared_ptr<Function> &node,
                          const std::shared_ptr<FunctionType> &fnType)
     {
-        auto existing = symbolTable.find(node->name, Kind::FUNCTION);
+        auto existing = symbolTable.findSameScope(node->name, Kind::FUNCTION);
 
         if (!existing)
         {
@@ -725,6 +725,14 @@ class SemanticAnalyzer
             error(expr->getLine(), expr->getCol(), "function " + functionName + " not declared");
             expr->resolvedType = IntType::getInstance();
         }
+        else if (checkFunctionExistence->kind != Kind::FUNCTION)
+        {
+            error(expr->getLine(), expr->getCol(),
+                  "'" + functionName + "' is not a function (declared as " +
+                      kindToString(checkFunctionExistence->kind) + " at line " +
+                      std::to_string(checkFunctionExistence->line) + ").");
+            expr->resolvedType = IntType::getInstance();
+        }
         else
         {
             auto functionType =
@@ -1038,6 +1046,19 @@ class SemanticAnalyzer
         }
     }
 
+    void analyzeFunctionDeclStmt(const std::shared_ptr<FunctionDeclStmt> &stmt)
+    {
+        std::vector<std::shared_ptr<Type>> paramTypes;
+        paramTypes.reserve(stmt->declaration->parameters.size());
+        for (const auto &param : stmt->declaration->parameters)
+        {
+            paramTypes.push_back(param.type);
+        }
+        auto functionType = std::make_shared<FunctionType>(stmt->declaration->type, paramTypes,
+                                                           stmt->declaration->variadic);
+        declareFunction(stmt->declaration, functionType);
+    }
+
     void analyzeStatements(const std::shared_ptr<BlockStmt> &blockStmt)
     {
         for (const auto &statement : blockStmt->statements)
@@ -1084,6 +1105,10 @@ class SemanticAnalyzer
             {
                 analyzeBreakContinueStmt(x);
             }
+            else if (auto x = std::dynamic_pointer_cast<FunctionDeclStmt>(statement))
+            {
+                analyzeFunctionDeclStmt(x);
+            }
         }
     }
 
@@ -1099,8 +1124,6 @@ class SemanticAnalyzer
             paramTypes.push_back(param.type);
         }
         auto functionType = std::make_shared<FunctionType>(node->type, paramTypes, node->variadic);
-        const auto function = std::make_shared<Symbol>(node->name, functionType, node->getLine(),
-                                                       node->getCol(), Kind::FUNCTION);
         declareFunction(node, functionType);
         symbolTable.enterScope();
         for (auto &param : node->parameters)

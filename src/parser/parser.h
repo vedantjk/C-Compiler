@@ -26,6 +26,7 @@
 #include "../ast/Statements/DoWhileStmt.h"
 #include "../ast/Statements/ExprStmt.h"
 #include "../ast/Statements/ForStmt.h"
+#include "../ast/Statements/FunctionDeclStmt.h"
 #include "../ast/Statements/IfStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/Statements/WhileStmt.h"
@@ -598,21 +599,19 @@ class Parser
                 auto [type, line, col] = parseBaseType();
                 if (peek() == IDENTIFIER && peekNext() == LEFT_PAREN)
                 {
-                    // local function declaration — parse and discard. C89 allows
-                    // forward decls inside blocks; we lex the prototype away
-                    // since the real definition lives at file scope.
-                    consume(); // function name
-                    consume(); // (
-                    int depth = 1;
-                    while (depth > 0 && peek() != EOF_TOKEN)
+                    // Local function declaration: a forward prototype scoped to
+                    // this block. Parse it through the same path as file scope and
+                    // keep the node so SA can register it (and drop it at block exit).
+                    Token identifier = expect(IDENTIFIER); // function name
+                    consume();                             // (
+                    auto decl = parseFunction(type, line, col, identifier);
+                    if (decl->statements)
                     {
-                        if (peek() == LEFT_PAREN)
-                            depth++;
-                        else if (peek() == RIGHT_PAREN)
-                            depth--;
-                        consume();
+                        throw std::logic_error(
+                            "function definition not allowed in block scope at line " +
+                            std::to_string(line) + ", col " + std::to_string(col));
                     }
-                    expect(SEMI_COLON);
+                    statements.emplace_back(std::make_shared<FunctionDeclStmt>(line, col, decl));
                     continue;
                 }
                 statements.emplace_back(parseDeclareStmt(type, line, col));
