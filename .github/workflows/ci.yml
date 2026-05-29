@@ -40,3 +40,8 @@ jobs:
         env:
           CC89: ${{ github.workspace }}/build-valgrind/cc89
         run: bash benchmarks/run_tests.sh --stage validate benchmarks/sa
+
+      - name: Codegen execution suite
+        env:
+          CC89: ${{ github.workspace }}/build-valgrind/cc89
+        run: bash benchmarks/run_tests.sh --stage run benchmarks/nlsandler/parse_valid

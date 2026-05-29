@@ -16,6 +16,9 @@ class codegenASTPrinter
         {
             dispatch(*child);
         }
+        // Mark the stack non-executable. Without this section GNU ld defaults to
+        // an executable stack and warns; required for clean System V/ELF output.
+        out << "    .section .note.GNU-stack,\"\",@progbits\n";
     }
 
     void visit(const codegenFunction &node) const
