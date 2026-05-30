@@ -587,15 +587,10 @@ class Parser
     {
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::shared_ptr<Statement>> statements;
-        bool seenNonDeclStatements = false;
         while (peek() != RIGHT_BRACE)
         {
             if (isTypeStart(peek()))
             {
-                if (seenNonDeclStatements)
-                {
-                    throw std::logic_error("cannot add declarations after statements.");
-                }
                 auto [type, line, col] = parseBaseType();
                 if (peek() == IDENTIFIER && peekNext() == LEFT_PAREN)
                 {
@@ -617,7 +612,6 @@ class Parser
                 statements.emplace_back(parseDeclareStmt(type, line, col));
                 continue;
             }
-            seenNonDeclStatements = true;
             if (peek() == LEFT_BRACE)
             {
                 statements.emplace_back(parseBlockStmt());

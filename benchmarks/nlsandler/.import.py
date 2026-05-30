@@ -24,7 +24,7 @@ SRC_ROOT_CANDIDATES = [
 SRC_ROOT = next((p for p in SRC_ROOT_CANDIDATES if p.exists()), SRC_ROOT_CANDIDATES[0])
 DST_ROOT = Path(__file__).parent
 
-SKIP_CHAPTERS = {11, 12, 13, 17, 19, 20}
+SKIP_CHAPTERS = set()  # import every chapter; run_tests.sh gates execution by CHAPTERS_IMPLEMENTED
 
 UNSUPPORTED_TOKENS = [
     r"\blong\b", r"\bdouble\b", r"\bfloat\b",
@@ -98,6 +98,33 @@ def strip_strings_comments(src: str):
     return "".join(out)
 
 
+def mask_preprocessor_lines(s: str):
+    """Blank out preprocessor directive lines (those whose first non-blank char
+    is '#') with spaces, preserving length and newlines. The brace-adder scans
+    the masked text, so this stops the `else` in `#else` / `if` in `#if ...` from
+    being mistaken for C control-flow keywords. cc89's lexer skips '#' lines too,
+    so the directives are left intact in the written-out source."""
+    out = list(s)
+    n = len(s)
+    i = 0
+    at_line_start = True
+    while i < n:
+        if at_line_start:
+            j = i
+            while j < n and (s[j] == " " or s[j] == "\t"):
+                j += 1
+            if j < n and s[j] == "#":
+                k = j
+                while k < n and s[k] != "\n":
+                    out[k] = " "
+                    k += 1
+                i = k
+                continue
+        at_line_start = s[i] == "\n"
+        i += 1
+    return "".join(out)
+
+
 def find_matching(src: str, open_idx: int, open_ch: str, close_ch: str) -> int:
     """Return index of the closing character matching src[open_idx]."""
     depth = 1
@@ -113,7 +140,7 @@ def find_matching(src: str, open_idx: int, open_ch: str, close_ch: str) -> int:
 
 def add_braces(src: str) -> str:
     """Wrap brace-less if/while/for/else/do bodies in `{ ... }`."""
-    masked = strip_strings_comments(src)
+    masked = mask_preprocessor_lines(strip_strings_comments(src))
 
     # collect insertion points: list of (offset, text_to_insert)
     inserts = []  # each: (idx, "{") and (idx, "}")
@@ -169,25 +196,53 @@ def add_braces(src: str) -> str:
         cp = find_matching(s, i, "(", ")")
         if cp < 0:
             return n
-        i = skip_ws(s, cp + 1)
-        if i < n and s[i] == "{":
-            i = find_matching(s, i, "{", "}") + 1
-        else:
-            i = find_body_end(s, i)
-        # consume any chain of `else [if ...]`
-        while True:
-            j = skip_ws(s, i)
-            if j + 4 <= n and s[j:j+4] == "else" and (j+4 == n or not (s[j+4].isalnum() or s[j+4] == "_")):
-                i = skip_ws(s, j + 4)
-                if i + 2 <= n and s[i:i+2] == "if" and (i+2 == n or not (s[i+2].isalnum() or s[i+2] == "_")):
-                    i = find_if_end(s, i)
-                elif i < n and s[i] == "{":
-                    i = find_matching(s, i, "{", "}") + 1
-                else:
-                    i = find_body_end(s, i)
-            else:
-                break
+        i = find_stmt_end(s, cp + 1)
+        # Consume the optional single `else <stmt>`. An `else if ...` is handled
+        # recursively: find_stmt_end sees the `if` and consumes that whole nested
+        # if-statement (including its own else), so we must NOT loop here. A plain
+        # `else` binds to at most one `if`; a second following `else` belongs to an
+        # enclosing `if`, not this one, and looping would wrongly swallow it.
+        j = skip_ws(s, i)
+        if j + 4 <= n and s[j:j+4] == "else" and (j + 4 == n or not (s[j+4].isalnum() or s[j+4] == "_")):
+            i = find_stmt_end(s, j + 4)
         return i
+
+    def find_stmt_end(s, j):
+        """End offset (exclusive) of the full statement starting at/after j,
+        consuming an entire if-else chain, loop, do-while, or braced block as a
+        single unit (not just the first ';'). Falls back to find_body_end for a
+        plain expression/declaration statement. This is what lets a brace-less
+        body that is itself control flow (e.g. `if (...) if (...) ...; else ...;`)
+        get wrapped as one block instead of being split at the first ';'."""
+        j = skip_ws(s, j)
+        n = len(s)
+        if j >= n:
+            return n
+        if s[j] == "{":
+            return find_matching(s, j, "{", "}") + 1
+        if re.match(r"if\b", s[j:]):
+            return find_if_end(s, j)
+        m = re.match(r"(while|for)\b", s[j:])
+        if m:
+            p = skip_ws(s, j + m.end())
+            if p < n and s[p] == "(":
+                cp = find_matching(s, p, "(", ")")
+                if cp >= 0:
+                    return find_stmt_end(s, cp + 1)
+            return find_body_end(s, j)
+        if re.match(r"do\b", s[j:]):
+            body_end = find_stmt_end(s, j + 2)
+            w = skip_ws(s, body_end)
+            if re.match(r"while\b", s[w:]):
+                p = skip_ws(s, w + 5)
+                if p < n and s[p] == "(":
+                    cp = find_matching(s, p, "(", ")")
+                    if cp >= 0:
+                        semi = skip_ws(s, cp + 1)
+                        if semi < n and s[semi] == ";":
+                            return semi + 1
+            return find_body_end(s, j)
+        return find_body_end(s, j)
 
     # Find keywords in masked, but track do/while pairing.
     KW_RE = re.compile(r"\b(if|else|while|for|do)\b")
@@ -211,7 +266,7 @@ def add_braces(src: str) -> str:
                 # the matching `while` follows close — mark to skip it
                 do_stack.append(close + 1)
             else:
-                end = find_body_end(masked, j)
+                end = find_stmt_end(masked, j)
                 inserts.append((j, "{ "))
                 inserts.append((end, " }"))
                 do_stack.append(end)
@@ -263,7 +318,7 @@ def add_braces(src: str) -> str:
             inserts.append((end, " }"))
             continue
 
-        end = find_body_end(masked, body_start)
+        end = find_stmt_end(masked, body_start)
         inserts.append((body_start, "{ "))
         inserts.append((end, " }"))
 
@@ -296,7 +351,8 @@ def main():
 
     parse_valid = DST_ROOT / "parse_valid"
     parse_invalid = DST_ROOT / "parse_invalid"
-    for d in (parse_valid, parse_invalid):
+    validate_invalid = DST_ROOT / "validate_invalid"
+    for d in (parse_valid, parse_invalid, validate_invalid):
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
@@ -320,30 +376,20 @@ def main():
 
         if bucket == "valid":
             dst_root = parse_valid
-        elif bucket == "invalid_parse":
+        elif bucket in ("invalid_lex", "invalid_parse"):
+            # rejected by the lexer/parser — non-zero exit already at the parse stage.
             dst_root = parse_invalid
-        elif bucket == "invalid_lex":
-            dst_root = parse_invalid  # lexer errors also cause cc89 to exit non-zero
         else:
             # invalid_semantics, invalid_types, invalid_declarations, invalid_labels,
-            # invalid_struct_tags — these are semantic errors, cc89 (parser-only)
-            # currently lets them through. Skip until SA lands.
-            continue
+            # invalid_struct_tags — these PARSE cleanly and must be caught by semantic
+            # analysis, so they only fail at the validate stage, not parse.
+            dst_root = validate_invalid
 
         if src_file.name in SKIP_FILENAMES:
             stats["skipped_filename"] += 1
             continue
 
         text = src_file.read_text(encoding="utf-8", errors="replace")
-        if is_unsupported(text):
-            stats["skipped_unsupported"] += 1
-            continue
-        # invalid_parse tests are allowed to use C99 for-init decls (they're
-        # supposed to fail anyway). For valid tests, drop them — cc89 can't
-        # parse `for (int i = 0; ...)`.
-        if bucket == "valid" and FOR_DECL_RE.search(text):
-            stats["skipped_unsupported"] += 1
-            continue
 
         # only brace-add for valid tests — invalid_parse tests should be left
         # untouched so they still trigger the parse error they're meant to.

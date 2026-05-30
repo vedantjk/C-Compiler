@@ -851,9 +851,9 @@ void test_errors()
         EXPECT(r.errors.find("Unexpected character") != std::string::npos);
         return true;
     });
-    TEST("unexpected character '#'", {
-        auto r = tokenize_with_errors("#");
-        EXPECT(r.errors.find("Unexpected character") != std::string::npos);
+    TEST("'#' directive line is skipped", {
+        auto r = tokenize_with_errors("#define FOO 1");
+        EXPECT(r.errors.empty());
         return true;
     });
     TEST("tokens still produced after error", {

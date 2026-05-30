@@ -522,6 +522,10 @@ class Lexer
         case '\'':
             Char();
             break;
+        case '#':
+            while (peek() != '\n' && !isAtEnd())
+                advance();
+            break;
         default:
             if (std::isdigit(c))
             {
