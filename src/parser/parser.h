@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <unordered_map>
@@ -30,6 +31,7 @@
 #include "../ast/Statements/IfStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/Statements/WhileStmt.h"
+#include "../ast/StorageClass.h"
 #include "../ast/TopLevelNodes/Function.h"
 #include "../ast/TopLevelNodes/StructDecl.h"
 #include "../lexer/token.h"
@@ -94,6 +96,15 @@ class Parser
         return t == INT || t == CHAR || t == VOID || t == STRUCT;
     }
 
+    static bool isStorageClassSpecifier(const TokenType t) { return t == STATIC || t == EXTERN; }
+
+    // A declaration can begin with either a type specifier or a storage class,
+    // since C lets them appear in any order (`static int` or `int static`).
+    static bool isDeclSpecifierStart(const TokenType t)
+    {
+        return isTypeStart(t) || isStorageClassSpecifier(t);
+    }
+
     bool isUnaryOp(TokenType type)
     {
         return type == EXCLAMATION || type == TILDE || type == MINUS || type == PLUS ||
@@ -146,6 +157,55 @@ class Parser
         }
         throw std::logic_error("Expected type specifier, got " +
                                std::string(tokenTypeToString(peek())));
+    }
+
+    // Parse declaration-specifiers: a base type plus an optional storage class
+    // (static/extern), interleaved in any order (`static int`, `int static`).
+    // Returns the base type, the storage class if any, and the position of the
+    // first specifier token.
+    std::tuple<std::shared_ptr<Type>, std::optional<StorageClass>, int, int> parseDeclSpecifiers()
+    {
+        std::optional<StorageClass> storageClass;
+        std::shared_ptr<Type> type;
+        int line = -1, col = -1;
+
+        while (isDeclSpecifierStart(peek()))
+        {
+            if (isStorageClassSpecifier(peek()))
+            {
+                Token t = consume();
+                if (storageClass.has_value())
+                    throw std::logic_error("multiple storage-class specifiers at line " +
+                                           std::to_string(t.line) + ", col " +
+                                           std::to_string(t.col));
+                storageClass = (t.type == STATIC) ? StorageClass::Static : StorageClass::Extern;
+                if (line < 0)
+                {
+                    line = t.line;
+                    col = t.col;
+                }
+            }
+            else
+            {
+                if (type)
+                    throw std::logic_error("multiple type specifiers at line " +
+                                           std::to_string(tokens[cur_token].line) + ", col " +
+                                           std::to_string(tokens[cur_token].col));
+                auto [parsedType, baseLine, baseCol] = parseBaseType();
+                type = parsedType;
+                if (line < 0)
+                {
+                    line = baseLine;
+                    col = baseCol;
+                }
+            }
+        }
+
+        if (!type)
+            throw std::logic_error("Expected type specifier, got " +
+                                   std::string(tokenTypeToString(peek())));
+
+        return {type, storageClass, line, col};
     }
 
     void parseDeclaratorHead(std::shared_ptr<Type> &base)
@@ -424,8 +484,9 @@ class Parser
         return std::make_shared<ExprStmt>(expr, expr->getLine(), expr->getCol(), semiColon);
     }
 
-    std::vector<std::shared_ptr<VarDecl>> parseVarDecl(const std::shared_ptr<Type> &type,
-                                                       bool global = false)
+    std::vector<std::shared_ptr<VarDecl>>
+    parseVarDecl(const std::shared_ptr<Type> &type, bool global = false,
+                 std::optional<StorageClass> storageClass = std::nullopt)
     {
         std::vector<std::shared_ptr<VarDecl>> variables;
         while (true)
@@ -438,7 +499,8 @@ class Parser
                 initialization = parseInitializers();
             }
             variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name,
-                                                             finalType, initialization, global));
+                                                             finalType, initialization, global,
+                                                             storageClass));
             if (peek() == COMMA)
             {
                 consume();
@@ -450,14 +512,16 @@ class Parser
         return variables;
     }
 
-    std::shared_ptr<DeclareStmt> parseDeclareStmt(std::shared_ptr<Type> &type, int line, int col)
+    std::shared_ptr<DeclareStmt>
+    parseDeclareStmt(std::shared_ptr<Type> &type, int line, int col,
+                     std::optional<StorageClass> storageClass = std::nullopt)
     {
         if (peek() == LEFT_BRACE)
         {
             auto structVar = parseStructDecl(type, line, col);
             return std::make_shared<DeclareStmt>(line, col, structVar);
         }
-        auto variables = parseVarDecl(type);
+        auto variables = parseVarDecl(type, false, storageClass);
         return std::make_shared<DeclareStmt>(line, col, variables);
     }
 
@@ -544,9 +608,15 @@ class Parser
         std::shared_ptr<Statement> initialization;
         if (peek() == SEMI_COLON)
             consume();
-        else if (isTypeStart(peek()))
+        else if (isDeclSpecifierStart(peek()))
         {
-            auto [type, line, col] = parseBaseType();
+            auto [type, storageClass, line, col] = parseDeclSpecifiers();
+            // C99 6.8.5p3: a for-loop initializer declaration may only have auto
+            // or register storage — static/extern are not allowed here.
+            if (storageClass.has_value())
+                throw std::logic_error(
+                    "a storage-class specifier is not allowed in a for-loop initializer at line " +
+                    std::to_string(line) + ", col " + std::to_string(col));
             initialization = parseDeclareStmt(type, line, col);
         }
         else
@@ -589,9 +659,9 @@ class Parser
         std::vector<std::shared_ptr<Statement>> statements;
         while (peek() != RIGHT_BRACE)
         {
-            if (isTypeStart(peek()))
+            if (isDeclSpecifierStart(peek()))
             {
-                auto [type, line, col] = parseBaseType();
+                auto [type, storageClass, line, col] = parseDeclSpecifiers();
                 if (peek() == IDENTIFIER && peekNext() == LEFT_PAREN)
                 {
                     // Local function declaration: a forward prototype scoped to
@@ -599,7 +669,7 @@ class Parser
                     // keep the node so SA can register it (and drop it at block exit).
                     Token identifier = expect(IDENTIFIER); // function name
                     consume();                             // (
-                    auto decl = parseFunction(type, line, col, identifier);
+                    auto decl = parseFunction(type, line, col, identifier, storageClass);
                     if (decl->statements)
                     {
                         throw std::logic_error(
@@ -609,7 +679,7 @@ class Parser
                     statements.emplace_back(std::make_shared<FunctionDeclStmt>(line, col, decl));
                     continue;
                 }
-                statements.emplace_back(parseDeclareStmt(type, line, col));
+                statements.emplace_back(parseDeclareStmt(type, line, col, storageClass));
                 continue;
             }
             if (peek() == LEFT_BRACE)
@@ -681,7 +751,8 @@ class Parser
     }
 
     std::shared_ptr<Function> parseFunction(std::shared_ptr<Type> returnType, int line, int col,
-                                            Token functionName)
+                                            Token functionName,
+                                            std::optional<StorageClass> storageClass = std::nullopt)
     {
         std::string functionNameString = functionName.lexeme;
         std::vector<Parameter> parameters;
@@ -718,7 +789,7 @@ class Parser
         {
             consume();
             return std::make_shared<Function>(line, col, functionNameString, returnType, parameters,
-                                              blockStmt, variadic);
+                                              blockStmt, variadic, storageClass);
         }
         if (peek() == LEFT_BRACE)
             blockStmt = parseBlockStmt();
@@ -726,7 +797,7 @@ class Parser
             expect(SEMI_COLON);
 
         return std::make_shared<Function>(line, col, functionNameString, returnType, parameters,
-                                          blockStmt, variadic);
+                                          blockStmt, variadic, storageClass);
     }
 
     std::shared_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type> &structType, int line,
@@ -765,9 +836,9 @@ class Parser
         while (peek() != EOF_TOKEN)
         {
 
-            if (isTypeStart(peek()))
+            if (isDeclSpecifierStart(peek()))
             {
-                auto [type, line, col] = parseBaseType();
+                auto [type, storageClass, line, col] = parseDeclSpecifiers();
                 parseDeclaratorHead(type);
                 if (peek() == IDENTIFIER)
                 {
@@ -775,12 +846,13 @@ class Parser
                     {
                         Token identifier = expect(IDENTIFIER);
                         consume();
-                        nodes.emplace_back(parseFunction(type, line, col, identifier));
+                        nodes.emplace_back(
+                            parseFunction(type, line, col, identifier, storageClass));
                     }
                     else // handle variable declarations
                     {
                         parseDeclaratorTail(type);
-                        auto variables = parseVarDecl(type, true);
+                        auto variables = parseVarDecl(type, true, storageClass);
                         for (const auto &var : variables)
                         {
                             nodes.emplace_back(var);

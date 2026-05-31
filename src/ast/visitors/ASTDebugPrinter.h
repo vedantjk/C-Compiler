@@ -28,11 +28,11 @@
 #include "../Statements/ReturnStmt.h"
 #include "../Statements/Statement.h"
 #include "../Statements/WhileStmt.h"
+#include "../StorageClass.h"
 #include "../TopLevelNodes/Function.h"
 #include "../TopLevelNodes/StructDecl.h"
 #include "../TopLevelNodes/TopLevelNode.h"
 #include "../TopLevelNodes/VarDecl.h"
-
 #include <memory>
 #include <ostream>
 #include <sstream>
@@ -45,7 +45,7 @@ class ASTDebugPrinter
     std::ostream &out;
     int indent = 0;
 
-    void writeIndent()
+    void writeIndent() const
     {
         for (int i = 0; i < indent; ++i)
             out << "  ";
@@ -54,6 +54,15 @@ class ASTDebugPrinter
     static std::string typeStr(const std::shared_ptr<Type> &t)
     {
         return t ? t->toString() : "<null>";
+    }
+
+    static std::string storageClassStr(const std::optional<StorageClass> storageClass)
+    {
+        if (storageClass != std::nullopt)
+        {
+            return toString(*storageClass);
+        }
+        return "";
     }
 
     static std::string boolStr(bool b) { return b ? "true" : "false"; }
@@ -68,7 +77,8 @@ class ASTDebugPrinter
         return o.str();
     }
 
-    void printHeader(const std::string &kind, const ASTNode &n, const std::string &fields = "")
+    void printHeader(const std::string &kind, const ASTNode &n,
+                     const std::string &fields = "") const
     {
         writeIndent();
         out << "[" << kind << "] " << n.line << ":" << n.col;
@@ -78,7 +88,7 @@ class ASTDebugPrinter
     }
 
     void printExprHeader(const std::string &kind, const Expression &n,
-                         const std::string &fields = "")
+                         const std::string &fields = "") const
     {
         writeIndent();
         out << "[" << kind << "] " << n.line << ":" << n.col;
@@ -268,7 +278,8 @@ class ASTDebugPrinter
     {
         std::ostringstream f;
         f << "name='" << n->name << "'"
-          << " type=" << typeStr(n->type) << " variadic=" << boolStr(n->variadic);
+          << " type=" << typeStr(n->type) << " variadic=" << boolStr(n->variadic)
+          << " specifier=" << storageClassStr(n->storageClass);
         printHeader("Function", *n, f.str());
         ++indent;
         writeIndent();
@@ -310,7 +321,8 @@ class ASTDebugPrinter
     {
         std::ostringstream f;
         f << "name='" << n->name << "'"
-          << " type=" << typeStr(n->type) << " global=" << boolStr(n->global);
+          << " type=" << typeStr(n->type) << " global=" << boolStr(n->global)
+          << " specifier=" << storageClassStr(n->storageClass);
         printHeader("VarDecl", *n, f.str());
         ++indent;
         printChild("initialization", n->initialization);
@@ -421,21 +433,21 @@ class ASTDebugPrinter
 
     // ---- Expressions ----
 
-    void visitIntLiterals(const std::shared_ptr<IntLiterals> &n)
+    void visitIntLiterals(const std::shared_ptr<IntLiterals> &n) const
     {
         std::ostringstream f;
         f << "value='" << n->value << "'";
         printExprHeader("IntLiterals", *n, f.str());
     }
 
-    void visitStringLiterals(const std::shared_ptr<StringLiterals> &n)
+    void visitStringLiterals(const std::shared_ptr<StringLiterals> &n) const
     {
         std::ostringstream f;
         f << "literal='" << n->literal << "'";
         printExprHeader("StringLiterals", *n, f.str());
     }
 
-    void visitVariableExpr(const std::shared_ptr<VariableExpr> &n)
+    void visitVariableExpr(const std::shared_ptr<VariableExpr> &n) const
     {
         std::ostringstream f;
         f << "name='" << n->name << "'";

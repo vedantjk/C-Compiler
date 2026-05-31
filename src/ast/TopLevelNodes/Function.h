@@ -2,9 +2,9 @@
 
 #include "../../types/types.h"
 #include "../Statements/BlockStmt.h"
+#include "../StorageClass.h"
 #include "./TopLevelNode.h"
 #include <algorithm>
-#include <iostream>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -31,18 +31,23 @@ class Function : public TopLevelNode
     std::vector<Parameter> parameters;
     std::shared_ptr<BlockStmt> statements;
     bool variadic;
+    std::optional<StorageClass> storageClass;
 
     Function(int line_, int col_, std::string name_, std::shared_ptr<Type> type_,
              std::vector<Parameter> parameters_, std::shared_ptr<BlockStmt> statements_,
-             bool variadic = false)
+             bool variadic = false, std::optional<StorageClass> storageClass_ = std::nullopt)
         : TopLevelNode(line_, col_), name(std::move(name_)), type(std::move(type_)),
-          parameters(std::move(parameters_)), statements(std::move(statements_)), variadic(variadic)
+          parameters(std::move(parameters_)), statements(std::move(statements_)),
+          variadic(variadic), storageClass(storageClass_)
     {
     }
 
     void print(std::ostream &out, int tab) const override
     {
-        out << type->toString() << " " << name << " ( ";
+        out << type->toString() << " ";
+        if (storageClass != std::nullopt)
+            out << toString(*storageClass) << " ";
+        out << name << "(";
         for (int i = 0; i < (int)parameters.size(); i++)
         {
             out << parameters[i].type->toString() << " " << parameters[i].name;
