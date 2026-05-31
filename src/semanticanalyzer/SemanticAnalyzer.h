@@ -1149,11 +1149,11 @@ class SemanticAnalyzer
         if (node->statements)
         {
             analyzeStatements(node->statements);
-            if (!isVoid(node->type) && !returnsAlways(node->statements))
-            {
-                error(node->getLine(), node->getCol(),
-                      "not all control flow paths in '" + node->name + "' return a value.");
-            }
+            // if (!isVoid(node->type) && !returnsAlways(node->statements))
+            // {
+            //     error(node->getLine(), node->getCol(),
+            //           "not all control flow paths in '" + node->name + "' return a value.");
+            // }
         }
 
         symbolTable.exitScope();

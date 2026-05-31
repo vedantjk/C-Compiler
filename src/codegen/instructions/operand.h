@@ -5,11 +5,14 @@
 enum class RegisterName
 {
     AX,
-    R10,
     DX,
-    R11,
-    CL,
-    CX
+    CX,
+    DI,
+    SI,
+    R8,
+    R9,
+    R10,
+    R11
 };
 
 enum class CondCode
@@ -57,7 +60,8 @@ class Register : public Operand
 {
   public:
     RegisterName name;
-    explicit Register(const RegisterName name) : name(name) {};
+    int bytes;
+    explicit Register(const RegisterName name_, int bytes_) : name(name_), bytes(bytes_) {};
 };
 
 class PseudoRegister : public Operand

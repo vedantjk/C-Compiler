@@ -252,6 +252,21 @@ class TackyDriver
         return temp;
     }
 
+    TackyVal processFunctionCallExpr(const std::shared_ptr<FunctionCallExpr> &functionCallExpr,
+                                     std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        std::vector<TackyVal> args;
+        for (const auto &param : functionCallExpr->parameters)
+        {
+            args.push_back(processExpression(param, instructions));
+        }
+        TackyVar dst{makeTemp("tmp.")};
+        instructions.push_back(
+            std::make_unique<TackyFunctionCall>(functionCallExpr->line, functionCallExpr->col,
+                                                functionCallExpr->functionName->name, args, dst));
+        return dst;
+    }
+
     TackyVal processExpression(const std::shared_ptr<Expression> &expression,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -278,6 +293,10 @@ class TackyDriver
         if (const auto &p = std::dynamic_pointer_cast<TernaryExpr>(expression))
         {
             return processTernaryExpr(p, instructions);
+        }
+        if (const auto &p = std::dynamic_pointer_cast<FunctionCallExpr>(expression))
+        {
+            return processFunctionCallExpr(p, instructions);
         }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
@@ -494,9 +513,20 @@ class TackyDriver
     std::unique_ptr<TackyFunction> processFunction(const std::shared_ptr<Function> &functionNode)
     {
         std::vector<std::unique_ptr<TackyInstruction>> instructions;
+        std::vector<std::string> params;
+        for (const auto &param : functionNode->parameters)
+        {
+            params.push_back(param.name);
+        }
         processBlockStmt(functionNode->statements, instructions);
+        // Every function gets an implicit `return 0` appended. If control reaches
+        // it, no earlier return fired (e.g. the body falls off the end); if an
+        // earlier return already fired, this is dead code after a ret. Either way
+        // it guarantees the function ends in a return so codegen emits a final ret.
+        instructions.push_back(std::make_unique<TackyReturn>(functionNode->line, functionNode->col,
+                                                             TackyConstant("0")));
         return std::make_unique<TackyFunction>(functionNode->line, functionNode->col,
-                                               functionNode->name, std::move(instructions));
+                                               functionNode->name, std::move(instructions), params);
     }
 
     std::unique_ptr<TackyProgram> tacky(const std::shared_ptr<Program> &prog)

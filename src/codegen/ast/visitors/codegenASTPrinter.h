@@ -188,6 +188,22 @@ class codegenASTPrinter
 
     void visit(const Label &node) const { out << ".L" << node.identifier << ":"; }
 
+    void visit(const DeallocateStack &node) const
+    {
+        out << "addq    $" << node.quantity << ", %rsp";
+    }
+
+    void visit(const PushInstruction &node) const
+    {
+        out << "pushq    ";
+        dispatch(*node.a);
+    }
+
+    void visit(const CallInstruction &node) const
+    {
+        out << "call    " << node.identifier << "@PLT";
+    }
+
     void dispatch(const Instruction &node) const
     {
         if (auto *p = dynamic_cast<const MoveInstruction *>(&node))
@@ -234,6 +250,22 @@ class codegenASTPrinter
         {
             visit(*p);
         }
+        else if (auto *p = dynamic_cast<const DeallocateStack *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const PushInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const CallInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const AllocateStack *>(&node))
+        {
+            visit(*p);
+        }
     }
 
     void visit(const Stack &node) const { out << node.depth << "(%rbp)"; }
@@ -244,27 +276,84 @@ class codegenASTPrinter
     {
         if (node.name == RegisterName::AX)
         {
-            out << "%eax";
-        }
-        else if (node.name == RegisterName::R10)
-        {
-            out << "%r10d";
+            if (node.bytes == 8)
+                out << "%rax";
+            else if (node.bytes == 4)
+                out << "%eax";
+            else
+                out << "%al";
         }
         else if (node.name == RegisterName::DX)
         {
-            out << "%edx";
-        }
-        else if (node.name == RegisterName::R11)
-        {
-            out << "%r11d";
-        }
-        else if (node.name == RegisterName::CL)
-        {
-            out << "%cl";
+            if (node.bytes == 8)
+                out << "%rdx";
+            else if (node.bytes == 4)
+                out << "%edx";
+            else
+                out << "%dl";
         }
         else if (node.name == RegisterName::CX)
         {
-            out << "%ecx";
+            if (node.bytes == 8)
+                out << "%rcx";
+            else if (node.bytes == 4)
+                out << "%ecx";
+            else
+                out << "%cl";
+        }
+        else if (node.name == RegisterName::DI)
+        {
+            if (node.bytes == 8)
+                out << "%rdi";
+            else if (node.bytes == 4)
+                out << "%edi";
+            else
+                out << "%dil";
+        }
+        else if (node.name == RegisterName::SI)
+        {
+            if (node.bytes == 8)
+                out << "%rsi";
+            else if (node.bytes == 4)
+                out << "%esi";
+            else
+                out << "%sil";
+        }
+        else if (node.name == RegisterName::R8)
+        {
+            if (node.bytes == 8)
+                out << "%r8";
+            else if (node.bytes == 4)
+                out << "%r8d";
+            else
+                out << "%r8b";
+        }
+        else if (node.name == RegisterName::R9)
+        {
+            if (node.bytes == 8)
+                out << "%r9";
+            else if (node.bytes == 4)
+                out << "%r9d";
+            else
+                out << "%r9b";
+        }
+        else if (node.name == RegisterName::R10)
+        {
+            if (node.bytes == 8)
+                out << "%r10";
+            else if (node.bytes == 4)
+                out << "%r10d";
+            else
+                out << "%r10b";
+        }
+        else if (node.name == RegisterName::R11)
+        {
+            if (node.bytes == 8)
+                out << "%r11";
+            else if (node.bytes == 4)
+                out << "%r11d";
+            else
+                out << "%r11b";
         }
     }
 

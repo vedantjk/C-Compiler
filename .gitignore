@@ -5,6 +5,10 @@ compile_commands.json
 *.o
 *.s
 *.out
+
+# ...but keep checked-in test fixtures (e.g. the stack-alignment helper that
+# defines even_arguments/odd_arguments) that tests must link against.
+!benchmarks/**/*.s
 .vscode/
 .idea/
 claude-notes/

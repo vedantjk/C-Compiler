@@ -94,3 +94,18 @@ class TackyLabel : public TackyInstruction
     {
     }
 };
+
+class TackyFunctionCall : public TackyInstruction
+{
+  public:
+    std::string funcName;
+    std::vector<TackyVal> args;
+    TackyVal dst;
+
+    TackyFunctionCall(int line_, int col_, std::string funcName_, std::vector<TackyVal> args_,
+                      TackyVal dst_)
+        : TackyInstruction(line_, col_), funcName(std::move(funcName_)), args(std::move(args_)),
+          dst(std::move(dst_))
+    {
+    }
+};

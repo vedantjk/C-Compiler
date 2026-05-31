@@ -2,6 +2,7 @@
 #include "../../utils/common.h"
 #include "operand.h"
 #include <memory>
+#include <utility>
 
 class Instruction
 {
@@ -117,4 +118,25 @@ class Label : public Instruction
   public:
     std::string identifier;
     explicit Label(std::string identifier_) : identifier(std::move(identifier_)) {}
+};
+
+class DeallocateStack : public Instruction
+{
+  public:
+    int quantity;
+    explicit DeallocateStack(const int quantity_) : quantity(quantity_) {}
+};
+
+class PushInstruction : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> a;
+    explicit PushInstruction(std::unique_ptr<Operand> a_) : a(std::move(a_)) {}
+};
+
+class CallInstruction : public Instruction
+{
+  public:
+    std::string identifier;
+    explicit CallInstruction(std::string identifier_) : identifier(std::move(identifier_)) {}
 };

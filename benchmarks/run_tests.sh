@@ -41,7 +41,7 @@ TIMEOUT="5s"
 PATHS=()
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump per chapter.
-CHAPTERS_IMPLEMENTED=(chapter_1 chapter_2 chapter_3 chapter_4 chapter_5 chapter_6 chapter_7 chapter_8)
+CHAPTERS_IMPLEMENTED=(chapter_1 chapter_2 chapter_3 chapter_4 chapter_5 chapter_6 chapter_7 chapter_8 chapter_9)
 ARTIFACT_DIR="$REPO_ROOT/cmake-build-debug/test-artifacts"
 
 while [[ $# -gt 0 ]]; do
@@ -222,6 +222,117 @@ run_one_execute() {
     fi
 }
 
+# library tests come in pairs: foo.c (defines functions, no main) and
+# foo_client.c (has main, calls them). Map either file to its sibling.
+library_sibling() {
+    local f="$1" dir base stem
+    dir="$(dirname "$f")"; base="${f##*/}"; stem="${base%.c}"
+    if [[ "$stem" == *_client ]]; then
+        echo "$dir/${stem%_client}.c"
+    else
+        echo "$dir/${stem}_client.c"
+    fi
+}
+
+# run_one_library: build the file-under-test with cc89 and its sibling with gcc,
+# link them, and compare exit code to an all-gcc build of the pair. Mixing
+# compilers is deliberate — it checks cc89's calling convention against gcc's.
+# Each file in a pair gets its own turn under cc89 as the loop visits it.
+run_one_library() {
+    local f="$1"
+    local sib base chapter artifact_base asm_file our_obj sib_obj our_exe ref_exe our_exit ref_exit
+    local reason="" ok=1
+
+    sib="$(library_sibling "$f")"
+    if [[ ! -f "$sib" ]]; then
+        run_one_execute "$f"; return   # no pair found; fall back to single-file
+    fi
+
+    base="${f##*/}"; base="${base%.c}"
+    chapter="$(basename "$(dirname "$f")")"
+    artifact_base="${chapter}_${base}__pair"
+    asm_file="$ARTIFACT_DIR/${artifact_base}.s"
+    our_obj="$ARTIFACT_DIR/${artifact_base}.o"
+    sib_obj="$ARTIFACT_DIR/${artifact_base}.sib.o"
+    our_exe="$ARTIFACT_DIR/${artifact_base}.exe"
+    ref_exe="$ARTIFACT_DIR/${artifact_base}.ref.exe"
+
+    if ! timeout "$TIMEOUT" "$CC89_BIN" --codegen "$f" >"$asm_file" 2>/dev/null; then
+        ok=0; reason="cc89 --codegen failed"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w -c "$asm_file" -o "$our_obj" 2>/dev/null; then
+        ok=0; reason="gcc could not assemble cc89 output"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w -c "$sib" -o "$sib_obj" 2>/dev/null; then
+        ok=0; reason="gcc could not compile sibling"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w "$our_obj" "$sib_obj" -o "$our_exe" 2>/dev/null; then
+        ok=0; reason="link of cc89+gcc objects failed"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w "$f" "$sib" -o "$ref_exe" 2>/dev/null; then
+        ok=0; reason="reference gcc build failed"
+    fi
+    if [[ $ok -eq 1 ]]; then
+        timeout "$TIMEOUT" "$our_exe" >/dev/null 2>&1; our_exit=$?
+        timeout "$TIMEOUT" "$ref_exe" >/dev/null 2>&1; ref_exit=$?
+        if [[ $our_exit -ne $ref_exit ]]; then
+            ok=0; reason="exit mismatch: cc89-pair=$our_exit gcc=$ref_exit"
+        fi
+    fi
+
+    if [[ $ok -eq 1 ]]; then
+        PASS=$((PASS+1))
+        [[ $VERBOSE -eq 1 ]] && echo "PASS $f (library pair with $(basename "$sib"))"
+    else
+        FAIL=$((FAIL+1))
+        FAILED_FILES+=("$f ($reason)")
+        [[ $VERBOSE -eq 1 ]] && echo "FAIL $f ($reason)"
+    fi
+}
+
+# run_one_with_helper: build the test file with cc89, link it against an extra
+# helper object (e.g. the platform stack_alignment_check_<platform>.s that
+# defines even_arguments/odd_arguments), and compare exit code to a gcc build of
+# the same pair.
+run_one_with_helper() {
+    local f="$1" helper="$2"
+    local base chapter artifact_base asm_file our_exe ref_exe our_exit ref_exit
+    local reason="" ok=1
+
+    base="${f##*/}"; base="${base%.c}"
+    chapter="$(basename "$(dirname "$f")")"
+    artifact_base="${chapter}_${base}"
+    asm_file="$ARTIFACT_DIR/${artifact_base}.s"
+    our_exe="$ARTIFACT_DIR/${artifact_base}.exe"
+    ref_exe="$ARTIFACT_DIR/${artifact_base}.ref.exe"
+
+    if ! timeout "$TIMEOUT" "$CC89_BIN" --codegen "$f" >"$asm_file" 2>/dev/null; then
+        ok=0; reason="cc89 --codegen failed"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w "$asm_file" "$helper" -o "$our_exe" 2>/dev/null; then
+        ok=0; reason="gcc could not assemble/link cc89 output"
+    fi
+    if [[ $ok -eq 1 ]] && ! gcc -w "$f" "$helper" -o "$ref_exe" 2>/dev/null; then
+        ok=0; reason="reference gcc build failed"
+    fi
+    if [[ $ok -eq 1 ]]; then
+        timeout "$TIMEOUT" "$our_exe" >/dev/null 2>&1; our_exit=$?
+        timeout "$TIMEOUT" "$ref_exe" >/dev/null 2>&1; ref_exit=$?
+        if [[ $our_exit -ne $ref_exit ]]; then
+            ok=0; reason="exit mismatch: cc89=$our_exit gcc=$ref_exit"
+        fi
+    fi
+
+    if [[ $ok -eq 1 ]]; then
+        PASS=$((PASS+1))
+        [[ $VERBOSE -eq 1 ]] && echo "PASS $f (linked with $(basename "$helper"))"
+    else
+        FAIL=$((FAIL+1))
+        FAILED_FILES+=("$f ($reason)")
+        [[ $VERBOSE -eq 1 ]] && echo "FAIL $f ($reason)"
+    fi
+}
+
 run_one() {
     local f="$1"
     local kind exp_exit got_exit got_err
@@ -319,7 +430,23 @@ for f in "${TEST_FILES[@]}"; do
             SKIP=$((SKIP+1))
             continue
         fi
-        run_one_execute "$f"
+        # stack_alignment.c needs the platform helper that defines
+        # even_arguments/odd_arguments. Link against it if present; skip only if
+        # the helper is missing (so the test can't link standalone).
+        if [[ "$f" == *stack_alignment.c ]]; then
+            helper="$(dirname "$f")/stack_alignment_check_linux.s"
+            if [[ -f "$helper" ]]; then
+                run_one_with_helper "$f" "$helper"
+            else
+                SKIP=$((SKIP+1))
+            fi
+            continue
+        fi
+        if [[ "$f" == *"/libraries/"* ]]; then
+            run_one_library "$f"
+        else
+            run_one_execute "$f"
+        fi
     else
         run_one "$f"
     fi
