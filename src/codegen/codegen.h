@@ -2,14 +2,21 @@
 
 #include "../tacky/ast/ASTNodes/TackyProgram.h"
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
+#include "ast/TopLevelNodes/codegenStaticVariable.h"
 #include "instructions/instructions.h"
+#include "tacky/ast/TopLevelNodes/TackyStaticVariable.h"
+
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 class codegenDriver
 {
     const std::vector<RegisterName> argRegisters{(RegisterName::DI), (RegisterName::SI),
                                                  (RegisterName::DX), (RegisterName::CX),
                                                  (RegisterName::R8), (RegisterName::R9)};
+    // Names of all static-storage variables (file-scope, block static, extern),
+    // supplied by TACKY. Their pseudos lower to RIP-relative Data, not stack slots.
+    std::unordered_set<std::string> staticNames;
 
   public:
     static bool isImmediate(const Operand &op)
@@ -335,24 +342,30 @@ class codegenDriver
 
         processTackyInstructions(functionNode.instructions, instructions);
         return std::make_unique<codegenFunction>(functionNode.line, functionNode.column,
-                                                 functionNode.name, std::move(instructions));
+                                                 functionNode.name, functionNode.global,
+                                                 std::move(instructions));
     }
 
     void lowerPseudoSlot(std::unique_ptr<Operand> &slot,
-                         std::unordered_map<std::string, int> &pseudoToOffset, int &nextOffset)
+                         std::unordered_map<std::string, int> &pseudoToOffset, int &nextOffset,
+                         const std::unordered_set<std::string> &staticNames)
     {
         auto *p = dynamic_cast<PseudoRegister *>(slot.get());
         if (!p)
-            return; // not a pseudo, nothing to do
-
+            return;
+        if (staticNames.count(p->name))
+        {
+            slot = std::make_unique<Data>(p->name);
+            return;
+        }
         auto [it, inserted] = pseudoToOffset.try_emplace(p->name, nextOffset);
         if (inserted)
             nextOffset -= 4;
-
         slot = std::make_unique<Stack>(it->second);
     }
 
-    void removePseudosFromFunction(codegenFunction &func)
+    void removePseudosFromFunction(codegenFunction &func,
+                                   std::unordered_set<std::string> &staticNames)
     {
         std::unordered_map<std::string, int> pseudoToOffset;
         int nextOffset = -4;
@@ -360,34 +373,34 @@ class codegenDriver
         {
             if (auto *p = dynamic_cast<MoveInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->src, pseudoToOffset, nextOffset);
-                lowerPseudoSlot(p->dst, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->src, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, nextOffset, staticNames);
             }
             else if (auto *p = dynamic_cast<UnaryInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset, staticNames);
             }
             else if (auto *p = dynamic_cast<BinaryInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->src, pseudoToOffset, nextOffset);
-                lowerPseudoSlot(p->dst, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->src, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, nextOffset, staticNames);
             }
             else if (auto *p = dynamic_cast<IDivInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset, staticNames);
             }
             else if (auto *p = dynamic_cast<CmpInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset);
-                lowerPseudoSlot(p->b, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->b, pseudoToOffset, nextOffset, staticNames);
             }
             else if (auto *p = dynamic_cast<SetCCInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset, staticNames);
             }
             else if (auto *p = dynamic_cast<PushInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset);
+                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset, staticNames);
             }
         }
         if (int frameSize = -nextOffset - 4; frameSize > 0)
@@ -403,12 +416,25 @@ class codegenDriver
         {
             if (auto *p = dynamic_cast<codegenFunction *>(node.get()))
             {
-                removePseudosFromFunction(*p);
+                removePseudosFromFunction(*p, staticNames);
             }
         }
     }
 
     bool isStack(const Operand &op) { return dynamic_cast<const Stack *>(&op) != nullptr; }
+    bool isData(const Operand &op) { return dynamic_cast<const Data *>(&op) != nullptr; }
+    bool isMemory(const Operand &op) { return isStack(op) || isData(op); }
+
+    // Clone a memory operand (Stack or Data) — used when a fixup needs two copies
+    // of an instruction's memory destination.
+    std::unique_ptr<Operand> cloneMemory(const Operand *op)
+    {
+        if (auto *s = dynamic_cast<const Stack *>(op))
+            return std::make_unique<Stack>(*s);
+        if (auto *d = dynamic_cast<const Data *>(op))
+            return std::make_unique<Data>(*d);
+        return nullptr;
+    }
 
     void fixupInstructionsFromFunction(codegenFunction &func)
     {
@@ -418,7 +444,7 @@ class codegenDriver
         for (auto &instr : func.instructions)
         {
             if (auto *m = dynamic_cast<MoveInstruction *>(instr.get());
-                m && isStack(*m->src) && isStack(*m->dst))
+                m && isMemory(*m->src) && isMemory(*m->dst))
             {
                 // Mov M1, M2  →  Mov M1, R10 ; Mov R10, M2
                 auto r10a = std::make_unique<Register>(RegisterName::R10, 4);
@@ -443,7 +469,7 @@ class codegenDriver
                      (m->op == BinaryOp::Add || m->op == BinaryOp::Subtract ||
                       m->op == BinaryOp::BitwiseAnd || m->op == BinaryOp::BitwiseOr ||
                       m->op == BinaryOp::BitwiseXor) &&
-                     isStack(*m->src) && isStack(*m->dst))
+                     isMemory(*m->src) && isMemory(*m->dst))
             {
                 // Mov M1, M2  →  Mov M1, R10 ; Mov R10, M2
                 auto r10a = std::make_unique<Register>(RegisterName::R10, 4);
@@ -454,11 +480,10 @@ class codegenDriver
                 rewritten.push_back(std::move(instr));
             }
             else if (auto *m = dynamic_cast<BinaryInstruction *>(instr.get());
-                     m && (m->op == BinaryOp::Multiply) && isStack(*m->dst))
+                     m && (m->op == BinaryOp::Multiply) && isMemory(*m->dst))
             {
-                auto *stack_raw_ptr = dynamic_cast<Stack *>(m->dst.get());
-                auto dstcopy1 = std::make_unique<Stack>(*stack_raw_ptr);
-                auto dstcopy2 = std::make_unique<Stack>(*stack_raw_ptr);
+                auto dstcopy1 = cloneMemory(m->dst.get());
+                auto dstcopy2 = cloneMemory(m->dst.get());
                 auto r11a = std::make_unique<Register>(RegisterName::R11, 4);
                 auto r11b = std::make_unique<Register>(RegisterName::R11, 4);
                 auto r11c = std::make_unique<Register>(RegisterName::R11, 4);
@@ -482,7 +507,7 @@ class codegenDriver
             }
             else if (auto *m = dynamic_cast<CmpInstruction *>(instr.get()))
             {
-                if (isStack(*m->a) && isStack(*m->b))
+                if (isMemory(*m->a) && isMemory(*m->b))
                 {
                     auto r10a = std::make_unique<Register>(RegisterName::R10, 4);
                     auto r10b = std::make_unique<Register>(RegisterName::R10, 4);
@@ -520,14 +545,26 @@ class codegenDriver
         }
     }
 
+    std::unique_ptr<codegenStaticVariable>
+    processStaticVariable(const TackyStaticVariable &variable)
+    {
+        return std::make_unique<codegenStaticVariable>(
+            variable.line, variable.column, variable.identifier, variable.global, variable.init);
+    }
+
     std::unique_ptr<codegenProgram> codegen(const TackyProgram &prog)
     {
+        staticNames = prog.staticNames;
         std::vector<std::unique_ptr<codegenTopLevelNode>> nodes;
         for (const auto &node : prog.nodes)
         {
             if (auto *p = dynamic_cast<TackyFunction *>(node.get()))
             {
                 nodes.push_back(processFunction(*p));
+            }
+            else if (auto *p = dynamic_cast<TackyStaticVariable *>(node.get()))
+            {
+                nodes.push_back(processStaticVariable(*p));
             }
         }
 

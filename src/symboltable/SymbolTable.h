@@ -2,6 +2,7 @@
 
 #include "../ast/ASTNodes/ASTNode.h"
 #include "../types/types.h"
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -29,6 +30,21 @@ inline std::string kindToString(Kind kind)
     return "unknown";
 }
 
+// Linkage and storage duration, decided by semantic analysis from the
+// declaration's scope and storage-class specifier (static/extern).
+enum class Linkage
+{
+    None,
+    Internal,
+    External
+};
+
+enum class StorageDuration
+{
+    Automatic,
+    Static
+};
+
 struct Symbol
 {
     std::string name;
@@ -37,6 +53,14 @@ struct Symbol
     Kind kind;
     int line, column;
     std::weak_ptr<ASTNode> node;
+
+    // Filled in by semantic analysis for storage-class handling / codegen.
+    Linkage linkage = Linkage::None;
+    StorageDuration duration = StorageDuration::Automatic;
+    bool defined = false;               // function body, or variable with an initializer
+    bool tentative = false;             // file-scope variable, no init, no extern
+    std::optional<long long> constInit; // folded constant for static-duration vars
+
     Symbol(std::string name, std::shared_ptr<Type> type, int line, int column, Kind kind)
         : name(std::move(name)), type(std::move(type)), kind(kind), line(line), column(column)
     {
@@ -79,6 +103,11 @@ class SymbolTable
 {
     std::vector<Scope> scopes;
     std::unordered_map<std::string, int> count;
+    // Linkage registry: one entry per name with linkage, TU-wide. Separate from
+    // `scopes` because linkage spans the translation unit while name *visibility*
+    // is block-scoped (a block-scope `extern` is one entity but only visible in
+    // its block).
+    std::unordered_map<std::string, std::shared_ptr<Symbol>> linked;
 
   public:
     SymbolTable() { scopes.emplace_back(); }
@@ -87,7 +116,10 @@ class SymbolTable
     {
         if (!scopes[scopes.size() - 1].insert(name, symbol, kind))
             return false;
-        if (kind == Kind::VARIABLE)
+        // Only no-linkage variables (block-scope locals, including block `static`)
+        // get a freshly mangled name; anything with linkage — file-scope vars and
+        // `extern` — keeps its source name so the linker can resolve it.
+        if (kind == Kind::VARIABLE && symbol->linkage == Linkage::None)
             symbol->uniqueName = name + "." + std::to_string(++count[name]);
         else
             symbol->uniqueName = name;
@@ -108,6 +140,29 @@ class SymbolTable
                 return sym;
         }
         return nullptr;
+    }
+
+    // Linkage registry (functions and any extern/file-scope variable) — one
+    // entity per name across the whole translation unit, regardless of scope.
+    std::shared_ptr<Symbol> findLinked(const std::string &name) const
+    {
+        auto it = linked.find(name);
+        return it == linked.end() ? nullptr : it->second;
+    }
+
+    void insertLinked(const std::string &name, const std::shared_ptr<Symbol> &symbol)
+    {
+        linked[name] = symbol;
+        symbol->uniqueName = name; // linked → source name
+    }
+
+    // Bind an already-built symbol into the current scope without renaming it,
+    // so a linked declaration is *visible* for name resolution (file-scope vars
+    // file-wide, a block-scope extern only within its block) and a same-scope
+    // no-linkage redeclaration conflicts. False if the name is already in scope.
+    bool bindCurrent(const std::string &name, const std::shared_ptr<Symbol> &symbol, Kind kind)
+    {
+        return scopes.back().insert(name, symbol, kind);
     }
 
     void enterScope() { scopes.emplace_back(); }

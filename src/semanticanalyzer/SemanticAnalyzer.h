@@ -94,49 +94,74 @@ class SemanticAnalyzer
     void declareFunction(const std::shared_ptr<Function> &node,
                          const std::shared_ptr<FunctionType> &fnType)
     {
-        auto existing = symbolTable.findSameScope(node->name, Kind::FUNCTION);
+        const auto sc = node->storageClass;
+        // Functions are TU-wide entities: reconcile against the one linkage-registry
+        // symbol even when the declaration appears inside a block.
+        auto g = symbolTable.findLinked(node->name);
+        const bool gLinked = g && g->kind == Kind::FUNCTION && g->linkage != Linkage::None;
+        // static → internal; extern/none → follows a prior linked decl, else external.
+        const Linkage linkage = (sc == StorageClass::Static)
+                                    ? Linkage::Internal
+                                    : (gLinked ? g->linkage : Linkage::External);
 
-        if (!existing)
+        if (!g)
         {
-            // First time seeing this name — fresh insert.
             auto sym = std::make_shared<Symbol>(node->name, fnType, node->getLine(), node->getCol(),
                                                 Kind::FUNCTION);
-            symbolTable.insert(node->name, sym, Kind::FUNCTION);
+            sym->linkage = linkage;
+            sym->defined = (node->statements != nullptr);
+            symbolTable.insertLinked(node->name, sym);
             node->symbol = sym;
             sym->node = node;
-            return;
         }
-
-        if (existing->kind != Kind::FUNCTION)
+        else if (g->kind != Kind::FUNCTION)
         {
             error(node->getLine(), node->getCol(),
-                  "'" + node->name + "' redeclared as different kind (" +
-                      kindToString(existing->kind) + " at line " + std::to_string(existing->line) +
-                      ").");
+                  "'" + node->name + "' redeclared as different kind (" + kindToString(g->kind) +
+                      " at line " + std::to_string(g->line) + ").");
             return;
         }
-
-        if (!existing->type->equals(*fnType))
+        else
         {
-            error(node->getLine(), node->getCol(),
-                  "conflicting types for '" + node->name + "' (was " + existing->type->toString() +
-                      ", now " + fnType->toString() + ").");
-            return;
-        }
-
-        if (node->statements)
-        {
-            auto prevNode = std::dynamic_pointer_cast<Function>(existing->node.lock());
-            if (prevNode && prevNode->statements)
+            if (!g->type->equals(*fnType))
             {
                 error(node->getLine(), node->getCol(),
-                      "redefinition of '" + node->name + "' (previous definition at line " +
-                          std::to_string(existing->line) + ").");
+                      "conflicting types for '" + node->name + "' (was " + g->type->toString() +
+                          ", now " + fnType->toString() + ").");
                 return;
             }
-            existing->node = node; // this body is now the canonical decl
+            if (g->linkage != linkage)
+            {
+                error(node->getLine(), node->getCol(),
+                      "conflicting linkage for '" + node->name +
+                          "' (previous declaration at line " + std::to_string(g->line) + ").");
+                return;
+            }
+            if (node->statements)
+            {
+                auto prevNode = std::dynamic_pointer_cast<Function>(g->node.lock());
+                if (prevNode && prevNode->statements)
+                {
+                    error(node->getLine(), node->getCol(),
+                          "redefinition of '" + node->name + "' (previous definition at line " +
+                              std::to_string(g->line) + ").");
+                    return;
+                }
+                g->node = node; // this body is now the canonical decl
+                g->defined = true;
+            }
+            node->symbol = g; // share the existing Symbol
         }
-        node->symbol = existing; // share the existing Symbol either way
+
+        // Make the function visible for name resolution in the current scope
+        // (file scope for a top-level function, the block for a local prototype).
+        auto same = symbolTable.findSameScope(node->name, Kind::FUNCTION);
+        if (!same)
+            symbolTable.bindCurrent(node->name, node->symbol, Kind::FUNCTION);
+        else if (same->linkage == Linkage::None)
+            error(node->getLine(), node->getCol(),
+                  "conflicting declaration of '" + node->name + "' (previous declaration at line " +
+                      std::to_string(same->line) + ").");
     }
 
     bool isNullPointerConstant(const std::shared_ptr<Expression> &e)
@@ -818,17 +843,332 @@ class SemanticAnalyzer
         return false;
     }
 
+    // Linkage from scope + storage class, with the extern-follows-prior rule:
+    // an `extern` declaration takes the linkage of a prior *linked* declaration,
+    // else external. File-scope plain → external; file-scope static → internal;
+    // block-scope plain/static → no linkage.
+    Linkage computeLinkage(std::optional<StorageClass> sc, bool fileScope,
+                           const std::shared_ptr<Symbol> &prior)
+    {
+        const bool priorLinked = prior && prior->linkage != Linkage::None;
+        if (fileScope)
+        {
+            if (sc == StorageClass::Static)
+                return Linkage::Internal;
+            if (sc == StorageClass::Extern)
+                return priorLinked ? prior->linkage : Linkage::External;
+            return Linkage::External;
+        }
+        if (sc == StorageClass::Extern)
+            return priorLinked ? prior->linkage : Linkage::External;
+        return Linkage::None;
+    }
+
+    // Fold an integer constant expression. Returns false for anything with a
+    // runtime value (variable reads, calls, non-constant operands).
+    bool evalConstInt(const std::shared_ptr<Expression> &e, long long &out)
+    {
+        if (auto lit = std::dynamic_pointer_cast<IntLiterals>(e))
+        {
+            try
+            {
+                out = std::stoll(lit->value);
+            }
+            catch (...)
+            {
+                return false;
+            }
+            return true;
+        }
+        if (auto u = std::dynamic_pointer_cast<UnaryExpr>(e))
+        {
+            long long v;
+            if (!evalConstInt(u->operand, v))
+                return false;
+            if (u->op == "-")
+            {
+                out = -v;
+                return true;
+            }
+            if (u->op == "+")
+            {
+                out = v;
+                return true;
+            }
+            if (u->op == "~")
+            {
+                out = ~v;
+                return true;
+            }
+            if (u->op == "!")
+            {
+                out = !v;
+                return true;
+            }
+            return false;
+        }
+        if (auto b = std::dynamic_pointer_cast<BinaryExpr>(e))
+        {
+            long long l, r;
+            if (!evalConstInt(b->left, l) || !evalConstInt(b->right, r))
+                return false;
+            const auto &op = b->binaryOp;
+            if (op == "+")
+            {
+                out = l + r;
+                return true;
+            }
+            if (op == "-")
+            {
+                out = l - r;
+                return true;
+            }
+            if (op == "*")
+            {
+                out = l * r;
+                return true;
+            }
+            if (op == "/")
+            {
+                if (r == 0)
+                    return false;
+                out = l / r;
+                return true;
+            }
+            if (op == "%")
+            {
+                if (r == 0)
+                    return false;
+                out = l % r;
+                return true;
+            }
+            if (op == "&")
+            {
+                out = l & r;
+                return true;
+            }
+            if (op == "|")
+            {
+                out = l | r;
+                return true;
+            }
+            if (op == "^")
+            {
+                out = l ^ r;
+                return true;
+            }
+            if (op == "<<")
+            {
+                out = l << r;
+                return true;
+            }
+            if (op == ">>")
+            {
+                out = l >> r;
+                return true;
+            }
+            if (op == "<")
+            {
+                out = l < r;
+                return true;
+            }
+            if (op == ">")
+            {
+                out = l > r;
+                return true;
+            }
+            if (op == "<=")
+            {
+                out = l <= r;
+                return true;
+            }
+            if (op == ">=")
+            {
+                out = l >= r;
+                return true;
+            }
+            if (op == "==")
+            {
+                out = l == r;
+                return true;
+            }
+            if (op == "!=")
+            {
+                out = l != r;
+                return true;
+            }
+            if (op == "&&")
+            {
+                out = l && r;
+                return true;
+            }
+            if (op == "||")
+            {
+                out = l || r;
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    // Is `e` a valid initializer for a static-duration object? Integer constant
+    // expressions, string literals, null, address-of-a-name, and constant
+    // brace lists qualify; anything with a runtime value does not.
+    bool isConstantInitializer(const std::shared_ptr<Expression> &e)
+    {
+        long long tmp;
+        if (evalConstInt(e, tmp))
+            return true;
+        if (std::dynamic_pointer_cast<StringLiterals>(e))
+            return true;
+        if (isNullPointerConstant(e))
+            return true;
+        if (auto u = std::dynamic_pointer_cast<UnaryExpr>(e); u && u->op == "&")
+            return std::dynamic_pointer_cast<VariableExpr>(u->operand) != nullptr;
+        if (auto in = std::dynamic_pointer_cast<InitExpr>(e))
+        {
+            for (const auto &el : in->elements)
+                if (!isConstantInitializer(el))
+                    return false;
+            return true;
+        }
+        return false;
+    }
+
+    // Declare a variable with linkage/duration handling. Merges linked
+    // redeclarations (file-scope vars, block-scope extern) into one symbol and
+    // rejects conflicts; no-linkage locals follow the ordinary redeclaration rule.
+    void declareVariable(const std::shared_ptr<VarDecl> &var, bool fileScope,
+                         std::optional<StorageClass> sc, bool hasInit)
+    {
+        const std::string &name = var->name;
+        auto prior = symbolTable.find(name, Kind::VARIABLE);
+        const Linkage linkage = computeLinkage(sc, fileScope, prior);
+        // File-scope vars, block statics, and any `extern` (which refers to a
+        // static-duration object defined elsewhere) all have static duration.
+        const StorageDuration dur =
+            (fileScope || sc == StorageClass::Static || sc == StorageClass::Extern)
+                ? StorageDuration::Static
+                : StorageDuration::Automatic;
+
+        if (linkage != Linkage::None)
+        {
+            // A linked variable refers to one entity TU-wide; reconcile in the
+            // linkage registry, which is separate from name-resolution scopes.
+            auto g = symbolTable.findLinked(name);
+            if (g)
+            {
+                if (g->kind != Kind::VARIABLE)
+                {
+                    error(var->getLine(), var->getCol(),
+                          "'" + name + "' redeclared as different kind (" + kindToString(g->kind) +
+                              " at line " + std::to_string(g->line) + ").");
+                    return;
+                }
+                if (!g->type->equals(*var->type))
+                    error(var->getLine(), var->getCol(),
+                          "conflicting types for '" + name + "' (was " + g->type->toString() +
+                              ", now " + var->type->toString() + ").");
+                if (g->linkage != linkage)
+                    error(var->getLine(), var->getCol(),
+                          "conflicting linkage for '" + name + "' (previous declaration at line " +
+                              std::to_string(g->line) + ").");
+                if (hasInit)
+                {
+                    if (g->defined)
+                        error(var->getLine(), var->getCol(),
+                              "redefinition of '" + name + "' (previous definition at line " +
+                                  std::to_string(g->line) + ").");
+                    g->defined = true;
+                    g->tentative = false;
+                    g->node = var;
+                }
+                else if (sc != StorageClass::Extern && !g->defined)
+                {
+                    g->tentative = true;
+                }
+                var->symbol = g;
+            }
+            else
+            {
+                auto sym = std::make_shared<Symbol>(name, var->type, var->getLine(), var->getCol(),
+                                                    Kind::VARIABLE);
+                sym->linkage = linkage;
+                sym->duration = dur;
+                if (hasInit)
+                    sym->defined = true;
+                else if (sc != StorageClass::Extern)
+                    sym->tentative = true;
+                symbolTable.insertLinked(name, sym);
+                sym->node = var;
+                var->symbol = sym;
+            }
+
+            // Make it *visible* in the current scope (file scope for a file-scope
+            // var, the block for a block-scope extern). A same-scope no-linkage
+            // declaration of the same name conflicts.
+            auto same = symbolTable.findSameScope(name, Kind::VARIABLE);
+            if (!same)
+                symbolTable.bindCurrent(name, var->symbol, Kind::VARIABLE);
+            else if (same->linkage == Linkage::None)
+                error(var->getLine(), var->getCol(),
+                      "conflicting declaration of '" + name + "' (previous declaration at line " +
+                          std::to_string(same->line) + ").");
+            return;
+        }
+
+        // No linkage: block-scope local (plain or `static`).
+        auto sym = std::make_shared<Symbol>(name, var->type, var->getLine(), var->getCol(),
+                                            Kind::VARIABLE);
+        sym->linkage = Linkage::None;
+        sym->duration = dur;
+        if (dur == StorageDuration::Static)
+            sym->defined = true; // a block-scope static always defines (zero-init) storage
+        if (!symbolTable.insert(name, sym, Kind::VARIABLE))
+        {
+            auto existing = symbolTable.findSameScope(name, Kind::VARIABLE);
+            error(var->getLine(), var->getCol(),
+                  "redeclaration of variable '" + name + "'" +
+                      (existing ? " (previous declaration at line " +
+                                      std::to_string(existing->line) + ")"
+                                : "") +
+                      ".");
+            return;
+        }
+        sym->node = var;
+        var->symbol = sym;
+    }
+
     void analyzeVarDecl(const std::shared_ptr<VarDecl> &variable)
     {
-        const auto variableSymbol =
-            std::make_shared<Symbol>(variable->name, variable->type, variable->getLine(),
-                                     variable->getCol(), Kind::VARIABLE);
-        check(variable->name, variableSymbol, Kind::VARIABLE, variable->getLine(),
-              variable->getCol(), variable);
+        const bool fileScope = variable->global;
+        const auto sc = variable->storageClass;
+        const bool hasInit = variable->initialization != nullptr;
+
+        if (!fileScope && sc == StorageClass::Extern && hasInit)
+            error(variable->getLine(), variable->getCol(),
+                  "block-scope 'extern' variable '" + variable->name +
+                      "' cannot have an initializer.");
+
+        declareVariable(variable, fileScope, sc, hasInit);
 
         if (variable->initialization)
         {
             analyzeExpr(variable->initialization);
+
+            // Static-duration variables require a constant initializer.
+            if (variable->symbol && variable->symbol->duration == StorageDuration::Static)
+            {
+                long long val;
+                if (!isConstantInitializer(variable->initialization))
+                    error(variable->getLine(), variable->getCol(),
+                          "initializer for '" + variable->name +
+                              "' with static storage duration must be a constant expression.");
+                else if (evalConstInt(variable->initialization, val))
+                    variable->symbol->constInit = val;
+            }
+
             if (auto x = std::dynamic_pointer_cast<InitExpr>(variable->initialization))
             {
                 if (!isArray(variable->type))
@@ -1048,6 +1388,11 @@ class SemanticAnalyzer
 
     void analyzeFunctionDeclStmt(const std::shared_ptr<FunctionDeclStmt> &stmt)
     {
+        if (stmt->declaration->storageClass == StorageClass::Static)
+            error(stmt->declaration->getLine(), stmt->declaration->getCol(),
+                  "block-scope function '" + stmt->declaration->name +
+                      "' cannot be declared 'static'.");
+
         std::vector<std::shared_ptr<Type>> paramTypes;
         paramTypes.reserve(stmt->declaration->parameters.size());
         for (const auto &param : stmt->declaration->parameters)

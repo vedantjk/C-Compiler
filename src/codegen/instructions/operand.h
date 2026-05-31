@@ -77,3 +77,10 @@ class Stack : public Operand
     int depth;
     explicit Stack(const int depth_) : depth(depth_) {};
 };
+
+class Data : public Operand
+{
+  public:
+    std::string identifier;
+    explicit Data(std::string identifier_) : identifier(std::move(identifier_)) {}
+};

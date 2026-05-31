@@ -2,6 +2,7 @@
 #include "../../instructions/instructions.h"
 #include "../ASTNodes/codegenProgram.h"
 #include "../TopLevelNodes/codegenFunction.h"
+#include "../TopLevelNodes/codegenStaticVariable.h"
 #include <memory>
 #include <ostream>
 
@@ -11,7 +12,8 @@ class codegenASTPrinter
 
     void visit(const codegenProgram &node) const
     {
-        out << "    .text\n";
+        // Each function emits its own .text and each static its own .data/.bss,
+        // so sections stay correct regardless of node order.
         for (const auto &child : node.nodes)
         {
             dispatch(*child);
@@ -21,9 +23,31 @@ class codegenASTPrinter
         out << "    .section .note.GNU-stack,\"\",@progbits\n";
     }
 
+    void visit(const codegenStaticVariable &node) const
+    {
+        if (node.global)
+            out << "    .globl " << node.name << "\n";
+        if (node.init != 0)
+        {
+            out << "    .data\n";
+            out << "    .align 4\n";
+            out << node.name << ":\n";
+            out << "    .long " << node.init << "\n";
+        }
+        else
+        {
+            out << "    .bss\n";
+            out << "    .align 4\n";
+            out << node.name << ":\n";
+            out << "    .zero 4\n";
+        }
+    }
+
     void visit(const codegenFunction &node) const
     {
-        out << "    .globl " << node.name << "\n";
+        out << "    .text\n";
+        if (node.global)
+            out << "    .globl " << node.name << "\n";
         out << node.name << ":\n";
         out << "    pushq    %rbp\n";
         out << "    movq    %rsp, %rbp\n";
@@ -47,6 +71,10 @@ class codegenASTPrinter
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const codegenFunction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const codegenStaticVariable *>(&node))
         {
             visit(*p);
         }
@@ -270,6 +298,8 @@ class codegenASTPrinter
 
     void visit(const Stack &node) const { out << node.depth << "(%rbp)"; }
 
+    void visit(const Data &node) const { out << node.identifier << "(%rip)"; }
+
     void visit(const Immediate &node) const { out << "$" << node.value; }
 
     void visit(const Register &node) const
@@ -368,6 +398,10 @@ class codegenASTPrinter
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const Stack *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const Data *>(&node))
         {
             visit(*p);
         }

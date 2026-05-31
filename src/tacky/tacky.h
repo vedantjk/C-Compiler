@@ -10,9 +10,11 @@
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
 #include "../tacky/instructions/instructions.h"
 #include "../tacky/instructions/val.h"
+#include "ast/TopLevelNodes/TackyStaticVariable.h"
 
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -22,7 +24,7 @@ class TackyDriver
 {
   public:
     std::unordered_map<std::string, int> tempCounters;
-
+    std::set<Symbol *> seenVarDecls;
     std::string makeTemp(const std::string &&name)
     {
         tempCounters[name]++;
@@ -327,12 +329,23 @@ class TackyDriver
         {
             for (auto &vd : *vars)
             {
-                auto var = processVarDecl(vd, instructions);
-                if (vd->initialization)
+                if (vd->symbol->duration == StorageDuration::Static)
                 {
-                    auto val = processExpression(vd->initialization, instructions);
-                    instructions.push_back(
-                        std::make_unique<TackyCopy>(declareStmt->line, declareStmt->col, val, var));
+                    seenVarDecls.insert(vd->symbol.get());
+                }
+                else if (vd->symbol->linkage == Linkage::External &&
+                         vd->symbol->duration == StorageDuration::Automatic)
+                {
+                }
+                else
+                {
+                    auto var = processVarDecl(vd, instructions);
+                    if (vd->initialization)
+                    {
+                        auto val = processExpression(vd->initialization, instructions);
+                        instructions.push_back(std::make_unique<TackyCopy>(
+                            declareStmt->line, declareStmt->col, val, var));
+                    }
                 }
             }
         }
@@ -525,8 +538,10 @@ class TackyDriver
         // it guarantees the function ends in a return so codegen emits a final ret.
         instructions.push_back(std::make_unique<TackyReturn>(functionNode->line, functionNode->col,
                                                              TackyConstant("0")));
+        bool global = functionNode->symbol && functionNode->symbol->linkage == Linkage::External;
         return std::make_unique<TackyFunction>(functionNode->line, functionNode->col,
-                                               functionNode->name, std::move(instructions), params);
+                                               functionNode->name, global, std::move(instructions),
+                                               params);
     }
 
     std::unique_ptr<TackyProgram> tacky(const std::shared_ptr<Program> &prog)
@@ -540,7 +555,25 @@ class TackyDriver
                     continue;
                 nodes.push_back(processFunction(p));
             }
+            else if (auto p = std::dynamic_pointer_cast<VarDecl>(node))
+            {
+                seenVarDecls.insert(p->symbol.get());
+            }
         }
-        return std::make_unique<TackyProgram>(prog->line, prog->col, std::move(nodes));
+
+        for (const auto &symbol : seenVarDecls)
+        {
+            if (!symbol->defined && !symbol->tentative)
+                continue;
+            nodes.push_back(std::make_unique<TackyStaticVariable>(
+                symbol->line, symbol->column, symbol->uniqueName,
+                symbol->linkage == Linkage::External, symbol->constInit.value_or(0)));
+        }
+        auto program = std::make_unique<TackyProgram>(prog->line, prog->col, std::move(nodes));
+        // Record every static-storage name (incl. extern-only declarations) so
+        // codegen resolves their references to RIP-relative data, not stack slots.
+        for (const auto &symbol : seenVarDecls)
+            program->staticNames.insert(symbol->uniqueName);
+        return program;
     }
 };

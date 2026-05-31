@@ -44,7 +44,7 @@ CATEGORIES = ("parse_valid", "parse_invalid", "validate_invalid")
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump as chapters
 # land. This is the single source of truth for the implemented gate.
-IMPLEMENTED_CHAPTERS = set(range(1, 10))  # chapters 1..9
+IMPLEMENTED_CHAPTERS = set(range(1, 11))  # chapters 1..10
 
 STAGES = ("lex", "parse", "validate", "tacky", "codegen", "run")
 _CHAP_RE = re.compile(r"chapter_(\d+)")
@@ -232,9 +232,16 @@ def execute(f: Path, cc89: Path, art: Path, timeout: float):
     base = artifact_base(f)
     asm = art / f"{base}.s"
 
-    helper = f.parent / "stack_alignment_check_linux.s"
-    if f.name == "stack_alignment.c" and helper.exists():
-        return _exec_linked(f, cc89, art, timeout, extra=[str(helper)])
+    # Tests that link against a committed platform helper (.s defining symbols
+    # the C file declares extern).
+    helper_fixtures = {
+        "stack_alignment.c": "stack_alignment_check_linux.s",
+        "push_arg_on_page_boundary.c": "data_on_page_boundary_linux.s",
+    }
+    if f.name in helper_fixtures:
+        helper = f.parent / helper_fixtures[f.name]
+        if helper.exists():
+            return _exec_linked(f, cc89, art, timeout, extra=[str(helper)])
 
     if "/libraries/" in f.as_posix():
         sib = library_sibling(f)
