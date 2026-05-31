@@ -1,3 +1,0 @@
-benchmarks/sa/call_arity/call_arity.c:7:12: error: function call has 1 parameters. Expected 2
-benchmarks/sa/call_arity/call_arity.c:8:12: error: function call has 3 parameters. Expected 2
-benchmarks/sa/call_arity/call_arity.c:9:12: error: function call has 0 parameters. Expected 2

@@ -1,5 +1,0 @@
-benchmarks/sa/bad_indirection/bad_indirection.c:11:6: error: required pointer operand, received 'int'.
-benchmarks/sa/bad_indirection/bad_indirection.c:12:6: error: required pointer or array type, received 'int'.
-benchmarks/sa/bad_indirection/bad_indirection.c:13:6: error: expected struct or pointer to struct, got int.
-benchmarks/sa/bad_indirection/bad_indirection.c:14:7: error: '.' needs object, received: struct Point*.
-benchmarks/sa/bad_indirection/bad_indirection.c:15:6: error: '->' needs pointer, received: struct Point.

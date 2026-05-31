@@ -1,1 +1,0 @@
-benchmarks/sa/sa2/sa2.c:2:10: error: redeclaration of variable 'myVar'. Previous declaration (variable) at line 1.

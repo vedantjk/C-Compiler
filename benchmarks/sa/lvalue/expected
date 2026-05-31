@@ -1,5 +1,0 @@
-benchmarks/sa/lvalue/lvalue.c:9:6: error: Left expression must be an lvalue, got rvalue of type: int.
-benchmarks/sa/lvalue/lvalue.c:10:7: error: Left expression must be an lvalue, got rvalue of type: int.
-benchmarks/sa/lvalue/lvalue.c:11:6: error: required lvalue, received rvalue of type 'int'.
-benchmarks/sa/lvalue/lvalue.c:12:6: error: required lvalue, received rvalue of type 'int'.
-benchmarks/sa/lvalue/lvalue.c:13:7: error: required lvalue, received rvalue of type 'int'.

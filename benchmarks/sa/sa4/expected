@@ -1,1 +1,0 @@
-benchmarks/sa/sa4/sa4.c:4:8: error: redeclaration of struct field 'a'. Previous declaration at line 2.

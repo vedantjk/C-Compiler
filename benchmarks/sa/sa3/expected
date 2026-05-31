@@ -1,2 +1,0 @@
-benchmarks/sa/sa3/sa3.c:5:4: error: redefinition of 'compute' (previous definition at line 1).
-benchmarks/sa/sa3/sa3.c:13:4: error: redefinition of 'add' (previous definition at line 9).

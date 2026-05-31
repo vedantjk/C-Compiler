@@ -1,3 +1,0 @@
-benchmarks/sa/call_type/call_type.c:14:12: error: mismatched param types, expected int got int*
-benchmarks/sa/call_type/call_type.c:15:12: error: mismatched param types, expected int got char*
-benchmarks/sa/call_type/call_type.c:16:10: error: mismatched param types, expected char* got int

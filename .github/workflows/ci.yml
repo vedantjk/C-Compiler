@@ -32,16 +32,7 @@ jobs:
         run: valgrind --leak-check=full --error-exitcode=1 ./build-valgrind/test_lexer
 
       - name: Parser suite
-        env:
-          CC89: ${{ github.workspace }}/build-valgrind/cc89
-        run: bash benchmarks/run_tests.sh --stage parse
-
-      - name: SA suite
-        env:
-          CC89: ${{ github.workspace }}/build-valgrind/cc89
-        run: bash benchmarks/run_tests.sh --stage validate benchmarks/sa
+        run: python3 tools/tt.py parse --no-build --cc89 build-valgrind/cc89
 
       - name: Codegen execution suite
-        env:
-          CC89: ${{ github.workspace }}/build-valgrind/cc89
-        run: bash benchmarks/run_tests.sh --stage run benchmarks/nlsandler/parse_valid
+        run: python3 tools/tt.py run --no-build --cc89 build-valgrind/cc89

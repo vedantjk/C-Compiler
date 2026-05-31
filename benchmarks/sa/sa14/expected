@@ -1,3 +1,0 @@
-benchmarks/sa/sa14/sa14.c:8:21: error: expected type - void, got struct A*
-benchmarks/sa/sa14/sa14.c:10:11: error: Function with void return type has non-void return type
-benchmarks/sa/sa14/sa14.c:19:25: error: expected type - int, got struct A*

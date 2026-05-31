@@ -1,2 +1,0 @@
-benchmarks/sa/sa1/sa1.c:5:10: error: redeclaration of variable 'a'. Previous declaration (parameter) at line 4.
-benchmarks/sa/sa1/sa1.c:6:10: error: redeclaration of variable 'd'. Previous declaration (parameter) at line 4.

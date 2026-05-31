@@ -1,5 +1,6 @@
 build/
 cmake-build-*/
+build-docker/
 .cache/
 compile_commands.json
 *.o
