@@ -329,6 +329,16 @@ class SemanticAnalyzer
                 }
             }
 
+            // For a compound arithmetic/bitwise assignment the op is done in place at
+            // the lhs width, so the rhs must be widened/narrowed to match (a `long +=
+            // int` would otherwise read an 8-byte operand from a 4-byte slot). Shifts
+            // are excluded: the count is taken via %cl regardless of its width.
+            const bool compoundInPlace = x->op == "+=" || x->op == "-=" || x->op == "*=" ||
+                                         x->op == "/=" || x->op == "%=" || x->op == "&=" ||
+                                         x->op == "^=" || x->op == "|=";
+            if (compoundInPlace && isInteger(lType) && isInteger(rType))
+                x->rhs = convertTo(x->rhs, lType);
+
             x->resolvedType = x->lhs->resolvedType;
             x->isLvalue = false;
         }
@@ -1284,7 +1294,15 @@ class SemanticAnalyzer
                           "initializer for '" + variable->name +
                               "' with static storage duration must be a constant expression.");
                 else if (evalConstInt(variable->initialization, val))
+                {
+                    // Narrow the folded constant to the declared width at compile time
+                    // (e.g. `static int g = 4294967296L;` stores 0, not the full value).
+                    if (std::dynamic_pointer_cast<IntType>(variable->type))
+                        val = static_cast<int>(val);
+                    else if (std::dynamic_pointer_cast<CharType>(variable->type))
+                        val = static_cast<signed char>(val);
                     variable->symbol->constInit = val;
+                }
             }
 
             if (auto x = std::dynamic_pointer_cast<InitExpr>(variable->initialization))
