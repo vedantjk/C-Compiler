@@ -12,7 +12,8 @@ enum class RegisterName
     R8,
     R9,
     R10,
-    R11
+    R11,
+    SP
 };
 
 enum class CondCode
@@ -23,6 +24,12 @@ enum class CondCode
     GE,
     L,
     LE
+};
+
+enum class AssemblyType
+{
+    LONGWORD,
+    QUADWORD
 };
 
 inline std::string condCodeToString(const CondCode c)
@@ -52,8 +59,8 @@ class Operand
 class Immediate : public Operand
 {
   public:
-    std::string value;
-    explicit Immediate(std::string value_) : value(std::move(value_)) {};
+    long long value;
+    explicit Immediate(long long value_) : value(value_) {};
 };
 
 class Register : public Operand
@@ -68,7 +75,9 @@ class PseudoRegister : public Operand
 {
   public:
     std::string name;
-    explicit PseudoRegister(std::string name_) : name(std::move(name_)) {};
+    AssemblyType type; // width of the value, so the stack-slot pass sizes it 4 vs 8
+    explicit PseudoRegister(std::string name_, AssemblyType type_ = AssemblyType::LONGWORD)
+        : name(std::move(name_)), type(type_) {};
 };
 
 class Stack : public Operand

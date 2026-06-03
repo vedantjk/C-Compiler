@@ -8,7 +8,7 @@ class codegenFunction : public codegenTopLevelNode
 {
   public:
     std::string name;
-    std::unique_ptr<AllocateStack> stackAllocation;
+    std::unique_ptr<BinaryInstruction> stackAllocation; // subq $frame, %rsp
     std::vector<std::unique_ptr<Instruction>> instructions;
     bool global;
     codegenFunction(const int line_, const int column_, const std::string name_, bool global_,

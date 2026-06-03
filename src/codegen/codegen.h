@@ -24,6 +24,12 @@ class codegenDriver
         return dynamic_cast<const Immediate *>(&op) != nullptr;
     }
 
+    // Assembly width of a TACKY value: long -> 8-byte quadword, else 4-byte longword.
+    static AssemblyType assemblyTypeOf(const TackyVal &v)
+    {
+        return typeOf(v) == ConstantType::LONG ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
+    }
+
     std::unique_ptr<Operand> tackyValToOperand(const TackyVal &t)
     {
         if (auto *c = std::get_if<TackyConstant>(&t))
@@ -32,7 +38,7 @@ class codegenDriver
         }
         if (auto *v = std::get_if<TackyVar>(&t))
         {
-            return std::make_unique<PseudoRegister>(v->name);
+            return std::make_unique<PseudoRegister>(v->name, assemblyTypeOf(t));
         }
         return nullptr;
     }
@@ -46,8 +52,8 @@ class codegenDriver
 
         if (tackyUnary.op == UnaryOp::Not)
         {
-            std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
-            std::unique_ptr<Operand> imm2 = std::make_unique<Immediate>("0");
+            std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
+            std::unique_ptr<Operand> imm2 = std::make_unique<Immediate>(0);
             instructions.push_back(
                 std::make_unique<CmpInstruction>(std::move(imm1), std::move(src)));
             instructions.push_back(
@@ -153,7 +159,7 @@ class codegenDriver
         if (isRelationalOp(tackyBinary.op))
         {
             CondCode cc = binaryOpToCondCode(tackyBinary.op);
-            std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+            std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
             instructions.push_back(
                 std::make_unique<CmpInstruction>(std::move(src2), std::move(src1)));
             instructions.push_back(
@@ -176,7 +182,7 @@ class codegenDriver
     void processTackyJumpIfZero(const TackyJumpIfZero &tackyJIZ,
                                 std::vector<std::unique_ptr<Instruction>> &instructions)
     {
-        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         auto condition = tackyValToOperand(tackyJIZ.condition);
         instructions.push_back(
             std::make_unique<CmpInstruction>(std::move(imm1), std::move(condition)));
@@ -187,7 +193,7 @@ class codegenDriver
     void processTackyJumpIfNotZero(const TackyJumpIfNotZero &tackyJIZ,
                                    std::vector<std::unique_ptr<Instruction>> &instructions)
     {
-        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>("0");
+        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         auto condition = tackyValToOperand(tackyJIZ.condition);
         instructions.push_back(
             std::make_unique<CmpInstruction>(std::move(imm1), std::move(condition)));
@@ -235,7 +241,10 @@ class codegenDriver
 
         if (stackPadding != 0)
         {
-            instructions.push_back(std::make_unique<AllocateStack>(stackPadding));
+            instructions.push_back(
+                std::make_unique<BinaryInstruction>(std::make_unique<Immediate>(stackPadding),
+                                                    std::make_unique<Register>(RegisterName::SP, 8),
+                                                    BinaryOp::Subtract, AssemblyType::QUADWORD));
         }
 
         int regIndex = 0;
@@ -251,7 +260,9 @@ class codegenDriver
         for (auto &tackyArg : stackArgs)
         {
             auto assemblyArg = tackyValToOperand(tackyArg);
-            if (isImmediate(*assemblyArg))
+            // Immediates and quadwords can be pushed directly (pushq is 8-byte).
+            // A longword in memory must go via %eax so we push a full 8-byte slot.
+            if (isImmediate(*assemblyArg) || assemblyTypeOf(tackyArg) == AssemblyType::QUADWORD)
             {
                 instructions.push_back(std::make_unique<PushInstruction>(std::move(assemblyArg)));
             }
@@ -268,12 +279,33 @@ class codegenDriver
 
         if (int bytesToRemove = 8 * static_cast<int>(stackArgs.size()) + stackPadding)
         {
-            instructions.push_back(std::make_unique<DeallocateStack>(bytesToRemove));
+            instructions.push_back(
+                std::make_unique<BinaryInstruction>(std::make_unique<Immediate>(bytesToRemove),
+                                                    std::make_unique<Register>(RegisterName::SP, 8),
+                                                    BinaryOp::Add, AssemblyType::QUADWORD));
         }
 
         auto assemblyDst = tackyValToOperand(tackyFunctionCall.dst);
         instructions.push_back(std::make_unique<MoveInstruction>(
             std::make_unique<Register>(RegisterName::AX, 4), std::move(assemblyDst)));
+    }
+
+    void processTackySignExtend(const TackySignExtend &tackySignExtend,
+                                std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackySignExtend.src);
+        auto dst = tackyValToOperand(tackySignExtend.dst);
+        instructions.push_back(std::make_unique<MoveSXInstruction>(std::move(src), std::move(dst)));
+    }
+
+    void processTackyTruncate(const TackyTruncate &tackyTruncate,
+                              std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        // Truncation is a plain 4-byte move: it keeps the low 32 bits of the source.
+        auto src = tackyValToOperand(tackyTruncate.src);
+        auto dst = tackyValToOperand(tackyTruncate.dst);
+        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst),
+                                                                 AssemblyType::LONGWORD));
     }
 
     void processTackyInstructions(
@@ -317,6 +349,14 @@ class codegenDriver
             else if (auto *p = dynamic_cast<TackyFunctionCall *>(instruction.get()))
             {
                 processTackyFunctionCall(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackySignExtend *>(instruction.get()))
+            {
+                processTackySignExtend(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyTruncate *>(instruction.get()))
+            {
+                processTackyTruncate(*p, instructions);
             }
         }
     }
@@ -406,7 +446,10 @@ class codegenDriver
         if (int frameSize = -nextOffset - 4; frameSize > 0)
         {
             frameSize = frameSize + (16 - frameSize % 16) % 16;
-            func.stackAllocation = std::make_unique<AllocateStack>(frameSize);
+            func.stackAllocation =
+                std::make_unique<BinaryInstruction>(std::make_unique<Immediate>(frameSize),
+                                                    std::make_unique<Register>(RegisterName::SP, 8),
+                                                    BinaryOp::Subtract, AssemblyType::QUADWORD);
         }
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "../ast/ASTNodes/ASTNode.h"
 #include "../ast/ASTNodes/Program.h"
+#include "../ast/Expressions/CastExpr.h"
 #include "../ast/Expressions/FunctionCallExpr.h"
 #include "../ast/Expressions/IntLiterals.h"
 #include "../ast/Statements/BreakStmt.h"
@@ -36,6 +37,7 @@ inline bool isComma(const std::string &op) { return op == ","; }
 inline bool isInteger(const std::shared_ptr<Type> &t)
 {
     return std::dynamic_pointer_cast<IntType>(t) != nullptr ||
+           std::dynamic_pointer_cast<LongType>(t) != nullptr ||
            std::dynamic_pointer_cast<CharType>(t) != nullptr;
 }
 
@@ -58,6 +60,31 @@ inline bool isVoid(const std::shared_ptr<Type> &t)
 }
 
 inline bool isScalar(const std::shared_ptr<Type> &t) { return isInteger(t) || isPointer(t); }
+
+// Width in bytes of a scalar type; 0 for non-scalars. Used for usual-arithmetic
+// conversions, where the wider integer type wins.
+inline int typeSize(const std::shared_ptr<Type> &t)
+{
+    if (std::dynamic_pointer_cast<CharType>(t))
+        return 1;
+    if (std::dynamic_pointer_cast<IntType>(t))
+        return 4;
+    if (std::dynamic_pointer_cast<LongType>(t))
+        return 8;
+    if (std::dynamic_pointer_cast<PointerType>(t))
+        return 8;
+    return 0;
+}
+
+// Common type of two arithmetic operands (callers gate on isInteger): identical
+// types stay; otherwise the wider one (so int + long -> long).
+inline std::shared_ptr<Type> getCommonType(const std::shared_ptr<Type> &a,
+                                           const std::shared_ptr<Type> &b)
+{
+    if (a->equals(*b))
+        return a;
+    return typeSize(a) >= typeSize(b) ? a : b;
+}
 
 class SemanticAnalyzer
 {
@@ -167,7 +194,7 @@ class SemanticAnalyzer
     bool isNullPointerConstant(const std::shared_ptr<Expression> &e)
     {
         if (const auto lit = std::dynamic_pointer_cast<IntLiterals>(e))
-            return lit->value == "0";
+            return lit->value == 0;
         if (const auto cast = std::dynamic_pointer_cast<CastExpr>(e))
         {
             const auto ptr = std::dynamic_pointer_cast<PointerType>(cast->type);
@@ -178,6 +205,21 @@ class SemanticAnalyzer
             return isNullPointerConstant(cast->operand);
         }
         return false;
+    }
+
+    // Reconcile an already-analyzed rvalue to `target` by wrapping it in a
+    // synthesized CastExpr when the types differ. The new node is pre-typed and is
+    // NOT re-run through analyzeExpr. Codegen later lowers these into the actual
+    // sign-extend / truncate.
+    std::shared_ptr<Expression> convertTo(const std::shared_ptr<Expression> &e,
+                                          const std::shared_ptr<Type> &target)
+    {
+        if (e->resolvedType->equals(*target))
+            return e;
+        auto cast = std::make_shared<CastExpr>(target, e, e->getLine(), e->getCol());
+        cast->resolvedType = target;
+        cast->isLvalue = false;
+        return cast;
     }
 
     size_t decodedLength(const std::string &s)
@@ -197,7 +239,7 @@ class SemanticAnalyzer
     {
         if (auto x = std::dynamic_pointer_cast<IntLiterals>(expr))
         {
-            x->resolvedType = IntType::getInstance();
+            x->resolvedType = x->type; // parser typed it Int or Long by value/suffix
             x->isLvalue = false;
         }
         else if (auto x = std::dynamic_pointer_cast<StringLiterals>(expr))
@@ -233,6 +275,10 @@ class SemanticAnalyzer
                     error(x->lhs->getLine(), x->lhs->getCol(),
                           "Left expression and right expression are not same type, left type: " +
                               lType->toString() + ", right type: " + rType->toString() + ".");
+                }
+                else if (isInteger(lType) && isInteger(rType))
+                {
+                    x->rhs = convertTo(x->rhs, lType); // convert-by-assignment
                 }
             }
             else if (x->op == "+=" || x->op == "-=")
@@ -318,7 +364,17 @@ class SemanticAnalyzer
 
                     if (!leftIsPointer && !rightIsPointer)
                     {
-                        x->resolvedType = IntType::getInstance();
+                        if (isInteger(lType) && isInteger(rType))
+                        {
+                            auto common = getCommonType(lType, rType);
+                            x->left = convertTo(x->left, common);
+                            x->right = convertTo(x->right, common);
+                            x->resolvedType = common;
+                        }
+                        else
+                        {
+                            x->resolvedType = IntType::getInstance();
+                        }
                     }
                     else if (leftIsPointer && !rightIsPointer)
                     {
@@ -366,7 +422,17 @@ class SemanticAnalyzer
                               "Arithmetic operator needs integer for right expression, got " +
                                   rType->toString() + ".");
                     }
-                    x->resolvedType = IntType::getInstance();
+                    if (isInteger(lType) && isInteger(rType))
+                    {
+                        auto common = getCommonType(lType, rType);
+                        x->left = convertTo(x->left, common);
+                        x->right = convertTo(x->right, common);
+                        x->resolvedType = common;
+                    }
+                    else
+                    {
+                        x->resolvedType = IntType::getInstance();
+                    }
                     x->isLvalue = false;
                 }
             }
@@ -414,6 +480,13 @@ class SemanticAnalyzer
                     }
                 }
 
+                if (isInteger(lType) && isInteger(rType))
+                {
+                    auto common = getCommonType(lType, rType);
+                    x->left = convertTo(x->left, common);
+                    x->right = convertTo(x->right, common);
+                }
+
                 x->resolvedType = IntType::getInstance();
                 x->isLvalue = false;
             }
@@ -450,7 +523,23 @@ class SemanticAnalyzer
                               rType->toString() + ".");
                 }
 
-                x->resolvedType = IntType::getInstance();
+                if (!(isInteger(lType) && isInteger(rType)))
+                {
+                    x->resolvedType = IntType::getInstance();
+                }
+                else if (x->binaryOp == "<<" || x->binaryOp == ">>")
+                {
+                    // Shift result is the left operand's type; the shift count type
+                    // is independent, so the operands are not brought to a common type.
+                    x->resolvedType = lType;
+                }
+                else
+                {
+                    auto common = getCommonType(lType, rType);
+                    x->left = convertTo(x->left, common);
+                    x->right = convertTo(x->right, common);
+                    x->resolvedType = common;
+                }
                 x->isLvalue = false;
             }
             else if (isComma(x->binaryOp))
@@ -630,6 +719,13 @@ class SemanticAnalyzer
             {
                 x->resolvedType = eType;
             }
+            else if (isInteger(tType) && isInteger(eType))
+            {
+                auto common = getCommonType(tType, eType);
+                x->thenBranch = convertTo(x->thenBranch, common);
+                x->elseBranch = convertTo(x->elseBranch, common);
+                x->resolvedType = common;
+            }
             else
             {
                 error(x->getLine(), x->getCol(),
@@ -777,12 +873,17 @@ class SemanticAnalyzer
                 for (int i = 0; i < functionType->paramTypes.size(); i++)
                 {
                     analyzeExpr(expr->parameters[i]);
-                    if (!canDecayTo(expr->parameters[i]->resolvedType, functionType->paramTypes[i]))
+                    auto argType = expr->parameters[i]->resolvedType;
+                    const auto &paramType = functionType->paramTypes[i];
+                    if (isInteger(argType) && isInteger(paramType))
+                    {
+                        expr->parameters[i] = convertTo(expr->parameters[i], paramType);
+                    }
+                    else if (!canDecayTo(argType, paramType))
                     {
                         error(expr->getLine(), expr->getCol(),
-                              "mismatched param types, expected " +
-                                  functionType->paramTypes[i]->toString() + " got " +
-                                  expr->parameters[i]->resolvedType->toString());
+                              "mismatched param types, expected " + paramType->toString() +
+                                  " got " + argType->toString());
                     }
                 }
                 for (int i = functionType->paramTypes.size(); i < expr->parameters.size(); i++)
@@ -872,7 +973,7 @@ class SemanticAnalyzer
         {
             try
             {
-                out = std::stoll(lit->value);
+                out = lit->value;
             }
             catch (...)
             {
@@ -1008,6 +1109,21 @@ class SemanticAnalyzer
                 return true;
             }
             return false;
+        }
+        if (auto c = std::dynamic_pointer_cast<CastExpr>(e))
+        {
+            long long v;
+            if (!evalConstInt(c->operand, v))
+                return false;
+            // Apply the cast's value conversion at compile time: narrowing to a
+            // smaller integer truncates; widening to long keeps the value.
+            if (std::dynamic_pointer_cast<IntType>(c->type))
+                out = static_cast<int>(v);
+            else if (std::dynamic_pointer_cast<CharType>(c->type))
+                out = static_cast<signed char>(v);
+            else
+                out = v;
+            return true;
         }
         return false;
     }
@@ -1212,6 +1328,9 @@ class SemanticAnalyzer
                                   std::dynamic_pointer_cast<StructType>(rType) &&
                                   lType->equals(*rType);
 
+                const bool staticDuration =
+                    variable->symbol && variable->symbol->duration == StorageDuration::Static;
+
                 if (!(isScalar(lType) && (isScalar(rType) || canDecayTo(rType, lType))) &&
                     !(isPointer(lType) && isNullPointerConstant(variable->initialization)) &&
                     !stringInit && !sameStruct)
@@ -1219,6 +1338,12 @@ class SemanticAnalyzer
                     error(variable->getLine(), variable->getCol(),
                           "Left expression and right expression are not same type, left type: " +
                               lType->toString() + ", right type: " + rType->toString() + ".");
+                }
+                else if (isInteger(lType) && isInteger(rType) && !staticDuration)
+                {
+                    // Convert-by-assignment for automatic vars; static initializers
+                    // are folded as constants above and must stay cast-free.
+                    variable->initialization = convertTo(variable->initialization, lType);
                 }
             }
         }
@@ -1252,11 +1377,16 @@ class SemanticAnalyzer
         if (stmt->returnExpression != nullptr)
         {
             analyzeExpr(stmt->returnExpression);
-            if (!currentReturnType->equals(*stmt->returnExpression->resolvedType))
+            const auto retType = stmt->returnExpression->resolvedType;
+            if (isInteger(currentReturnType) && isInteger(retType))
+            {
+                stmt->returnExpression = convertTo(stmt->returnExpression, currentReturnType);
+            }
+            else if (!currentReturnType->equals(*retType))
             {
                 error(stmt->returnExpression->getLine(), stmt->returnExpression->col,
                       "expected type - " + currentReturnType->toString() + ", got " +
-                          stmt->returnExpression->resolvedType->toString());
+                          retType->toString());
             }
         }
         else
@@ -1487,7 +1617,7 @@ class SemanticAnalyzer
             if (stmts.empty() || dynamic_cast<ReturnStmt *>(stmts.back().get()) == nullptr)
             {
                 stmts.push_back(std::make_shared<ReturnStmt>(
-                    -1, -1, std::make_shared<IntLiterals>(-1, -1, "0")));
+                    -1, -1, std::make_shared<IntLiterals>(-1, -1, 0, IntType::getInstance())));
             }
         }
 

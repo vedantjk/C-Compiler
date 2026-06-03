@@ -53,7 +53,9 @@ class codegenASTPrinter
         out << "    movq    %rsp, %rbp\n";
         if (node.stackAllocation != nullptr)
         {
+            out << "    ";
             visit(*node.stackAllocation);
+            out << "\n";
         }
         for (const auto &child : node.instructions)
         {
@@ -107,39 +109,40 @@ class codegenASTPrinter
         }
     }
 
-    void visit(const BinaryOp &op) const
+    // suffix is 'l' for a longword operation, 'q' for a quadword.
+    void visit(const BinaryOp &op, const char suffix) const
     {
         if (op == BinaryOp::Add)
         {
-            out << "addl";
+            out << "add" << suffix;
         }
         else if (op == BinaryOp::Subtract)
         {
-            out << "subl";
+            out << "sub" << suffix;
         }
         else if (op == BinaryOp::Multiply)
         {
-            out << "imull";
+            out << "imul" << suffix;
         }
         else if (op == BinaryOp::BitwiseAnd)
         {
-            out << "andl";
+            out << "and" << suffix;
         }
         else if (op == BinaryOp::BitwiseOr)
         {
-            out << "orl";
+            out << "or" << suffix;
         }
         else if (op == BinaryOp::BitwiseXor)
         {
-            out << "xorl";
+            out << "xor" << suffix;
         }
         else if (op == BinaryOp::LeftShift)
         {
-            out << "shll";
+            out << "shl" << suffix;
         }
         else if (op == BinaryOp::RightShift)
         {
-            out << "sarl";
+            out << "sar" << suffix;
         }
     }
 
@@ -150,11 +153,6 @@ class codegenASTPrinter
         dispatch(*node.operand);
     }
 
-    void visit(const AllocateStack &node) const
-    {
-        out << "    subq    $" << node.quantity << ", %rsp\n";
-    }
-
     void visit(const BinaryInstruction &node) const
     {
         if (node.preStackFixInstruction != nullptr)
@@ -162,7 +160,7 @@ class codegenASTPrinter
             visit(*node.preStackFixInstruction);
             out << "\n    ";
         }
-        visit(node.op);
+        visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
         out << "    ";
         dispatch(*node.src);
         out << ", ";
@@ -216,9 +214,12 @@ class codegenASTPrinter
 
     void visit(const Label &node) const { out << ".L" << node.identifier << ":"; }
 
-    void visit(const DeallocateStack &node) const
+    void visit(const MoveSXInstruction &node) const
     {
-        out << "addq    $" << node.quantity << ", %rsp";
+        out << "movslq    ";
+        dispatch(*node.src);
+        out << ", ";
+        dispatch(*node.dst);
     }
 
     void visit(const PushInstruction &node) const
@@ -278,10 +279,6 @@ class codegenASTPrinter
         {
             visit(*p);
         }
-        else if (auto *p = dynamic_cast<const DeallocateStack *>(&node))
-        {
-            visit(*p);
-        }
         else if (auto *p = dynamic_cast<const PushInstruction *>(&node))
         {
             visit(*p);
@@ -290,7 +287,7 @@ class codegenASTPrinter
         {
             visit(*p);
         }
-        else if (auto *p = dynamic_cast<const AllocateStack *>(&node))
+        else if (auto *p = dynamic_cast<const MoveSXInstruction *>(&node))
         {
             visit(*p);
         }
@@ -384,6 +381,10 @@ class codegenASTPrinter
                 out << "%r11d";
             else
                 out << "%r11b";
+        }
+        else if (node.name == RegisterName::SP)
+        {
+            out << "%rsp"; // the stack pointer is always addressed as the 64-bit register
         }
     }
 

@@ -22,6 +22,16 @@
 
 class TackyDriver
 {
+    ConstantType returnConstantType(const std::shared_ptr<Type> &literalType)
+    {
+        ConstantType constantType = ConstantType::INT;
+        if (auto p = std::dynamic_pointer_cast<LongType>(literalType))
+        {
+            constantType = ConstantType::LONG;
+        }
+        return constantType;
+    }
+
   public:
     std::unordered_map<std::string, int> tempCounters;
     std::set<Symbol *> seenVarDecls;
@@ -33,7 +43,7 @@ class TackyDriver
 
     TackyVal processIntLiteral(const std::shared_ptr<IntLiterals> &intLiteral)
     {
-        return TackyConstant{intLiteral->value};
+        return TackyConstant{intLiteral->value, returnConstantType(intLiteral->type)};
     }
 
     TackyVal processIncrementDecrement(const std::shared_ptr<UnaryExpr> &unaryExpr,
@@ -44,35 +54,36 @@ class TackyDriver
             if (unaryExpr->isPostFix)
             {
                 auto operand = processExpression(unaryExpr->operand, instructions);
-                auto copyVar = TackyVar(makeTemp("tmp."));
+                auto copyVar =
+                    TackyVar(makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType));
                 instructions.push_back(
                     std::make_unique<TackyCopy>(unaryExpr->line, unaryExpr->col, operand, copyVar));
-                instructions.push_back(
-                    std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col, BinaryOp::Add,
-                                                  operand, TackyConstant("1"), operand));
+                instructions.push_back(std::make_unique<TackyBinary>(
+                    unaryExpr->line, unaryExpr->col, BinaryOp::Add, operand,
+                    TackyConstant(1, ConstantType::INT), operand));
                 return copyVar;
             }
             auto operand = processExpression(unaryExpr->operand, instructions);
-            instructions.push_back(std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col,
-                                                                 BinaryOp::Add, operand,
-                                                                 TackyConstant("1"), operand));
+            instructions.push_back(std::make_unique<TackyBinary>(
+                unaryExpr->line, unaryExpr->col, BinaryOp::Add, operand,
+                TackyConstant(1, ConstantType::INT), operand));
             return operand;
         }
         if (unaryExpr->isPostFix)
         {
             auto operand = processExpression(unaryExpr->operand, instructions);
-            auto copyVar = TackyVar(makeTemp("tmp."));
+            auto copyVar = TackyVar(makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType));
             instructions.push_back(
                 std::make_unique<TackyCopy>(unaryExpr->line, unaryExpr->col, operand, copyVar));
-            instructions.push_back(std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col,
-                                                                 BinaryOp::Subtract, operand,
-                                                                 TackyConstant("1"), operand));
+            instructions.push_back(std::make_unique<TackyBinary>(
+                unaryExpr->line, unaryExpr->col, BinaryOp::Subtract, operand,
+                TackyConstant(1, ConstantType::INT), operand));
             return copyVar;
         }
         auto operand = processExpression(unaryExpr->operand, instructions);
-        instructions.push_back(std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col,
-                                                             BinaryOp::Subtract, operand,
-                                                             TackyConstant("1"), operand));
+        instructions.push_back(
+            std::make_unique<TackyBinary>(unaryExpr->line, unaryExpr->col, BinaryOp::Subtract,
+                                          operand, TackyConstant(1, ConstantType::INT), operand));
         return operand;
     }
 
@@ -100,7 +111,7 @@ class TackyDriver
             throw std::runtime_error("unhandled unary op: " + unaryExpr->op);
 
         TackyVal inner = processExpression(unaryExpr->operand, instructions);
-        TackyVar dst{makeTemp("tmp.")};
+        TackyVar dst{makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType)};
 
         instructions.push_back(std::make_unique<TackyUnary>(unaryExpr->line, unaryExpr->col, op,
                                                             std::move(inner), dst));
@@ -111,7 +122,7 @@ class TackyDriver
     TackyVal processLogicalAnd(const std::shared_ptr<BinaryExpr> &binaryExpr,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        TackyVar result(makeTemp("tmp."));
+        TackyVar result(makeTemp("tmp."), returnConstantType(binaryExpr->resolvedType));
         std::string false_label = makeTemp("false_label.");
         std::string end_label = makeTemp("end_label.");
         auto lhs = processExpression(binaryExpr->left, instructions);
@@ -120,14 +131,14 @@ class TackyDriver
         auto rhs = processExpression(binaryExpr->right, instructions);
         instructions.push_back(
             std::make_unique<TackyJumpIfZero>(binaryExpr->line, binaryExpr->col, rhs, false_label));
-        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
-                                                           TackyConstant("1"), result));
+        instructions.push_back(std::make_unique<TackyCopy>(
+            binaryExpr->line, binaryExpr->col, TackyConstant(1, ConstantType::INT), result));
         instructions.push_back(
             std::make_unique<TackyJump>(binaryExpr->line, binaryExpr->col, end_label));
         instructions.push_back(
             std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, false_label));
-        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
-                                                           TackyConstant("0"), result));
+        instructions.push_back(std::make_unique<TackyCopy>(
+            binaryExpr->line, binaryExpr->col, TackyConstant(0, ConstantType::INT), result));
         instructions.push_back(
             std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, end_label));
         return result;
@@ -136,7 +147,7 @@ class TackyDriver
     TackyVal processLogicalOr(const std::shared_ptr<BinaryExpr> &binaryExpr,
                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        TackyVar result(makeTemp("tmp."));
+        TackyVar result(makeTemp("tmp."), returnConstantType(binaryExpr->resolvedType));
         std::string true_label = makeTemp("true_label.");
         std::string end_label = makeTemp("end_label.");
         auto lhs = processExpression(binaryExpr->left, instructions);
@@ -145,14 +156,14 @@ class TackyDriver
         auto rhs = processExpression(binaryExpr->right, instructions);
         instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
             binaryExpr->line, binaryExpr->col, rhs, true_label));
-        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
-                                                           TackyConstant("0"), result));
+        instructions.push_back(std::make_unique<TackyCopy>(
+            binaryExpr->line, binaryExpr->col, TackyConstant(0, ConstantType::INT), result));
         instructions.push_back(
             std::make_unique<TackyJump>(binaryExpr->line, binaryExpr->col, end_label));
         instructions.push_back(
             std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, true_label));
-        instructions.push_back(std::make_unique<TackyCopy>(binaryExpr->line, binaryExpr->col,
-                                                           TackyConstant("1"), result));
+        instructions.push_back(std::make_unique<TackyCopy>(
+            binaryExpr->line, binaryExpr->col, TackyConstant(1, ConstantType::INT), result));
         instructions.push_back(
             std::make_unique<TackyLabel>(binaryExpr->line, binaryExpr->col, end_label));
         return result;
@@ -195,7 +206,7 @@ class TackyDriver
 
         auto v1 = processExpression(binaryExpr->left, instructions);
         auto v2 = processExpression(binaryExpr->right, instructions);
-        TackyVar dst{makeTemp("tmp.")};
+        TackyVar dst{makeTemp("tmp."), returnConstantType(binaryExpr->resolvedType)};
 
         instructions.push_back(std::make_unique<TackyBinary>(binaryExpr->line, binaryExpr->col, op,
                                                              std::move(v1), std::move(v2), dst));
@@ -207,7 +218,8 @@ class TackyDriver
                                  std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         return TackyVar(variableExpr->symbol ? variableExpr->symbol->uniqueName
-                                             : variableExpr->name);
+                                             : variableExpr->name,
+                        returnConstantType(variableExpr->resolvedType));
     }
 
     TackyVal processAssignExpr(const std::shared_ptr<AssignExpr> &assignExpr,
@@ -233,7 +245,7 @@ class TackyDriver
     TackyVal processTernaryExpr(const std::shared_ptr<TernaryExpr> &ternaryExpr,
                                 std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        TackyVar temp = TackyVar(makeTemp("tmp."));
+        TackyVar temp = TackyVar(makeTemp("tmp."), returnConstantType(ternaryExpr->resolvedType));
         std::string false_label = makeTemp("ternary_false.");
         std::string end_label = makeTemp("end.");
         auto condition = processExpression(ternaryExpr->condition, instructions);
@@ -262,10 +274,32 @@ class TackyDriver
         {
             args.push_back(processExpression(param, instructions));
         }
-        TackyVar dst{makeTemp("tmp.")};
+        TackyVar dst{makeTemp("tmp."), returnConstantType(functionCallExpr->resolvedType)};
         instructions.push_back(
             std::make_unique<TackyFunctionCall>(functionCallExpr->line, functionCallExpr->col,
                                                 functionCallExpr->functionName->name, args, dst));
+        return dst;
+    }
+
+    TackyVal processCastExpr(const std::shared_ptr<CastExpr> &castExpr,
+                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        auto result = processExpression(castExpr->operand, instructions);
+        if (castExpr->type->equals(*castExpr->operand->resolvedType))
+            return result;
+
+        TackyVar dst{makeTemp("tmp."), returnConstantType(castExpr->type)};
+
+        if (returnConstantType(castExpr->type) == ConstantType::LONG)
+        {
+            instructions.push_back(
+                std::make_unique<TackySignExtend>(castExpr->line, castExpr->col, result, dst));
+        }
+        else
+        {
+            instructions.push_back(
+                std::make_unique<TackyTruncate>(castExpr->line, castExpr->col, result, dst));
+        }
         return dst;
     }
 
@@ -300,13 +334,18 @@ class TackyDriver
         {
             return processFunctionCallExpr(p, instructions);
         }
+        if (const auto &p = std::dynamic_pointer_cast<CastExpr>(expression))
+        {
+            return processCastExpr(p, instructions);
+        }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
 
     TackyVal processVarDecl(const std::shared_ptr<VarDecl> &varDecl,
                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        return TackyVar(varDecl->symbol ? varDecl->symbol->uniqueName : varDecl->name);
+        return TackyVar(varDecl->symbol ? varDecl->symbol->uniqueName : varDecl->name,
+                        returnConstantType(varDecl->type));
     }
 
     void processReturnStmt(const std::shared_ptr<ReturnStmt> &returnStmt,
@@ -537,7 +576,7 @@ class TackyDriver
         // earlier return already fired, this is dead code after a ret. Either way
         // it guarantees the function ends in a return so codegen emits a final ret.
         instructions.push_back(std::make_unique<TackyReturn>(functionNode->line, functionNode->col,
-                                                             TackyConstant("0")));
+                                                             TackyConstant(0, ConstantType::INT)));
         bool global = functionNode->symbol && functionNode->symbol->linkage == Linkage::External;
         return std::make_unique<TackyFunction>(functionNode->line, functionNode->col,
                                                functionNode->name, global, std::move(instructions),
@@ -567,7 +606,8 @@ class TackyDriver
                 continue;
             nodes.push_back(std::make_unique<TackyStaticVariable>(
                 symbol->line, symbol->column, symbol->uniqueName,
-                symbol->linkage == Linkage::External, symbol->constInit.value_or(0)));
+                symbol->linkage == Linkage::External, symbol->constInit.value_or(0),
+                returnConstantType(symbol->type)));
         }
         auto program = std::make_unique<TackyProgram>(prog->line, prog->col, std::move(nodes));
         // Record every static-storage name (incl. extern-only declarations) so

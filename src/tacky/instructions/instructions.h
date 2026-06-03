@@ -51,6 +51,26 @@ class TackyCopy : public TackyInstruction
     }
 };
 
+class TackySignExtend : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackySignExtend(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class TackyTruncate : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyTruncate(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
 class TackyJump : public TackyInstruction
 {
   public:

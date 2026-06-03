@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cerrno>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -93,7 +95,7 @@ class Parser
 
     static bool isTypeStart(const TokenType t)
     {
-        return t == INT || t == CHAR || t == VOID || t == STRUCT;
+        return t == INT || t == CHAR || t == VOID || t == STRUCT || t == LONG;
     }
 
     static bool isStorageClassSpecifier(const TokenType t) { return t == STATIC || t == EXTERN; }
@@ -132,31 +134,65 @@ class Parser
     // Type / declarator parsing — base types and declarator chains
     // ============================================================
 
+    // Map the distinct type-specifier tokens gathered for one declaration to the
+    // Type they denote, or throw on an illegal combination. Duplicates are already
+    // rejected by the caller, so each key appears at most once. `structName` holds
+    // the tag token when a `struct` specifier is present.
+    std::shared_ptr<Type> typeFromSpecifiers(const std::unordered_map<TokenType, Token> &specs,
+                                             const std::optional<Token> &structName)
+    {
+        const auto has = [&](TokenType t) { return specs.contains(t); };
+
+        // void / char / struct are standalone: they combine with nothing else.
+        if (has(VOID) || has(CHAR) || has(STRUCT))
+        {
+            if (specs.size() != 1)
+                throw std::logic_error("invalid combination of type specifiers");
+            if (has(VOID))
+                return VoidType::getInstance();
+            if (has(CHAR))
+                return CharType::getInstance();
+            return std::make_shared<StructType>(structName->lexeme);
+        }
+
+        // What remains can only be int and/or long; long subsumes int.
+        if (has(LONG))
+            return LongType::getInstance();
+        if (has(INT))
+            return IntType::getInstance();
+
+        throw std::logic_error("invalid combination of type specifiers");
+    }
+
+    // Gather a run of type-specifier keywords (in any order) and resolve them to a
+    // single base type. Used wherever a type name appears without a storage class:
+    // casts, sizeof, parameters, struct fields.
     std::tuple<std::shared_ptr<Type>, int, int> parseBaseType()
     {
-        if (peek() == INT)
+        std::unordered_map<TokenType, Token> specs;
+        std::optional<Token> structName;
+        int line = -1, col = -1;
+
+        while (isTypeStart(peek()))
         {
-            auto t = consume();
-            return {IntType::getInstance(), t.line, t.col};
+            Token t = consume();
+            if (line < 0)
+            {
+                line = t.line;
+                col = t.col;
+            }
+            if (!specs.try_emplace(t.type, t).second)
+                throw std::logic_error("type specifier used multiple times at line:" +
+                                       std::to_string(t.line) + " col:" + std::to_string(t.col));
+            if (t.type == STRUCT)
+                structName = expect(IDENTIFIER);
         }
-        if (peek() == CHAR)
-        {
-            auto t = consume();
-            return {CharType::getInstance(), t.line, t.col};
-        }
-        if (peek() == VOID)
-        {
-            auto t = consume();
-            return {VoidType::getInstance(), t.line, t.col};
-        }
-        if (peek() == STRUCT)
-        {
-            auto t = consume();
-            Token name = expect(IDENTIFIER);
-            return {std::make_shared<StructType>(name.lexeme), t.line, t.col};
-        }
-        throw std::logic_error("Expected type specifier, got " +
-                               std::string(tokenTypeToString(peek())));
+
+        if (line < 0)
+            throw std::logic_error("Expected type specifier, got " +
+                                   std::string(tokenTypeToString(peek())));
+
+        return {typeFromSpecifiers(specs, structName), line, col};
     }
 
     // Parse declaration-specifiers: a base type plus an optional storage class
@@ -166,46 +202,43 @@ class Parser
     std::tuple<std::shared_ptr<Type>, std::optional<StorageClass>, int, int> parseDeclSpecifiers()
     {
         std::optional<StorageClass> storageClass;
-        std::shared_ptr<Type> type;
+        std::unordered_map<TokenType, Token> specs;
+        std::optional<Token> structName;
         int line = -1, col = -1;
 
         while (isDeclSpecifierStart(peek()))
         {
-            if (isStorageClassSpecifier(peek()))
+            Token t = consume();
+            if (line < 0)
             {
-                Token t = consume();
+                line = t.line;
+                col = t.col;
+            }
+
+            if (isStorageClassSpecifier(t.type))
+            {
                 if (storageClass.has_value())
                     throw std::logic_error("multiple storage-class specifiers at line " +
                                            std::to_string(t.line) + ", col " +
                                            std::to_string(t.col));
                 storageClass = (t.type == STATIC) ? StorageClass::Static : StorageClass::Extern;
-                if (line < 0)
-                {
-                    line = t.line;
-                    col = t.col;
-                }
             }
             else
             {
-                if (type)
-                    throw std::logic_error("multiple type specifiers at line " +
-                                           std::to_string(tokens[cur_token].line) + ", col " +
-                                           std::to_string(tokens[cur_token].col));
-                auto [parsedType, baseLine, baseCol] = parseBaseType();
-                type = parsedType;
-                if (line < 0)
-                {
-                    line = baseLine;
-                    col = baseCol;
-                }
+                if (!specs.try_emplace(t.type, t).second)
+                    throw std::logic_error(
+                        "type specifier used multiple times at line:" + std::to_string(t.line) +
+                        " col:" + std::to_string(t.col));
+                if (t.type == STRUCT)
+                    structName = expect(IDENTIFIER);
             }
         }
 
-        if (!type)
+        if (specs.empty())
             throw std::logic_error("Expected type specifier, got " +
                                    std::string(tokenTypeToString(peek())));
 
-        return {type, storageClass, line, col};
+        return {typeFromSpecifiers(specs, structName), storageClass, line, col};
     }
 
     void parseDeclaratorHead(std::shared_ptr<Type> &base)
@@ -356,7 +389,21 @@ class Parser
         if (peek() == CONSTANT)
         {
             Token constant = consume();
-            node = std::make_shared<IntLiterals>(constant.line, constant.col, constant.lexeme);
+            bool isLong = constant.lexeme.back() == 'l' || constant.lexeme.back() == 'L';
+            errno = 0;
+            long long value = strtoll(constant.lexeme.c_str(), nullptr, 0);
+            if (errno == ERANGE)
+            {
+                throw std::logic_error("Number too big to be stored in 64 bits. line:" +
+                                       std::to_string(constant.line) +
+                                       " col:" + std::to_string(constant.col));
+            }
+            std::shared_ptr<Type> constantType = IntType::getInstance();
+            if (value > INT_MAX || isLong)
+            {
+                constantType = LongType::getInstance();
+            }
+            node = std::make_shared<IntLiterals>(constant.line, constant.col, value, constantType);
         }
         else if (peek() == LEFT_PAREN)
         {

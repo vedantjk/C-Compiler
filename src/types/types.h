@@ -26,6 +26,22 @@ class IntType : public Type
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
 };
 
+class LongType : public Type
+{
+    LongType() = default;
+
+  public:
+    static std::shared_ptr<Type> getInstance()
+    {
+        static std::shared_ptr<Type> instance(new LongType());
+        return instance;
+    }
+
+    [[nodiscard]] std::string toString() const override { return "long"; }
+
+    [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+};
+
 class CharType : public Type
 {
     CharType() = default;
