@@ -25,10 +25,13 @@ class codegenDriver
     }
 
     // Assembly width of a TACKY value: long -> 8-byte quadword, else 4-byte longword.
-    static AssemblyType assemblyTypeOf(const TackyVal &v)
+    static AssemblyType toAssemblyType(const ConstantType t)
     {
-        return typeOf(v) == ConstantType::LONG ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
+        return t == ConstantType::LONG ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
     }
+    static AssemblyType assemblyTypeOf(const TackyVal &v) { return toAssemblyType(typeOf(v)); }
+    // Register width that matches an assembly type.
+    static int bytesOf(const AssemblyType t) { return t == AssemblyType::QUADWORD ? 8 : 4; }
 
     std::unique_ptr<Operand> tackyValToOperand(const TackyVal &t)
     {
@@ -49,22 +52,26 @@ class codegenDriver
         auto src = tackyValToOperand(tackyUnary.src);
         auto dst1 = tackyValToOperand(tackyUnary.dst);
         auto dst2 = tackyValToOperand(tackyUnary.dst);
+        const AssemblyType srcType = assemblyTypeOf(tackyUnary.src);
+        const AssemblyType dstType = assemblyTypeOf(tackyUnary.dst);
 
         if (tackyUnary.op == UnaryOp::Not)
         {
             std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
             std::unique_ptr<Operand> imm2 = std::make_unique<Immediate>(0);
             instructions.push_back(
-                std::make_unique<CmpInstruction>(std::move(imm1), std::move(src)));
+                std::make_unique<CmpInstruction>(std::move(imm1), std::move(src), srcType));
             instructions.push_back(
-                std::make_unique<MoveInstruction>(std::move(imm2), std::move(dst1)));
+                std::make_unique<MoveInstruction>(std::move(imm2), std::move(dst1), dstType));
             instructions.push_back(
                 std::make_unique<SetCCInstruction>(CondCode::E, std::move(dst2)));
             return;
         }
 
-        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst1)));
-        instructions.push_back(std::make_unique<UnaryInstruction>(std::move(dst2), tackyUnary.op));
+        instructions.push_back(
+            std::make_unique<MoveInstruction>(std::move(src), std::move(dst1), dstType));
+        instructions.push_back(
+            std::make_unique<UnaryInstruction>(std::move(dst2), tackyUnary.op, dstType));
     }
 
     void processTackyReturn(const TackyReturn &tackyReturn,
@@ -72,10 +79,12 @@ class codegenDriver
     {
         if (tackyReturn.val)
         {
+            const AssemblyType t = assemblyTypeOf(*tackyReturn.val);
             std::unique_ptr<Operand> source = tackyValToOperand(*tackyReturn.val);
-            std::unique_ptr<Operand> dest = std::make_unique<Register>(RegisterName::AX, 4);
+            std::unique_ptr<Operand> dest =
+                std::make_unique<Register>(RegisterName::AX, bytesOf(t));
             instructions.push_back(
-                std::make_unique<MoveInstruction>(std::move(source), std::move(dest)));
+                std::make_unique<MoveInstruction>(std::move(source), std::move(dest), t));
         }
         instructions.push_back(std::make_unique<ReturnInstruction>());
     }
@@ -83,34 +92,37 @@ class codegenDriver
     void processDivision(const TackyBinary &tackyBinary,
                          std::vector<std::unique_ptr<Instruction>> &instructions)
     {
+        const AssemblyType t = assemblyTypeOf(tackyBinary.dst);
         auto src1 = tackyValToOperand(tackyBinary.src1);
         auto src2 = tackyValToOperand(tackyBinary.src2);
-        std::unique_ptr<Operand> regAXa = std::make_unique<Register>(RegisterName::AX, 4);
-        std::unique_ptr<Operand> regAXb = std::make_unique<Register>(RegisterName::AX, 4);
+        std::unique_ptr<Operand> regAXa = std::make_unique<Register>(RegisterName::AX, bytesOf(t));
+        std::unique_ptr<Operand> regAXb = std::make_unique<Register>(RegisterName::AX, bytesOf(t));
         auto dst = tackyValToOperand(tackyBinary.dst);
 
         instructions.push_back(
-            std::make_unique<MoveInstruction>(std::move(src1), std::move(regAXa)));
-        instructions.push_back(std::make_unique<CdqInstruction>());
-        instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2)));
+            std::make_unique<MoveInstruction>(std::move(src1), std::move(regAXa), t));
+        instructions.push_back(std::make_unique<CdqInstruction>(t));
+        instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2), t));
         instructions.push_back(
-            std::make_unique<MoveInstruction>(std::move(regAXb), std::move(dst)));
+            std::make_unique<MoveInstruction>(std::move(regAXb), std::move(dst), t));
     }
 
     void processRemainder(const TackyBinary &tackyBinary,
                           std::vector<std::unique_ptr<Instruction>> &instructions)
     {
+        const AssemblyType t = assemblyTypeOf(tackyBinary.dst);
         auto src1 = tackyValToOperand(tackyBinary.src1);
         auto src2 = tackyValToOperand(tackyBinary.src2);
-        std::unique_ptr<Operand> regAX = std::make_unique<Register>(RegisterName::AX, 4);
-        std::unique_ptr<Operand> regDX = std::make_unique<Register>(RegisterName::DX, 4);
+        std::unique_ptr<Operand> regAX = std::make_unique<Register>(RegisterName::AX, bytesOf(t));
+        std::unique_ptr<Operand> regDX = std::make_unique<Register>(RegisterName::DX, bytesOf(t));
         auto dst = tackyValToOperand(tackyBinary.dst);
 
         instructions.push_back(
-            std::make_unique<MoveInstruction>(std::move(src1), std::move(regAX)));
-        instructions.push_back(std::make_unique<CdqInstruction>());
-        instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2)));
-        instructions.push_back(std::make_unique<MoveInstruction>(std::move(regDX), std::move(dst)));
+            std::make_unique<MoveInstruction>(std::move(src1), std::move(regAX), t));
+        instructions.push_back(std::make_unique<CdqInstruction>(t));
+        instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2), t));
+        instructions.push_back(
+            std::make_unique<MoveInstruction>(std::move(regDX), std::move(dst), t));
     }
 
     static bool isRelationalOp(const BinaryOp op)
@@ -155,22 +167,26 @@ class codegenDriver
         auto src2 = tackyValToOperand(tackyBinary.src2);
         auto dst1 = tackyValToOperand(tackyBinary.dst);
         auto dst2 = tackyValToOperand(tackyBinary.dst);
+        const AssemblyType dstType = assemblyTypeOf(tackyBinary.dst);
 
         if (isRelationalOp(tackyBinary.op))
         {
             CondCode cc = binaryOpToCondCode(tackyBinary.op);
+            // The comparison runs at the operands' (common) width; the result is int.
+            const AssemblyType cmpType = assemblyTypeOf(tackyBinary.src1);
             std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
             instructions.push_back(
-                std::make_unique<CmpInstruction>(std::move(src2), std::move(src1)));
+                std::make_unique<CmpInstruction>(std::move(src2), std::move(src1), cmpType));
             instructions.push_back(
-                std::make_unique<MoveInstruction>(std::move(imm1), std::move(dst1)));
+                std::make_unique<MoveInstruction>(std::move(imm1), std::move(dst1), dstType));
             instructions.push_back(std::make_unique<SetCCInstruction>(cc, std::move(dst2)));
             return;
         }
 
-        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src1), std::move(dst1)));
         instructions.push_back(
-            std::make_unique<BinaryInstruction>(std::move(src2), std::move(dst2), tackyBinary.op));
+            std::make_unique<MoveInstruction>(std::move(src1), std::move(dst1), dstType));
+        instructions.push_back(std::make_unique<BinaryInstruction>(std::move(src2), std::move(dst2),
+                                                                   tackyBinary.op, dstType));
     }
 
     void processTackyJump(const TackyJump &tackyJump,
@@ -184,8 +200,8 @@ class codegenDriver
     {
         std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         auto condition = tackyValToOperand(tackyJIZ.condition);
-        instructions.push_back(
-            std::make_unique<CmpInstruction>(std::move(imm1), std::move(condition)));
+        instructions.push_back(std::make_unique<CmpInstruction>(
+            std::move(imm1), std::move(condition), assemblyTypeOf(tackyJIZ.condition)));
         instructions.push_back(
             std::make_unique<JumpCCInstruction>(CondCode::E, tackyJIZ.identifier));
     }
@@ -195,8 +211,8 @@ class codegenDriver
     {
         std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         auto condition = tackyValToOperand(tackyJIZ.condition);
-        instructions.push_back(
-            std::make_unique<CmpInstruction>(std::move(imm1), std::move(condition)));
+        instructions.push_back(std::make_unique<CmpInstruction>(
+            std::move(imm1), std::move(condition), assemblyTypeOf(tackyJIZ.condition)));
         instructions.push_back(
             std::make_unique<JumpCCInstruction>(CondCode::NE, tackyJIZ.identifier));
     }
@@ -206,7 +222,8 @@ class codegenDriver
     {
         auto src = tackyValToOperand(tackyCopy.src);
         auto dst = tackyValToOperand(tackyCopy.dst);
-        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst)));
+        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst),
+                                                                 assemblyTypeOf(tackyCopy.dst)));
     }
 
     void processTackyLabel(const TackyLabel &tackyLabel,
@@ -250,10 +267,12 @@ class codegenDriver
         int regIndex = 0;
         for (auto &tackyArg : registerArgs)
         {
-            std::unique_ptr<Operand> r = std::make_unique<Register>(argRegisters[regIndex], 4);
+            const AssemblyType t = assemblyTypeOf(tackyArg);
+            std::unique_ptr<Operand> r =
+                std::make_unique<Register>(argRegisters[regIndex], bytesOf(t));
             auto assemblyArg = tackyValToOperand(tackyArg);
             instructions.push_back(
-                std::make_unique<MoveInstruction>(std::move(assemblyArg), std::move(r)));
+                std::make_unique<MoveInstruction>(std::move(assemblyArg), std::move(r), t));
             regIndex++;
         }
 
@@ -285,9 +304,11 @@ class codegenDriver
                                                     BinaryOp::Add, AssemblyType::QUADWORD));
         }
 
+        const AssemblyType retType = assemblyTypeOf(tackyFunctionCall.dst);
         auto assemblyDst = tackyValToOperand(tackyFunctionCall.dst);
         instructions.push_back(std::make_unique<MoveInstruction>(
-            std::make_unique<Register>(RegisterName::AX, 4), std::move(assemblyDst)));
+            std::make_unique<Register>(RegisterName::AX, bytesOf(retType)), std::move(assemblyDst),
+            retType));
     }
 
     void processTackySignExtend(const TackySignExtend &tackySignExtend,
@@ -367,17 +388,20 @@ class codegenDriver
         int regIndex = 0;
         while (regIndex < 6 && regIndex < static_cast<int>(functionNode.params.size()))
         {
+            const auto &[pname, pct] = functionNode.params[regIndex];
+            const AssemblyType pt = toAssemblyType(pct);
             instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Register>(argRegisters[regIndex], 4),
-                std::make_unique<PseudoRegister>(functionNode.params[regIndex])));
+                std::make_unique<Register>(argRegisters[regIndex], bytesOf(pt)),
+                std::make_unique<PseudoRegister>(pname, pt), pt));
             regIndex++;
         }
         for (int i = 6; i < static_cast<int>(functionNode.params.size()); i++)
         {
+            const auto &[pname, pct] = functionNode.params[i];
+            const AssemblyType pt = toAssemblyType(pct);
             int offset = 16 + 8 * (i - 6);
             instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Stack>(offset),
-                std::make_unique<PseudoRegister>(functionNode.params[i])));
+                std::make_unique<Stack>(offset), std::make_unique<PseudoRegister>(pname, pt), pt));
         }
 
         processTackyInstructions(functionNode.instructions, instructions);
@@ -387,7 +411,7 @@ class codegenDriver
     }
 
     void lowerPseudoSlot(std::unique_ptr<Operand> &slot,
-                         std::unordered_map<std::string, int> &pseudoToOffset, int &nextOffset,
+                         std::unordered_map<std::string, int> &pseudoToOffset, int &used,
                          const std::unordered_set<std::string> &staticNames)
     {
         auto *p = dynamic_cast<PseudoRegister *>(slot.get());
@@ -398,52 +422,68 @@ class codegenDriver
             slot = std::make_unique<Data>(p->name);
             return;
         }
-        auto [it, inserted] = pseudoToOffset.try_emplace(p->name, nextOffset);
-        if (inserted)
-            nextOffset -= 4;
-        slot = std::make_unique<Stack>(it->second);
+        auto found = pseudoToOffset.find(p->name);
+        if (found == pseudoToOffset.end())
+        {
+            if (p->type == AssemblyType::QUADWORD)
+            {
+                used += (8 - used % 8) % 8; // align the slot to 8 bytes
+                used += 8;
+            }
+            else
+            {
+                used += 4;
+            }
+            found = pseudoToOffset.emplace(p->name, -used).first;
+        }
+        slot = std::make_unique<Stack>(found->second);
     }
 
     void removePseudosFromFunction(codegenFunction &func,
                                    std::unordered_set<std::string> &staticNames)
     {
         std::unordered_map<std::string, int> pseudoToOffset;
-        int nextOffset = -4;
+        int used = 0;
         for (auto &instruction : func.instructions)
         {
             if (auto *p = dynamic_cast<MoveInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->src, pseudoToOffset, nextOffset, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
+            }
+            else if (auto *p = dynamic_cast<MoveSXInstruction *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<UnaryInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<BinaryInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->src, pseudoToOffset, nextOffset, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<IDivInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->operand, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<CmpInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset, staticNames);
-                lowerPseudoSlot(p->b, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->b, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<SetCCInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<PushInstruction *>(instruction.get()))
             {
-                lowerPseudoSlot(p->a, pseudoToOffset, nextOffset, staticNames);
+                lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
             }
         }
-        if (int frameSize = -nextOffset - 4; frameSize > 0)
+        if (int frameSize = used; frameSize > 0)
         {
             frameSize = frameSize + (16 - frameSize % 16) % 16;
             func.stackAllocation =
@@ -479,6 +519,19 @@ class codegenDriver
         return nullptr;
     }
 
+    // An immediate that does not fit in a signed 32-bit field; such values can't be
+    // an operand of most instructions and must be staged in a register first.
+    static bool isLargeImmediate(const Operand &op)
+    {
+        auto *i = dynamic_cast<const Immediate *>(&op);
+        return i && (i->value > 2147483647LL || i->value < -2147483648LL);
+    }
+
+    static std::unique_ptr<Register> reg(const RegisterName n, const int bytes)
+    {
+        return std::make_unique<Register>(n, bytes);
+    }
+
     void fixupInstructionsFromFunction(codegenFunction &func)
     {
         std::vector<std::unique_ptr<Instruction>> rewritten;
@@ -486,87 +539,126 @@ class codegenDriver
 
         for (auto &instr : func.instructions)
         {
-            if (auto *m = dynamic_cast<MoveInstruction *>(instr.get());
-                m && isMemory(*m->src) && isMemory(*m->dst))
+            if (auto *m = dynamic_cast<MoveInstruction *>(instr.get()))
             {
-                // Mov M1, M2  →  Mov M1, R10 ; Mov R10, M2
-                auto r10a = std::make_unique<Register>(RegisterName::R10, 4);
-                auto r10b = std::make_unique<Register>(RegisterName::R10, 4);
-                rewritten.push_back(
-                    std::make_unique<MoveInstruction>(std::move(m->src), std::move(r10a)));
-                rewritten.push_back(
-                    std::make_unique<MoveInstruction>(std::move(r10b), std::move(m->dst)));
+                const int b = bytesOf(m->type);
+                // A 64-bit immediate or a memory source can't move straight to
+                // memory; stage it in R10 first.
+                if (isMemory(*m->dst) && (isMemory(*m->src) || isLargeImmediate(*m->src)))
+                {
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(m->src), reg(RegisterName::R10, b), m->type));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::R10, b), std::move(m->dst), m->type));
+                }
+                else
+                {
+                    rewritten.push_back(std::move(instr));
+                }
+            }
+            else if (auto *m = dynamic_cast<MoveSXInstruction *>(instr.get()))
+            {
+                // movslq needs a non-immediate source and a register destination.
+                auto src = std::move(m->src);
+                auto dst = std::move(m->dst);
+                if (isImmediate(*src))
+                {
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(src), reg(RegisterName::R10, 4), AssemblyType::LONGWORD));
+                    src = reg(RegisterName::R10, 4);
+                }
+                if (isMemory(*dst))
+                {
+                    rewritten.push_back(std::make_unique<MoveSXInstruction>(
+                        std::move(src), reg(RegisterName::R11, 8)));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::R11, 8), std::move(dst), AssemblyType::QUADWORD));
+                }
+                else
+                {
+                    rewritten.push_back(
+                        std::make_unique<MoveSXInstruction>(std::move(src), std::move(dst)));
+                }
             }
             else if (auto *m = dynamic_cast<IDivInstruction *>(instr.get());
                      m && isImmediate(*m->operand))
             {
-                std::unique_ptr<Operand> scratchRegister =
-                    std::make_unique<Register>(RegisterName::R10, 4);
+                const int b = bytesOf(m->type);
                 m->scratchRegisterInstruction = std::make_unique<MoveInstruction>(
-                    std::move(m->operand), std::make_unique<Register>(RegisterName::R10, 4));
-                m->operand = std::move(scratchRegister);
+                    std::move(m->operand), reg(RegisterName::R10, b), m->type);
+                m->operand = reg(RegisterName::R10, b);
                 rewritten.push_back(std::move(instr));
             }
-            else if (auto *m = dynamic_cast<BinaryInstruction *>(instr.get());
-                     m &&
-                     (m->op == BinaryOp::Add || m->op == BinaryOp::Subtract ||
-                      m->op == BinaryOp::BitwiseAnd || m->op == BinaryOp::BitwiseOr ||
-                      m->op == BinaryOp::BitwiseXor) &&
-                     isMemory(*m->src) && isMemory(*m->dst))
+            else if (auto *m = dynamic_cast<BinaryInstruction *>(instr.get()))
             {
-                // Mov M1, M2  →  Mov M1, R10 ; Mov R10, M2
-                auto r10a = std::make_unique<Register>(RegisterName::R10, 4);
-                auto r10b = std::make_unique<Register>(RegisterName::R10, 4);
-                m->preStackFixInstruction =
-                    std::make_unique<MoveInstruction>(std::move(m->src), std::move(r10a));
-                m->src = std::move(r10b);
-                rewritten.push_back(std::move(instr));
-            }
-            else if (auto *m = dynamic_cast<BinaryInstruction *>(instr.get());
-                     m && (m->op == BinaryOp::Multiply) && isMemory(*m->dst))
-            {
-                auto dstcopy1 = cloneMemory(m->dst.get());
-                auto dstcopy2 = cloneMemory(m->dst.get());
-                auto r11a = std::make_unique<Register>(RegisterName::R11, 4);
-                auto r11b = std::make_unique<Register>(RegisterName::R11, 4);
-                auto r11c = std::make_unique<Register>(RegisterName::R11, 4);
-                m->preStackFixInstruction =
-                    std::make_unique<MoveInstruction>(std::move(dstcopy1), std::move(r11a));
-                m->dst = std::move(r11b);
-                m->postStackFixInstruction =
-                    std::make_unique<MoveInstruction>(std::move(r11c), std::move(dstcopy2));
-                rewritten.push_back(std::move(instr));
-            }
-            else if (auto *m = dynamic_cast<BinaryInstruction *>(instr.get());
-                     m && (m->op == BinaryOp::LeftShift || m->op == BinaryOp::RightShift) &&
-                     !isImmediate(*m->src))
-            {
-                auto ecxRegister = std::make_unique<Register>(RegisterName::CX, 4);
-                auto clRegister = std::make_unique<Register>(RegisterName::CX, 1);
-                m->preStackFixInstruction =
-                    std::make_unique<MoveInstruction>(std::move(m->src), std::move(ecxRegister));
-                m->src = std::move(clRegister);
+                const int b = bytesOf(m->type);
+                // A 64-bit immediate can't be an operand of any binary op, so stage
+                // it in a register first (this also frees the fix slots for imul).
+                if (isLargeImmediate(*m->src))
+                {
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(m->src), reg(RegisterName::R10, b), m->type));
+                    m->src = reg(RegisterName::R10, b);
+                }
+
+                const bool addSubLogic = m->op == BinaryOp::Add || m->op == BinaryOp::Subtract ||
+                                         m->op == BinaryOp::BitwiseAnd ||
+                                         m->op == BinaryOp::BitwiseOr ||
+                                         m->op == BinaryOp::BitwiseXor;
+                if (addSubLogic && isMemory(*m->src) && isMemory(*m->dst))
+                {
+                    // add/sub/logic can't have both operands in memory.
+                    m->preStackFixInstruction = std::make_unique<MoveInstruction>(
+                        std::move(m->src), reg(RegisterName::R10, b), m->type);
+                    m->src = reg(RegisterName::R10, b);
+                }
+                else if (m->op == BinaryOp::Multiply && isMemory(*m->dst))
+                {
+                    // imul needs a register destination: load it, multiply, store back.
+                    auto dstcopy1 = cloneMemory(m->dst.get());
+                    auto dstcopy2 = cloneMemory(m->dst.get());
+                    m->preStackFixInstruction = std::make_unique<MoveInstruction>(
+                        std::move(dstcopy1), reg(RegisterName::R11, b), m->type);
+                    m->dst = reg(RegisterName::R11, b);
+                    m->postStackFixInstruction = std::make_unique<MoveInstruction>(
+                        reg(RegisterName::R11, b), std::move(dstcopy2), m->type);
+                }
+                else if ((m->op == BinaryOp::LeftShift || m->op == BinaryOp::RightShift) &&
+                         !isImmediate(*m->src))
+                {
+                    m->preStackFixInstruction = std::make_unique<MoveInstruction>(
+                        std::move(m->src), reg(RegisterName::CX, 4));
+                    m->src = reg(RegisterName::CX, 1);
+                }
                 rewritten.push_back(std::move(instr));
             }
             else if (auto *m = dynamic_cast<CmpInstruction *>(instr.get()))
             {
-                if (isMemory(*m->a) && isMemory(*m->b))
+                // The two operands may each need staging, so emit the moves directly
+                // (one preStackFix slot can't hold both). `a` can't be a 64-bit
+                // immediate or share memory with `b`; `b` can't be an immediate.
+                const int b = bytesOf(m->type);
+                if (isLargeImmediate(*m->a) || (isMemory(*m->a) && isMemory(*m->b)))
                 {
-                    auto r10a = std::make_unique<Register>(RegisterName::R10, 4);
-                    auto r10b = std::make_unique<Register>(RegisterName::R10, 4);
-                    m->preStackFixInstruction =
-                        std::make_unique<MoveInstruction>(std::move(m->a), std::move(r10a));
-                    m->a = std::move(r10b);
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(m->a), reg(RegisterName::R10, b), m->type));
+                    m->a = reg(RegisterName::R10, b);
                 }
-                else if (isImmediate(*m->b))
+                if (isImmediate(*m->b))
                 {
-                    auto r11a = std::make_unique<Register>(RegisterName::R11, 4);
-                    auto r11b = std::make_unique<Register>(RegisterName::R11, 4);
-                    m->preStackFixInstruction =
-                        std::make_unique<MoveInstruction>(std::move(m->b), std::move(r11a));
-                    m->b = std::move(r11b);
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(m->b), reg(RegisterName::R11, b), m->type));
+                    m->b = reg(RegisterName::R11, b);
                 }
                 rewritten.push_back(std::move(instr));
+            }
+            else if (auto *m = dynamic_cast<PushInstruction *>(instr.get());
+                     m && isLargeImmediate(*m->a))
+            {
+                // pushq takes a register/memory/32-bit-immediate, not a 64-bit one.
+                rewritten.push_back(std::make_unique<MoveInstruction>(
+                    std::move(m->a), reg(RegisterName::R10, 8), AssemblyType::QUADWORD));
+                rewritten.push_back(std::make_unique<PushInstruction>(reg(RegisterName::R10, 8)));
             }
             else
             {
@@ -591,8 +683,9 @@ class codegenDriver
     std::unique_ptr<codegenStaticVariable>
     processStaticVariable(const TackyStaticVariable &variable)
     {
-        return std::make_unique<codegenStaticVariable>(
-            variable.line, variable.column, variable.identifier, variable.global, variable.init);
+        return std::make_unique<codegenStaticVariable>(variable.line, variable.column,
+                                                       variable.identifier, variable.global,
+                                                       variable.init, variable.type);
     }
 
     std::unique_ptr<codegenProgram> codegen(const TackyProgram &prog)

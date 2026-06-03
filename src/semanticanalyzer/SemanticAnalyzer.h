@@ -747,7 +747,9 @@ class SemanticAnalyzer
                           "required integer operand, received '" +
                               x->operand->resolvedType->toString() + "'.");
                 }
-                x->resolvedType = IntType::getInstance();
+                // Negation/complement keep the operand's (promoted) type, so `-longVal`
+                // stays long rather than being truncated to int.
+                x->resolvedType = x->operand->resolvedType;
                 x->isLvalue = false;
             }
             else if (x->op == "!")

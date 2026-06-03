@@ -25,21 +25,23 @@ class codegenASTPrinter
 
     void visit(const codegenStaticVariable &node) const
     {
+        const bool isLong = node.type == ConstantType::LONG;
+        const int align = isLong ? 8 : 4;
         if (node.global)
             out << "    .globl " << node.name << "\n";
         if (node.init != 0)
         {
             out << "    .data\n";
-            out << "    .align 4\n";
+            out << "    .align " << align << "\n";
             out << node.name << ":\n";
-            out << "    .long " << node.init << "\n";
+            out << (isLong ? "    .quad " : "    .long ") << node.init << "\n";
         }
         else
         {
             out << "    .bss\n";
-            out << "    .align 4\n";
+            out << "    .align " << align << "\n";
             out << node.name << ":\n";
-            out << "    .zero 4\n";
+            out << (isLong ? "    .zero 8\n" : "    .zero 4\n");
         }
     }
 
@@ -84,7 +86,7 @@ class codegenASTPrinter
 
     void visit(const MoveInstruction &node) const
     {
-        out << "movl    ";
+        out << "mov" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -97,15 +99,15 @@ class codegenASTPrinter
         out << "    ret";
     }
 
-    void visit(const UnaryOp &op) const
+    void visit(const UnaryOp &op, const char suffix) const
     {
         if (op == UnaryOp::Complement)
         {
-            out << "notl";
+            out << "not" << suffix;
         }
         else if (op == UnaryOp::Negate)
         {
-            out << "negl";
+            out << "neg" << suffix;
         }
     }
 
@@ -148,7 +150,7 @@ class codegenASTPrinter
 
     void visit(const UnaryInstruction &node) const
     {
-        visit(node.op);
+        visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
         out << "    ";
         dispatch(*node.operand);
     }
@@ -180,11 +182,14 @@ class codegenASTPrinter
             out << "\n    ";
         }
 
-        out << "idivl    ";
+        out << "idiv" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
         dispatch(*node.operand);
     }
 
-    void visit(const CdqInstruction &node) const { out << "cdq"; }
+    void visit(const CdqInstruction &node) const
+    {
+        out << (node.type == AssemblyType::QUADWORD ? "cqo" : "cdq");
+    }
 
     void visit(const CmpInstruction &node) const
     {
@@ -193,7 +198,7 @@ class codegenASTPrinter
             visit(*node.preStackFixInstruction);
             out << "\n    ";
         }
-        out << "cmpl    ";
+        out << "cmp" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
         dispatch(*node.a);
         out << ", ";
         dispatch((*node.b));

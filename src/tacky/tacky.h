@@ -565,10 +565,10 @@ class TackyDriver
     std::unique_ptr<TackyFunction> processFunction(const std::shared_ptr<Function> &functionNode)
     {
         std::vector<std::unique_ptr<TackyInstruction>> instructions;
-        std::vector<std::string> params;
+        std::vector<std::pair<std::string, ConstantType>> params;
         for (const auto &param : functionNode->parameters)
         {
-            params.push_back(param.name);
+            params.push_back({param.name, returnConstantType(param.type)});
         }
         processBlockStmt(functionNode->statements, instructions);
         // Every function gets an implicit `return 0` appended. If control reaches
