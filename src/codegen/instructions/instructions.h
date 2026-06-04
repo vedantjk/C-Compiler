@@ -70,6 +70,19 @@ class IDivInstruction : public Instruction
     }
 };
 
+class DivInstruction : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> operand;
+    std::unique_ptr<MoveInstruction> scratchRegisterInstruction;
+    AssemblyType type;
+    explicit DivInstruction(std::unique_ptr<Operand> operand_,
+                            const AssemblyType type_ = AssemblyType::LONGWORD)
+        : operand(std::move(operand_)), type(type_)
+    {
+    }
+};
+
 class CdqInstruction : public Instruction
 {
   public:
@@ -145,6 +158,16 @@ class MoveSXInstruction : public Instruction
   public:
     std::unique_ptr<Operand> src, dst;
     MoveSXInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_)
+        : src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class MoveZeroExtendInstruction : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> src, dst;
+    MoveZeroExtendInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_)
         : src(std::move(src_)), dst(std::move(dst_))
     {
     }

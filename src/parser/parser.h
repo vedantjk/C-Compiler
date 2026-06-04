@@ -95,7 +95,8 @@ class Parser
 
     static bool isTypeStart(const TokenType t)
     {
-        return t == INT || t == CHAR || t == VOID || t == STRUCT || t == LONG;
+        return t == INT || t == CHAR || t == VOID || t == STRUCT || t == LONG || t == UNSIGNED ||
+               t == SIGNED;
     }
 
     static bool isStorageClassSpecifier(const TokenType t) { return t == STATIC || t == EXTERN; }
@@ -143,6 +144,10 @@ class Parser
     {
         const auto has = [&](TokenType t) { return specs.contains(t); };
 
+        // `signed` and `unsigned` are mutually exclusive.
+        if (has(SIGNED) && has(UNSIGNED))
+            throw std::logic_error("invalid combination of type specifiers");
+
         // void / char / struct are standalone: they combine with nothing else.
         if (has(VOID) || has(CHAR) || has(STRUCT))
         {
@@ -155,10 +160,20 @@ class Parser
             return std::make_shared<StructType>(structName->lexeme);
         }
 
-        // What remains can only be int and/or long; long subsumes int.
+        // What remains is some combination of unsigned / int / long; long subsumes
+        // int, and unsigned takes precedence in choosing the type.
+        if (has(UNSIGNED))
+        {
+            if (has(LONG))
+                return UnsignedLongType::getInstance();
+            return UnsignedIntType::getInstance();
+        }
         if (has(LONG))
             return LongType::getInstance();
         if (has(INT))
+            return IntType::getInstance();
+        // Bare `signed` == int (`signed int` / `signed long` already resolved above).
+        if (has(SIGNED))
             return IntType::getInstance();
 
         throw std::logic_error("invalid combination of type specifiers");
@@ -389,20 +404,35 @@ class Parser
         if (peek() == CONSTANT)
         {
             Token constant = consume();
-            bool isLong = constant.lexeme.back() == 'l' || constant.lexeme.back() == 'L';
+            const std::string &lex = constant.lexeme;
+            const bool hasU =
+                lex.find('u') != std::string::npos || lex.find('U') != std::string::npos;
+            const bool hasL =
+                lex.find('l') != std::string::npos || lex.find('L') != std::string::npos;
             errno = 0;
-            long long value = strtoll(constant.lexeme.c_str(), nullptr, 0);
+            unsigned long long value = strtoull(lex.c_str(), nullptr, 0);
             if (errno == ERANGE)
             {
                 throw std::logic_error("Number too big to be stored in 64 bits. line:" +
                                        std::to_string(constant.line) +
                                        " col:" + std::to_string(constant.col));
             }
-            std::shared_ptr<Type> constantType = IntType::getInstance();
-            if (value > INT_MAX || isLong)
-            {
+            // Pick the constant's type from its suffix and magnitude, restricted to
+            // our four integer types:
+            //   u + l       -> unsigned long
+            //   u           -> unsigned int if it fits in 32 bits, else unsigned long
+            //   l           -> long
+            //   (no suffix) -> int if it fits in 32 bits, else long
+            std::shared_ptr<Type> constantType;
+            if (hasU && hasL)
+                constantType = UnsignedLongType::getInstance();
+            else if (hasU)
+                constantType = value > UINT_MAX ? UnsignedLongType::getInstance()
+                                                : UnsignedIntType::getInstance();
+            else if (hasL)
                 constantType = LongType::getInstance();
-            }
+            else
+                constantType = value > INT_MAX ? LongType::getInstance() : IntType::getInstance();
             node = std::make_shared<IntLiterals>(constant.line, constant.col, value, constantType);
         }
         else if (peek() == LEFT_PAREN)

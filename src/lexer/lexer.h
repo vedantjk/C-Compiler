@@ -249,6 +249,16 @@ class Lexer
             if (peek() == 'u' || peek() == 'U')
                 advance();
         }
+
+        // A valid suffix is maximal, so any suffix letter still remaining here is
+        // a duplicated/invalid suffix (42uu, 42ll, 42ull, ...). Report it once and
+        // absorb the rest, otherwise the leftover letters leak out as an identifier.
+        if (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')
+        {
+            error(line, col, "invalid integer constant suffix");
+            while (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')
+                advance();
+        }
     }
 
     void identifier()

@@ -27,7 +27,7 @@ class codegenDriver
     // Assembly width of a TACKY value: long -> 8-byte quadword, else 4-byte longword.
     static AssemblyType toAssemblyType(const ConstantType t)
     {
-        return t == ConstantType::LONG ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
+        return ctBytes(t) == 8 ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
     }
     static AssemblyType assemblyTypeOf(const TackyVal &v) { return toAssemblyType(typeOf(v)); }
     // Register width that matches an assembly type.
@@ -93,6 +93,7 @@ class codegenDriver
                          std::vector<std::unique_ptr<Instruction>> &instructions)
     {
         const AssemblyType t = assemblyTypeOf(tackyBinary.dst);
+        const bool uns = isUnsignedCt(typeOf(tackyBinary.src1));
         auto src1 = tackyValToOperand(tackyBinary.src1);
         auto src2 = tackyValToOperand(tackyBinary.src2);
         std::unique_ptr<Operand> regAXa = std::make_unique<Register>(RegisterName::AX, bytesOf(t));
@@ -101,8 +102,20 @@ class codegenDriver
 
         instructions.push_back(
             std::make_unique<MoveInstruction>(std::move(src1), std::move(regAXa), t));
-        instructions.push_back(std::make_unique<CdqInstruction>(t));
-        instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2), t));
+        if (uns)
+        {
+            // Unsigned: zero the high word (mov $0, %edx/%rdx) instead of sign-
+            // extending with cdq, then use div rather than idiv.
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Immediate>(0),
+                std::make_unique<Register>(RegisterName::DX, bytesOf(t)), t));
+            instructions.push_back(std::make_unique<DivInstruction>(std::move(src2), t));
+        }
+        else
+        {
+            instructions.push_back(std::make_unique<CdqInstruction>(t));
+            instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2), t));
+        }
         instructions.push_back(
             std::make_unique<MoveInstruction>(std::move(regAXb), std::move(dst), t));
     }
@@ -111,6 +124,7 @@ class codegenDriver
                           std::vector<std::unique_ptr<Instruction>> &instructions)
     {
         const AssemblyType t = assemblyTypeOf(tackyBinary.dst);
+        const bool uns = isUnsignedCt(typeOf(tackyBinary.src1));
         auto src1 = tackyValToOperand(tackyBinary.src1);
         auto src2 = tackyValToOperand(tackyBinary.src2);
         std::unique_ptr<Operand> regAX = std::make_unique<Register>(RegisterName::AX, bytesOf(t));
@@ -119,8 +133,19 @@ class codegenDriver
 
         instructions.push_back(
             std::make_unique<MoveInstruction>(std::move(src1), std::move(regAX), t));
-        instructions.push_back(std::make_unique<CdqInstruction>(t));
-        instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2), t));
+        if (uns)
+        {
+            // Unsigned: zero %edx/%rdx then div; the remainder still lands in DX.
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Immediate>(0),
+                std::make_unique<Register>(RegisterName::DX, bytesOf(t)), t));
+            instructions.push_back(std::make_unique<DivInstruction>(std::move(src2), t));
+        }
+        else
+        {
+            instructions.push_back(std::make_unique<CdqInstruction>(t));
+            instructions.push_back(std::make_unique<IDivInstruction>(std::move(src2), t));
+        }
         instructions.push_back(
             std::make_unique<MoveInstruction>(std::move(regDX), std::move(dst), t));
     }
@@ -132,20 +157,22 @@ class codegenDriver
                op == BinaryOp::GreaterThanOrEqual;
     }
 
-    static CondCode binaryOpToCondCode(const BinaryOp op)
+    static CondCode binaryOpToCondCode(const BinaryOp op, const bool uns)
     {
+        // Equality is signedness-agnostic; the ordered comparisons pick the
+        // unsigned codes (above/below) vs. the signed ones (greater/less).
         if (op == BinaryOp::Equal)
             return CondCode::E;
         if (op == BinaryOp::NotEqual)
             return CondCode::NE;
         if (op == BinaryOp::LessThan)
-            return CondCode::L;
+            return uns ? CondCode::B : CondCode::L;
         if (op == BinaryOp::LessOrEqual)
-            return CondCode::LE;
+            return uns ? CondCode::BE : CondCode::LE;
         if (op == BinaryOp::GreaterThan)
-            return CondCode::G;
+            return uns ? CondCode::A : CondCode::G;
         if (op == BinaryOp::GreaterThanOrEqual)
-            return CondCode::GE;
+            return uns ? CondCode::AE : CondCode::GE;
 
         throw std::runtime_error("Illegal operation forwarded to convert to cond code");
     }
@@ -171,8 +198,10 @@ class codegenDriver
 
         if (isRelationalOp(tackyBinary.op))
         {
-            CondCode cc = binaryOpToCondCode(tackyBinary.op);
-            // The comparison runs at the operands' (common) width; the result is int.
+            // The comparison runs at the operands' (common) width and signedness;
+            // the result is int.
+            CondCode cc =
+                binaryOpToCondCode(tackyBinary.op, isUnsignedCt(typeOf(tackyBinary.src1)));
             const AssemblyType cmpType = assemblyTypeOf(tackyBinary.src1);
             std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
             instructions.push_back(
@@ -319,6 +348,15 @@ class codegenDriver
         instructions.push_back(std::make_unique<MoveSXInstruction>(std::move(src), std::move(dst)));
     }
 
+    void processTackyZeroExtend(const TackyZeroExtend &tackyZeroExtend,
+                                std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyZeroExtend.src);
+        auto dst = tackyValToOperand(tackyZeroExtend.dst);
+        instructions.push_back(
+            std::make_unique<MoveZeroExtendInstruction>(std::move(src), std::move(dst)));
+    }
+
     void processTackyTruncate(const TackyTruncate &tackyTruncate,
                               std::vector<std::unique_ptr<Instruction>> &instructions)
     {
@@ -378,6 +416,10 @@ class codegenDriver
             else if (auto *p = dynamic_cast<TackyTruncate *>(instruction.get()))
             {
                 processTackyTruncate(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyZeroExtend *>(instruction.get()))
+            {
+                processTackyZeroExtend(*p, instructions);
             }
         }
     }
@@ -456,6 +498,11 @@ class codegenDriver
                 lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
                 lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
             }
+            else if (auto *p = dynamic_cast<MoveZeroExtendInstruction *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
+            }
             else if (auto *p = dynamic_cast<UnaryInstruction *>(instruction.get()))
             {
                 lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
@@ -466,6 +513,10 @@ class codegenDriver
                 lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
             }
             else if (auto *p = dynamic_cast<IDivInstruction *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
+            }
+            else if (auto *p = dynamic_cast<DivInstruction *>(instruction.get()))
             {
                 lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
             }
@@ -580,9 +631,39 @@ class codegenDriver
                         std::make_unique<MoveSXInstruction>(std::move(src), std::move(dst)));
                 }
             }
+            else if (auto *m = dynamic_cast<MoveZeroExtendInstruction *>(instr.get()))
+            {
+                // No movzlq exists: zero-extending 32->64 is a plain 32-bit mov,
+                // which clears the upper half of a register destination. A memory
+                // destination can't auto-zero its upper word, so route through R11.
+                auto src = std::move(m->src);
+                auto dst = std::move(m->dst);
+                if (isMemory(*dst))
+                {
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(src), reg(RegisterName::R11, 4), AssemblyType::LONGWORD));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::R11, 8), std::move(dst), AssemblyType::QUADWORD));
+                }
+                else
+                {
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(src), std::move(dst), AssemblyType::LONGWORD));
+                }
+            }
             else if (auto *m = dynamic_cast<IDivInstruction *>(instr.get());
                      m && isImmediate(*m->operand))
             {
+                const int b = bytesOf(m->type);
+                m->scratchRegisterInstruction = std::make_unique<MoveInstruction>(
+                    std::move(m->operand), reg(RegisterName::R10, b), m->type);
+                m->operand = reg(RegisterName::R10, b);
+                rewritten.push_back(std::move(instr));
+            }
+            else if (auto *m = dynamic_cast<DivInstruction *>(instr.get());
+                     m && isImmediate(*m->operand))
+            {
+                // div, like idiv, can't take an immediate divisor: stage it in R10.
                 const int b = bytesOf(m->type);
                 m->scratchRegisterInstruction = std::make_unique<MoveInstruction>(
                     std::move(m->operand), reg(RegisterName::R10, b), m->type);

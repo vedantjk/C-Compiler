@@ -25,7 +25,7 @@ class codegenASTPrinter
 
     void visit(const codegenStaticVariable &node) const
     {
-        const bool isLong = node.type == ConstantType::LONG;
+        const bool isLong = ctBytes(node.type) == 8;
         const int align = isLong ? 8 : 4;
         if (node.global)
             out << "    .globl " << node.name << "\n";
@@ -186,6 +186,18 @@ class codegenASTPrinter
         dispatch(*node.operand);
     }
 
+    void visit(const DivInstruction &node) const
+    {
+        if (node.scratchRegisterInstruction != nullptr)
+        {
+            visit(*node.scratchRegisterInstruction);
+            out << "\n    ";
+        }
+
+        out << "div" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        dispatch(*node.operand);
+    }
+
     void visit(const CdqInstruction &node) const
     {
         out << (node.type == AssemblyType::QUADWORD ? "cqo" : "cdq");
@@ -257,6 +269,10 @@ class codegenASTPrinter
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const IDivInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const DivInstruction *>(&node))
         {
             visit(*p);
         }

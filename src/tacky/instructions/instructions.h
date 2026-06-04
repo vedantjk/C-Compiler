@@ -71,6 +71,16 @@ class TackyTruncate : public TackyInstruction
     }
 };
 
+class TackyZeroExtend : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyZeroExtend(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
 class TackyJump : public TackyInstruction
 {
   public:

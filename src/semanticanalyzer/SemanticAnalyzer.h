@@ -38,7 +38,9 @@ inline bool isInteger(const std::shared_ptr<Type> &t)
 {
     return std::dynamic_pointer_cast<IntType>(t) != nullptr ||
            std::dynamic_pointer_cast<LongType>(t) != nullptr ||
-           std::dynamic_pointer_cast<CharType>(t) != nullptr;
+           std::dynamic_pointer_cast<CharType>(t) != nullptr ||
+           std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
+           std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
 }
 
 inline bool isPointer(const std::shared_ptr<Type> &t)
@@ -61,6 +63,12 @@ inline bool isVoid(const std::shared_ptr<Type> &t)
 
 inline bool isScalar(const std::shared_ptr<Type> &t) { return isInteger(t) || isPointer(t); }
 
+inline bool isUnsigned(const std::shared_ptr<Type> &t)
+{
+    return std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
+           std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
+}
+
 // Width in bytes of a scalar type; 0 for non-scalars. Used for usual-arithmetic
 // conversions, where the wider integer type wins.
 inline int typeSize(const std::shared_ptr<Type> &t)
@@ -71,19 +79,49 @@ inline int typeSize(const std::shared_ptr<Type> &t)
         return 4;
     if (std::dynamic_pointer_cast<LongType>(t))
         return 8;
+    if (std::dynamic_pointer_cast<UnsignedIntType>(t))
+        return 4;
+    if (std::dynamic_pointer_cast<UnsignedLongType>(t))
+        return 8;
     if (std::dynamic_pointer_cast<PointerType>(t))
         return 8;
     return 0;
 }
 
-// Common type of two arithmetic operands (callers gate on isInteger): identical
-// types stay; otherwise the wider one (so int + long -> long).
+// Common type of two arithmetic operands (callers gate on isInteger), i.e. the
+// usual arithmetic conversions. Same signedness: the wider type wins. Mixed
+// signedness: the unsigned type wins unless the signed type is strictly wider
+// (a wider signed type represents all the unsigned values, so long + unsigned
+// int -> long).
 inline std::shared_ptr<Type> getCommonType(const std::shared_ptr<Type> &a,
                                            const std::shared_ptr<Type> &b)
 {
     if (a->equals(*b))
         return a;
-    return typeSize(a) >= typeSize(b) ? a : b;
+
+    const int sizeA = typeSize(a), sizeB = typeSize(b);
+    if (isUnsigned(a) == isUnsigned(b))
+        return sizeA >= sizeB ? a : b;
+
+    const auto &uns = isUnsigned(a) ? a : b;
+    const auto &sgn = isUnsigned(a) ? b : a;
+    const int unsSize = isUnsigned(a) ? sizeA : sizeB;
+    const int sgnSize = isUnsigned(a) ? sizeB : sizeA;
+    return sgnSize > unsSize ? sgn : uns;
+}
+
+// Reduce a folded constant (held in a 64-bit bit-bucket) to the value an object
+// of the given type actually stores: 4-byte types keep their low 32 bits (signed
+// or unsigned), char its low 8, 8-byte types keep all 64.
+inline long long reduceToType(long long v, const std::shared_ptr<Type> &t)
+{
+    if (std::dynamic_pointer_cast<IntType>(t))
+        return static_cast<int>(v);
+    if (std::dynamic_pointer_cast<UnsignedIntType>(t))
+        return static_cast<unsigned int>(v);
+    if (std::dynamic_pointer_cast<CharType>(t))
+        return static_cast<signed char>(v);
+    return v;
 }
 
 class SemanticAnalyzer
@@ -999,26 +1037,19 @@ class SemanticAnalyzer
             if (!evalConstInt(u->operand, v))
                 return false;
             if (u->op == "-")
-            {
                 out = -v;
-                return true;
-            }
-            if (u->op == "+")
-            {
+            else if (u->op == "+")
                 out = v;
-                return true;
-            }
-            if (u->op == "~")
-            {
+            else if (u->op == "~")
                 out = ~v;
-                return true;
-            }
-            if (u->op == "!")
-            {
+            else if (u->op == "!")
                 out = !v;
-                return true;
-            }
-            return false;
+            else
+                return false;
+            // `-` / `~` on an unsigned operand wrap mod 2^width; the reduction to
+            // the result type makes that happen. `!` already yields int 0/1.
+            out = reduceToType(out, u->resolvedType);
+            return true;
         }
         if (auto b = std::dynamic_pointer_cast<BinaryExpr>(e))
         {
@@ -1026,115 +1057,101 @@ class SemanticAnalyzer
             if (!evalConstInt(b->left, l) || !evalConstInt(b->right, r))
                 return false;
             const auto &op = b->binaryOp;
+            // Operands have already been converted to their common type, so the
+            // left operand's type is the domain the op runs in (and for shifts it
+            // is the left operand that picks signed-arithmetic vs. logical).
+            const auto opType = b->left->resolvedType;
+            const bool uns = isUnsigned(opType);
+            const int sz = typeSize(opType);
+
             if (op == "+")
-            {
                 out = l + r;
-                return true;
-            }
-            if (op == "-")
-            {
+            else if (op == "-")
                 out = l - r;
-                return true;
-            }
-            if (op == "*")
-            {
+            else if (op == "*")
                 out = l * r;
-                return true;
-            }
-            if (op == "/")
+            else if (op == "/")
             {
                 if (r == 0)
                     return false;
-                out = l / r;
-                return true;
+                if (uns)
+                    out = sz == 8 ? static_cast<long long>(static_cast<unsigned long long>(l) /
+                                                           static_cast<unsigned long long>(r))
+                                  : static_cast<unsigned int>(l) / static_cast<unsigned int>(r);
+                else
+                    out = sz == 8 ? l / r : static_cast<int>(l) / static_cast<int>(r);
             }
-            if (op == "%")
+            else if (op == "%")
             {
                 if (r == 0)
                     return false;
-                out = l % r;
-                return true;
+                if (uns)
+                    out = sz == 8 ? static_cast<long long>(static_cast<unsigned long long>(l) %
+                                                           static_cast<unsigned long long>(r))
+                                  : static_cast<unsigned int>(l) % static_cast<unsigned int>(r);
+                else
+                    out = sz == 8 ? l % r : static_cast<int>(l) % static_cast<int>(r);
             }
-            if (op == "&")
-            {
+            else if (op == "&")
                 out = l & r;
-                return true;
-            }
-            if (op == "|")
-            {
+            else if (op == "|")
                 out = l | r;
-                return true;
-            }
-            if (op == "^")
-            {
+            else if (op == "^")
                 out = l ^ r;
-                return true;
-            }
-            if (op == "<<")
-            {
+            else if (op == "<<")
                 out = l << r;
-                return true;
-            }
-            if (op == ">>")
+            else if (op == ">>")
             {
-                out = l >> r;
-                return true;
+                if (uns)
+                    out = sz == 8 ? static_cast<long long>(static_cast<unsigned long long>(l) >> r)
+                                  : static_cast<unsigned int>(l) >> r;
+                else
+                    out = sz == 8 ? l >> r : static_cast<int>(l) >> r;
             }
-            if (op == "<")
-            {
-                out = l < r;
-                return true;
-            }
-            if (op == ">")
-            {
-                out = l > r;
-                return true;
-            }
-            if (op == "<=")
-            {
-                out = l <= r;
-                return true;
-            }
-            if (op == ">=")
-            {
-                out = l >= r;
-                return true;
-            }
-            if (op == "==")
-            {
+            else if (op == "<")
+                out = uns ? (sz == 8 ? static_cast<unsigned long long>(l) <
+                                           static_cast<unsigned long long>(r)
+                                     : static_cast<unsigned int>(l) < static_cast<unsigned int>(r))
+                          : (sz == 8 ? l < r : static_cast<int>(l) < static_cast<int>(r));
+            else if (op == ">")
+                out = uns ? (sz == 8 ? static_cast<unsigned long long>(l) >
+                                           static_cast<unsigned long long>(r)
+                                     : static_cast<unsigned int>(l) > static_cast<unsigned int>(r))
+                          : (sz == 8 ? l > r : static_cast<int>(l) > static_cast<int>(r));
+            else if (op == "<=")
+                out = uns ? (sz == 8 ? static_cast<unsigned long long>(l) <=
+                                           static_cast<unsigned long long>(r)
+                                     : static_cast<unsigned int>(l) <= static_cast<unsigned int>(r))
+                          : (sz == 8 ? l <= r : static_cast<int>(l) <= static_cast<int>(r));
+            else if (op == ">=")
+                out = uns ? (sz == 8 ? static_cast<unsigned long long>(l) >=
+                                           static_cast<unsigned long long>(r)
+                                     : static_cast<unsigned int>(l) >= static_cast<unsigned int>(r))
+                          : (sz == 8 ? l >= r : static_cast<int>(l) >= static_cast<int>(r));
+            else if (op == "==")
                 out = l == r;
-                return true;
-            }
-            if (op == "!=")
-            {
+            else if (op == "!=")
                 out = l != r;
-                return true;
-            }
-            if (op == "&&")
-            {
+            else if (op == "&&")
                 out = l && r;
-                return true;
-            }
-            if (op == "||")
-            {
+            else if (op == "||")
                 out = l || r;
-                return true;
-            }
-            return false;
+            else
+                return false;
+
+            // Reduce the result to the node's type so the next step in the fold
+            // sees the canonical value (comparisons/logicals are int 0/1 already).
+            out = reduceToType(out, b->resolvedType);
+            return true;
         }
         if (auto c = std::dynamic_pointer_cast<CastExpr>(e))
         {
             long long v;
             if (!evalConstInt(c->operand, v))
                 return false;
-            // Apply the cast's value conversion at compile time: narrowing to a
-            // smaller integer truncates; widening to long keeps the value.
-            if (std::dynamic_pointer_cast<IntType>(c->type))
-                out = static_cast<int>(v);
-            else if (std::dynamic_pointer_cast<CharType>(c->type))
-                out = static_cast<signed char>(v);
-            else
-                out = v;
+            // Apply the cast's value conversion at compile time: reduce to the
+            // target type's width and signedness (long / unsigned long keep all 64).
+            out = reduceToType(v, c->type);
             return true;
         }
         return false;
@@ -1297,11 +1314,9 @@ class SemanticAnalyzer
                 {
                     // Narrow the folded constant to the declared width at compile time
                     // (e.g. `static int g = 4294967296L;` stores 0, not the full value).
-                    if (std::dynamic_pointer_cast<IntType>(variable->type))
-                        val = static_cast<int>(val);
-                    else if (std::dynamic_pointer_cast<CharType>(variable->type))
-                        val = static_cast<signed char>(val);
-                    variable->symbol->constInit = val;
+                    // Narrow the folded constant to the declared type's width
+                    // (long / unsigned long keep all 64 bits and emit as .quad).
+                    variable->symbol->constInit = reduceToType(val, variable->type);
                 }
             }
 

@@ -24,12 +24,19 @@ class TackyDriver
 {
     ConstantType returnConstantType(const std::shared_ptr<Type> &literalType)
     {
-        ConstantType constantType = ConstantType::INT;
-        if (auto p = std::dynamic_pointer_cast<LongType>(literalType))
-        {
-            constantType = ConstantType::LONG;
-        }
-        return constantType;
+        if (std::dynamic_pointer_cast<UnsignedLongType>(literalType))
+            return ConstantType::ULONG;
+        if (std::dynamic_pointer_cast<UnsignedIntType>(literalType))
+            return ConstantType::UINT;
+        if (std::dynamic_pointer_cast<LongType>(literalType))
+            return ConstantType::LONG;
+        return ConstantType::INT;
+    }
+
+    static bool isUnsignedType(const std::shared_ptr<Type> &t)
+    {
+        return std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
+               std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
     }
 
   public:
@@ -285,20 +292,45 @@ class TackyDriver
                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         auto result = processExpression(castExpr->operand, instructions);
-        if (castExpr->type->equals(*castExpr->operand->resolvedType))
-            return result;
+        const auto &srcType = castExpr->operand->resolvedType;
+        const auto &dstType = castExpr->type;
 
-        TackyVar dst{makeTemp("tmp."), returnConstantType(castExpr->type)};
+        const ConstantType srcCt = returnConstantType(srcType);
+        const ConstantType dstCt = returnConstantType(dstType);
 
-        if (returnConstantType(castExpr->type) == ConstantType::LONG)
+        // Same width: the bit pattern is unchanged. Identical types are a no-op,
+        // but a signedness-only change (int<->uint, long<->ulong) must still copy
+        // into a temp of the destination type so the value carries the new
+        // signedness for later operations (e.g. picking signed vs unsigned setcc).
+        if (ctBytes(srcCt) == ctBytes(dstCt))
         {
+            if (srcCt == dstCt)
+                return result;
+            TackyVar sameWidthDst{makeTemp("tmp."), dstCt};
             instructions.push_back(
-                std::make_unique<TackySignExtend>(castExpr->line, castExpr->col, result, dst));
+                std::make_unique<TackyCopy>(castExpr->line, castExpr->col, result, sameWidthDst));
+            return sameWidthDst;
+        }
+
+        TackyVar dst{makeTemp("tmp."), dstCt};
+
+        if (ctBytes(dstCt) < ctBytes(srcCt))
+        {
+            // Narrowing 8 -> 4: keep the low 32 bits.
+            instructions.push_back(
+                std::make_unique<TackyTruncate>(castExpr->line, castExpr->col, result, dst));
+        }
+        else if (isUnsignedType(srcType))
+        {
+            // Widening from an unsigned source: zero-fill the upper bits.
+            instructions.push_back(
+                std::make_unique<TackyZeroExtend>(castExpr->line, castExpr->col, result, dst));
         }
         else
         {
+            // Widening from a signed source: replicate the sign bit.
             instructions.push_back(
-                std::make_unique<TackyTruncate>(castExpr->line, castExpr->col, result, dst));
+                std::make_unique<TackySignExtend>(castExpr->line, castExpr->col, result, dst));
         }
         return dst;
     }

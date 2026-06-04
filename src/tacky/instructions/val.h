@@ -5,15 +5,28 @@
 enum class ConstantType
 {
     INT,
-    LONG
+    LONG,
+    UINT,
+    ULONG
 };
+
+// Width in bytes: int/uint are 4, long/ulong are 8.
+inline int ctBytes(const ConstantType t)
+{
+    return (t == ConstantType::LONG || t == ConstantType::ULONG) ? 8 : 4;
+}
+
+inline bool isUnsignedCt(const ConstantType t)
+{
+    return t == ConstantType::UINT || t == ConstantType::ULONG;
+}
 
 class TackyConstant
 {
   public:
-    long long value;
+    unsigned long long value;
     ConstantType type;
-    explicit TackyConstant(const long long value_, const ConstantType type_)
+    explicit TackyConstant(const unsigned long long value_, const ConstantType type_)
         : value(value_), type(type_) {};
 };
 

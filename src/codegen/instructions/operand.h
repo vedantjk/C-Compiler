@@ -23,7 +23,11 @@ enum class CondCode
     G,
     GE,
     L,
-    LE
+    LE,
+    A,
+    AE,
+    B,
+    BE
 };
 
 enum class AssemblyType
@@ -46,6 +50,14 @@ inline std::string condCodeToString(const CondCode c)
         return "L";
     if (c == CondCode::LE)
         return "LE";
+    if (c == CondCode::A)
+        return "A";
+    if (c == CondCode::AE)
+        return "AE";
+    if (c == CondCode::B)
+        return "B";
+    if (c == CondCode::BE)
+        return "BE";
     return "";
 }
 
