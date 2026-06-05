@@ -130,14 +130,24 @@ This produces the `cc89` executable in `build/`.
 ## Usage
 
 ```sh
-cc89 [--lex | --parse | --validate | --tacky | --codegen] <source.c>
+cc89 [--lex | --parse | --validate | --tacky | --codegen | --compile] [-l<lib>...] <source.c>
 ```
 
-Each flag stops the pipeline at that stage; `--codegen` (the default) prints the
-generated assembly to stdout. `--debugAST` and `--debugTacky` dump the AST and
-the TACKY IR respectively.
+Each `--` flag stops the pipeline at that stage. `--compile` (the default) runs
+the full pipeline and then invokes `gcc` to assemble and link the result into an
+executable named after the source (`program.c` → `program`); the intermediate
+`.s` is removed afterward. `--codegen` instead prints the generated assembly to
+stdout. `--debugAST` and `--debugTacky` dump the AST and the TACKY IR respectively.
 
-To produce a runnable program, assemble and link the output with `gcc`:
+To build a runnable program in one step:
+
+```sh
+cc89 program.c              # produces ./program
+cc89 program.c -lm          # link against libm (flags pass through to gcc, repeatable)
+```
+
+`-l<lib>` flags are forwarded to `gcc` in order. If you only want the assembly,
+use `--codegen` and assemble it yourself:
 
 ```sh
 cc89 --codegen program.c > program.s

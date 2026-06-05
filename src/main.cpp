@@ -7,11 +7,14 @@
 #include "semanticanalyzer/SemanticAnalyzer.h"
 #include "tacky/ast/visitors/TackyDebugPrinter.h"
 #include "tacky/tacky.h"
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 static const std::string PRELUDE_SOURCE = "void *malloc(int size);\n"
                                           "void free(void *p);\n"
@@ -23,14 +26,15 @@ static const std::string PRELUDE_SOURCE = "void *malloc(int size);\n"
 //   --parse     lex + parse
 //   --validate  lex + parse + SA
 //   --tacky     lex + parse + SA + TACKY IR
-//   --codegen   lex + parse + SA + TACKY + codegen (prints asm to stdout)   (default)
-//   --compile   alias for the latest stage (currently --codegen)
+//   --codegen   lex + parse + SA + TACKY + codegen (prints asm to stdout)
+//   --compile   full pipeline, then assemble + link with gcc into an executable   (default)
 //
 // Flags:
 //   --debugAST    print AST after parse / validate (off by default)
 //   --debugTacky  print TACKY IR after the tacky pass (off by default)
+//   -l<lib>       link against <lib> (passed through to gcc); repeatable, e.g. -lm
 static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST,
-               bool debugTacky)
+               bool debugTacky, const std::vector<std::string> &libs)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -102,8 +106,42 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
         codegenDriver driver;
         auto cgProgram = driver.codegen(*tackyProg);
-        codegenASTPrinter printer(std::cout);
-        printer.print(*cgProgram);
+
+        // --codegen: emit assembly to stdout (the test harness captures this).
+        if (stage == "codegen")
+        {
+            codegenASTPrinter(std::cout).print(*cgProgram);
+            return 0;
+        }
+
+        // --compile (default): emit the assembly to a sibling .s, then hand it to
+        // gcc to assemble + link into an executable named after the source.
+        std::ostringstream asmBuffer;
+        codegenASTPrinter(asmBuffer).print(*cgProgram);
+
+        std::string base = inputSourcePath;
+        if (base.size() > 2 && base.compare(base.size() - 2, 2, ".c") == 0)
+            base.erase(base.size() - 2);
+        const std::string asmPath = base + ".s";
+        const std::string exePath = base;
+
+        std::ofstream asmOut(asmPath);
+        if (!asmOut.is_open())
+            throw std::runtime_error("failed to write assembly: " + asmPath);
+        asmOut << asmBuffer.str();
+        asmOut.close();
+
+        std::string command = "gcc " + asmPath + " -o " + exePath;
+        for (const std::string &lib : libs)
+            command += " " + lib;
+
+        int gccStatus = std::system(command.c_str());
+        std::remove(asmPath.c_str());
+        if (gccStatus != 0)
+        {
+            std::cerr << "assemble/link step failed: " << command << "\n";
+            return 1;
+        }
         return 0;
     }
 
@@ -113,8 +151,9 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
 int main(int argc, char **argv)
 {
-    std::string stage = "codegen";
+    std::string stage = "compile";
     std::string path;
+    std::vector<std::string> libs;
     bool debugAST = false;
     bool debugTacky = false;
     for (int i = 1; i < argc; ++i)
@@ -126,19 +165,21 @@ int main(int argc, char **argv)
             debugTacky = true;
         else if (a.rfind("--", 0) == 0)
             stage = a.substr(2);
+        else if (a.rfind("-l", 0) == 0)
+            libs.push_back(a);
         else
             path = a;
     }
     if (path.empty())
     {
         std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] "
-                     "[--debugAST] [--debugTacky] <source.c>\n";
+                     "[--debugAST] [--debugTacky] [-l<lib>...] <source.c>\n";
         return 1;
     }
 
     try
     {
-        return run(path, stage, debugAST, debugTacky);
+        return run(path, stage, debugAST, debugTacky, libs);
     }
     catch (const std::exception &e)
     {
