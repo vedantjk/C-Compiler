@@ -81,6 +81,46 @@ class TackyZeroExtend : public TackyInstruction
     }
 };
 
+class TackyDoubleToInt : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyDoubleToInt(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class TackyDoubleToUInt : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyDoubleToUInt(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class TackyIntToDouble : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyIntToDouble(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class TackyUIntToDouble : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyUIntToDouble(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
 class TackyJump : public TackyInstruction
 {
   public:
@@ -131,11 +171,12 @@ class TackyFunctionCall : public TackyInstruction
     std::string funcName;
     std::vector<TackyVal> args;
     TackyVal dst;
+    bool variadic;
 
     TackyFunctionCall(int line_, int col_, std::string funcName_, std::vector<TackyVal> args_,
-                      TackyVal dst_)
+                      TackyVal dst_, bool variadic_ = false)
         : TackyInstruction(line_, col_), funcName(std::move(funcName_)), args(std::move(args_)),
-          dst(std::move(dst_))
+          dst(std::move(dst_)), variadic(variadic_)
     {
     }
 };

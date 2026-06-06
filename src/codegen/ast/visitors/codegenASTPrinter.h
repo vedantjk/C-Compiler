@@ -2,9 +2,13 @@
 #include "../../instructions/instructions.h"
 #include "../ASTNodes/codegenProgram.h"
 #include "../TopLevelNodes/codegenFunction.h"
+#include "../TopLevelNodes/codegenStaticConstant.h"
 #include "../TopLevelNodes/codegenStaticVariable.h"
+#include <bit>
+#include <iomanip>
 #include <memory>
 #include <ostream>
+#include <variant>
 
 class codegenASTPrinter
 {
@@ -25,16 +29,28 @@ class codegenASTPrinter
 
     void visit(const codegenStaticVariable &node) const
     {
-        const bool isLong = ctBytes(node.type) == 8;
-        const int align = isLong ? 8 : 4;
         if (node.global)
             out << "    .globl " << node.name << "\n";
-        if (node.init != 0)
+
+        if (isDouble(node.type))
+        {
+            // 17 significant digits round-trip an IEEE double exactly through gas.
+            out << "    .data\n";
+            out << "    .align 8\n";
+            out << node.name << ":\n";
+            out << "    .double " << std::setprecision(17) << std::get<double>(node.init) << "\n";
+            return;
+        }
+
+        const bool isLong = ctBytes(node.type) == 8;
+        const int align = isLong ? 8 : 4;
+        const long long value = std::get<long long>(node.init);
+        if (value != 0)
         {
             out << "    .data\n";
             out << "    .align " << align << "\n";
             out << node.name << ":\n";
-            out << (isLong ? "    .quad " : "    .long ") << node.init << "\n";
+            out << (isLong ? "    .quad " : "    .long ") << value << "\n";
         }
         else
         {
@@ -43,6 +59,20 @@ class codegenASTPrinter
             out << node.name << ":\n";
             out << (isLong ? "    .zero 8\n" : "    .zero 4\n");
         }
+    }
+
+    void visit(const codegenStaticConstant &node) const
+    {
+        // Read-only double constants (literals, the -0.0 negation mask, the 2^63
+        // conversion bias). Emitted as the raw bit pattern via .quad so values like
+        // -0.0 are exact rather than relying on gas re-parsing a printed double.
+        const auto bits = std::bit_cast<unsigned long long>(node.value);
+        out << "    .section .rodata\n";
+        out << "    .align " << node.alignment << "\n";
+        out << node.name << ":\n";
+        out << "    .quad " << bits << "\n";
+        if (node.alignment == 16)
+            out << "    .quad 0\n"; // fill the 128-bit slot xorpd reads packed
     }
 
     void visit(const codegenFunction &node) const
@@ -82,11 +112,18 @@ class codegenASTPrinter
         {
             visit(*p);
         }
+        else if (auto *p = dynamic_cast<const codegenStaticConstant *>(&node))
+        {
+            visit(*p);
+        }
     }
 
     void visit(const MoveInstruction &node) const
     {
-        out << "mov" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        if (node.type == AssemblyType::DOUBLE)
+            out << "movsd    ";
+        else
+            out << "mov" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -108,6 +145,10 @@ class codegenASTPrinter
         else if (op == UnaryOp::Negate)
         {
             out << "neg" << suffix;
+        }
+        else if (op == UnaryOp::Shr)
+        {
+            out << "shr" << suffix;
         }
     }
 
@@ -148,6 +189,21 @@ class codegenASTPrinter
         }
     }
 
+    // SSE scalar-double arithmetic: distinct mnemonics, no l/q suffix.
+    void visitDoubleBinaryOp(const BinaryOp &op) const
+    {
+        if (op == BinaryOp::Add)
+            out << "addsd";
+        else if (op == BinaryOp::Subtract)
+            out << "subsd";
+        else if (op == BinaryOp::Multiply)
+            out << "mulsd";
+        else if (op == BinaryOp::Divide)
+            out << "divsd";
+        else if (op == BinaryOp::Xor)
+            out << "xorpd";
+    }
+
     void visit(const UnaryInstruction &node) const
     {
         visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
@@ -162,7 +218,10 @@ class codegenASTPrinter
             visit(*node.preStackFixInstruction);
             out << "\n    ";
         }
-        visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
+        if (node.type == AssemblyType::DOUBLE)
+            visitDoubleBinaryOp(node.op);
+        else
+            visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
         out << "    ";
         dispatch(*node.src);
         out << ", ";
@@ -210,7 +269,10 @@ class codegenASTPrinter
             visit(*node.preStackFixInstruction);
             out << "\n    ";
         }
-        out << "cmp" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        if (node.type == AssemblyType::DOUBLE)
+            out << "ucomisd    ";
+        else
+            out << "cmp" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
         dispatch(*node.a);
         out << ", ";
         dispatch((*node.b));
@@ -243,6 +305,24 @@ class codegenASTPrinter
     {
         out << "pushq    ";
         dispatch(*node.a);
+    }
+
+    void visit(const CVTSI2SD &node) const
+    {
+        // suffix is the integer SOURCE width (l/q); destination is an XMM reg.
+        out << "cvtsi2sd" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        dispatch(*node.src);
+        out << ", ";
+        dispatch(*node.dst);
+    }
+
+    void visit(const CVTTSD2SI &node) const
+    {
+        // suffix is the integer DESTINATION width (l/q); source is an XMM reg/mem.
+        out << "cvttsd2si" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        dispatch(*node.src);
+        out << ", ";
+        dispatch(*node.dst);
     }
 
     void visit(const CallInstruction &node) const
@@ -309,6 +389,14 @@ class codegenASTPrinter
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const MoveSXInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const CVTSI2SD *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const CVTTSD2SI *>(&node))
         {
             visit(*p);
         }
@@ -407,6 +495,27 @@ class codegenASTPrinter
         {
             out << "%rsp"; // the stack pointer is always addressed as the 64-bit register
         }
+        // XMM registers have no sub-register widths: `bytes` is ignored.
+        else if (node.name == RegisterName::XMM0)
+            out << "%xmm0";
+        else if (node.name == RegisterName::XMM1)
+            out << "%xmm1";
+        else if (node.name == RegisterName::XMM2)
+            out << "%xmm2";
+        else if (node.name == RegisterName::XMM3)
+            out << "%xmm3";
+        else if (node.name == RegisterName::XMM4)
+            out << "%xmm4";
+        else if (node.name == RegisterName::XMM5)
+            out << "%xmm5";
+        else if (node.name == RegisterName::XMM6)
+            out << "%xmm6";
+        else if (node.name == RegisterName::XMM7)
+            out << "%xmm7";
+        else if (node.name == RegisterName::XMM14)
+            out << "%xmm14";
+        else if (node.name == RegisterName::XMM15)
+            out << "%xmm15";
     }
 
     void dispatch(const Operand &node) const

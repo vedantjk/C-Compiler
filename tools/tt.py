@@ -258,9 +258,9 @@ def execute(f: Path, cc89: Path, art: Path, timeout: float):
         return False, "cc89 --codegen TIMEOUT"
     if rc != 0:
         return False, f"cc89 --codegen failed (exit {rc})"
-    if run_proc(["gcc", "-w", str(asm), "-o", str(our)], timeout)[0] != 0:
+    if run_proc(["gcc", "-w", str(asm), "-o", str(our), "-lm"], timeout)[0] != 0:
         return False, "gcc could not assemble/link cc89 output"
-    if run_proc(["gcc", "-w", str(f), "-o", str(ref)], timeout)[0] != 0:
+    if run_proc(["gcc", "-w", str(f), "-o", str(ref), "-lm"], timeout)[0] != 0:
         return False, "reference gcc build failed"
     return _compare(our, ref, timeout)
 
@@ -272,9 +272,9 @@ def _exec_linked(f, cc89, art, timeout, extra):
         rc, to = run_proc([str(cc89), "--codegen", str(f)], timeout, stdout=out)
     if to or rc != 0:
         return False, ("cc89 --codegen TIMEOUT" if to else f"cc89 --codegen failed (exit {rc})")
-    if run_proc(["gcc", "-w", str(asm), *extra, "-o", str(our)], timeout)[0] != 0:
+    if run_proc(["gcc", "-w", str(asm), *extra, "-o", str(our), "-lm"], timeout)[0] != 0:
         return False, "gcc could not assemble/link cc89 output"
-    if run_proc(["gcc", "-w", str(f), *extra, "-o", str(ref)], timeout)[0] != 0:
+    if run_proc(["gcc", "-w", str(f), *extra, "-o", str(ref), "-lm"], timeout)[0] != 0:
         return False, "reference gcc build failed"
     return _compare(our, ref, timeout)
 
@@ -293,9 +293,9 @@ def _exec_pair(f, sib, cc89, art, timeout):
         return False, "gcc could not assemble cc89 output"
     if run_proc(["gcc", "-w", "-c", str(sib), "-o", str(sib_o)], timeout)[0] != 0:
         return False, "gcc could not compile sibling"
-    if run_proc(["gcc", "-w", str(our_o), str(sib_o), "-o", str(our)], timeout)[0] != 0:
+    if run_proc(["gcc", "-w", str(our_o), str(sib_o), "-o", str(our), "-lm"], timeout)[0] != 0:
         return False, "link of cc89+gcc objects failed"
-    if run_proc(["gcc", "-w", str(f), str(sib), "-o", str(ref)], timeout)[0] != 0:
+    if run_proc(["gcc", "-w", str(f), str(sib), "-o", str(ref), "-lm"], timeout)[0] != 0:
         return False, "reference gcc build failed"
     return _compare(our, ref, timeout)
 

@@ -940,6 +940,7 @@ class SemanticAnalyzer
         {
             auto functionType =
                 std::dynamic_pointer_cast<FunctionType>(checkFunctionExistence->type);
+            expr->calleeVariadic = functionType->isVariadic;
             if ((functionType->isVariadic &&
                  functionType->paramTypes.size() > expr->parameters.size()) ||
                 (!functionType->isVariadic &&
@@ -1235,11 +1236,17 @@ class SemanticAnalyzer
         {
             if (isDouble(c->operand->resolvedType))
             {
-                // double -> integer cast: truncate toward zero, then narrow.
+                // double -> integer cast: truncate toward zero, then narrow. An
+                // unsigned target must convert through unsigned long long, since a
+                // value >= 2^63 overflows a signed long long (UB / wrong bits).
                 double dv;
                 if (!evalConstDouble(c->operand, dv))
                     return false;
-                out = reduceToType(static_cast<long long>(dv), c->type);
+                const long long bits =
+                    isUnsigned(c->type)
+                        ? static_cast<long long>(static_cast<unsigned long long>(dv))
+                        : static_cast<long long>(dv);
+                out = reduceToType(bits, c->type);
                 return true;
             }
             long long v;
@@ -1433,8 +1440,11 @@ class SemanticAnalyzer
                     if (evalConstInt(init, val_i))
                         variable->symbol->constInit = reduceToType(val_i, variable->type);
                     else if (evalConstDouble(init, val_d))
-                        variable->symbol->constInit =
-                            reduceToType(static_cast<long long>(val_d), variable->type);
+                        variable->symbol->constInit = reduceToType(
+                            isUnsigned(variable->type)
+                                ? static_cast<long long>(static_cast<unsigned long long>(val_d))
+                                : static_cast<long long>(val_d),
+                            variable->type);
                 }
             }
 

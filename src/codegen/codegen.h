@@ -2,10 +2,12 @@
 
 #include "../tacky/ast/ASTNodes/TackyProgram.h"
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
+#include "ast/TopLevelNodes/codegenStaticConstant.h"
 #include "ast/TopLevelNodes/codegenStaticVariable.h"
 #include "instructions/instructions.h"
 #include "tacky/ast/TopLevelNodes/TackyStaticVariable.h"
 
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,9 +16,37 @@ class codegenDriver
     const std::vector<RegisterName> argRegisters{(RegisterName::DI), (RegisterName::SI),
                                                  (RegisterName::DX), (RegisterName::CX),
                                                  (RegisterName::R8), (RegisterName::R9)};
+    const std::vector<RegisterName> xmmRegisters{
+        (RegisterName::XMM0), (RegisterName::XMM1), (RegisterName::XMM2), (RegisterName::XMM3),
+        (RegisterName::XMM4), (RegisterName::XMM5), (RegisterName::XMM6), (RegisterName::XMM7)};
     // Names of all static-storage variables (file-scope, block static, extern),
     // supplied by TACKY. Their pseudos lower to RIP-relative Data, not stack slots.
     std::unordered_set<std::string> staticNames;
+
+    int constCounter = 0;
+    std::map<std::pair<uint64_t, int>, std::string> constLabels;
+    std::vector<std::unique_ptr<codegenStaticConstant>> constPool;
+
+    // Unique local labels for branch targets synthesized in codegen (e.g. the
+    // out-of-range path in unsigned->double conversion).
+    int labelCounter = 0;
+    std::string uniqueLabel(const std::string &prefix)
+    {
+        return prefix + std::to_string(labelCounter++);
+    }
+
+    std::string internDouble(double value, int alignment)
+    {
+        const auto bits = std::bit_cast<uint64_t>(value);
+        auto [it, inserted] = constLabels.try_emplace({bits, alignment}, "");
+        if (inserted)
+        {
+            it->second = ".Lconst" + std::to_string(constCounter++);
+            constPool.push_back(
+                std::make_unique<codegenStaticConstant>(0, 0, it->second, alignment, value));
+        }
+        return it->second;
+    }
 
   public:
     static bool isImmediate(const Operand &op)
@@ -27,17 +57,27 @@ class codegenDriver
     // Assembly width of a TACKY value: long -> 8-byte quadword, else 4-byte longword.
     static AssemblyType toAssemblyType(const ConstantType t)
     {
+        if (t == ConstantType::DOUBLE)
+            return AssemblyType::DOUBLE;
         return ctBytes(t) == 8 ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
     }
     static AssemblyType assemblyTypeOf(const TackyVal &v) { return toAssemblyType(typeOf(v)); }
-    // Register width that matches an assembly type.
-    static int bytesOf(const AssemblyType t) { return t == AssemblyType::QUADWORD ? 8 : 4; }
+    // Register width that matches an assembly type. Quadword and double are both
+    // 8 bytes; longword is 4.
+    static int bytesOf(const AssemblyType t)
+    {
+        return (t == AssemblyType::QUADWORD || t == AssemblyType::DOUBLE) ? 8 : 4;
+    }
 
     std::unique_ptr<Operand> tackyValToOperand(const TackyVal &t)
     {
         if (auto *c = std::get_if<TackyConstant>(&t))
         {
             return std::make_unique<Immediate>(c->value);
+        }
+        if (auto *f = std::get_if<TackyFloatingConstant>(&t))
+        {
+            return std::make_unique<Data>(internDouble(f->value, 8));
         }
         if (auto *v = std::get_if<TackyVar>(&t))
         {
@@ -55,8 +95,40 @@ class codegenDriver
         const AssemblyType srcType = assemblyTypeOf(tackyUnary.src);
         const AssemblyType dstType = assemblyTypeOf(tackyUnary.dst);
 
+        if (tackyUnary.op == UnaryOp::Negate && isDouble(typeOf(tackyUnary.dst)))
+        {
+            auto mask = std::make_unique<Data>(internDouble(-0.0, 16));
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::move(src), std::move(dst1), AssemblyType::DOUBLE));
+            instructions.push_back(std::make_unique<BinaryInstruction>(
+                std::move(mask), std::move(dst2), BinaryOp::Xor, AssemblyType::DOUBLE));
+            return;
+        }
+
         if (tackyUnary.op == UnaryOp::Not)
         {
+            if (isDouble(typeOf(tackyUnary.src)))
+            {
+                // xorpd %xmm15, %xmm15   -> zero the scratch
+                // 2. ucomisd src, %xmm15    -> compare src against 0.0
+                // 3. mov $0, dst            (int result)
+                // 4. sete dst
+                instructions.push_back(std::make_unique<BinaryInstruction>(
+                    std::make_unique<Register>(RegisterName::XMM15, 8),
+                    std::make_unique<Register>(RegisterName::XMM15, 8), BinaryOp::Xor,
+                    AssemblyType::DOUBLE));
+
+                instructions.push_back(std::make_unique<CmpInstruction>(
+                    std::move(src), std::make_unique<Register>(RegisterName::XMM15, 8),
+                    AssemblyType::DOUBLE));
+
+                instructions.push_back(std::make_unique<MoveInstruction>(
+                    std::make_unique<Immediate>(0), std::move(dst1), dstType));
+
+                instructions.push_back(
+                    std::make_unique<SetCCInstruction>(CondCode::E, std::move(dst2)));
+                return;
+            }
             std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
             std::unique_ptr<Operand> imm2 = std::make_unique<Immediate>(0);
             instructions.push_back(
@@ -81,8 +153,9 @@ class codegenDriver
         {
             const AssemblyType t = assemblyTypeOf(*tackyReturn.val);
             std::unique_ptr<Operand> source = tackyValToOperand(*tackyReturn.val);
-            std::unique_ptr<Operand> dest =
-                std::make_unique<Register>(RegisterName::AX, bytesOf(t));
+            const bool dbl = t == AssemblyType::DOUBLE;
+            auto dest =
+                std::make_unique<Register>(dbl ? RegisterName::XMM0 : RegisterName::AX, bytesOf(t));
             instructions.push_back(
                 std::make_unique<MoveInstruction>(std::move(source), std::move(dest), t));
         }
@@ -180,7 +253,7 @@ class codegenDriver
     void processTackyBinary(const TackyBinary &tackyBinary,
                             std::vector<std::unique_ptr<Instruction>> &instructions)
     {
-        if (tackyBinary.op == BinaryOp::Divide)
+        if (tackyBinary.op == BinaryOp::Divide && !isDouble(typeOf(tackyBinary.dst)))
         {
             processDivision(tackyBinary, instructions);
             return;
@@ -198,10 +271,10 @@ class codegenDriver
 
         if (isRelationalOp(tackyBinary.op))
         {
-            // The comparison runs at the operands' (common) width and signedness;
-            // the result is int.
-            CondCode cc =
-                binaryOpToCondCode(tackyBinary.op, isUnsignedCt(typeOf(tackyBinary.src1)));
+            const bool useUnsignedCC =
+                isUnsignedCt(typeOf(tackyBinary.src1)) || isDouble(typeOf(tackyBinary.src1));
+            // CondCode for floating pt and unsigned is the same.
+            CondCode cc = binaryOpToCondCode(tackyBinary.op, useUnsignedCC);
             const AssemblyType cmpType = assemblyTypeOf(tackyBinary.src1);
             std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
             instructions.push_back(
@@ -227,8 +300,23 @@ class codegenDriver
     void processTackyJumpIfZero(const TackyJumpIfZero &tackyJIZ,
                                 std::vector<std::unique_ptr<Instruction>> &instructions)
     {
-        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         auto condition = tackyValToOperand(tackyJIZ.condition);
+        if (isDouble(typeOf(tackyJIZ.condition)))
+        {
+            // No immediate compare for doubles: zero a scratch XMM with xorpd and
+            // compare the condition against it (ucomisd cond, %xmm15).
+            instructions.push_back(std::make_unique<BinaryInstruction>(
+                std::make_unique<Register>(RegisterName::XMM15, 8),
+                std::make_unique<Register>(RegisterName::XMM15, 8), BinaryOp::Xor,
+                AssemblyType::DOUBLE));
+            instructions.push_back(std::make_unique<CmpInstruction>(
+                std::move(condition), std::make_unique<Register>(RegisterName::XMM15, 8),
+                AssemblyType::DOUBLE));
+            instructions.push_back(
+                std::make_unique<JumpCCInstruction>(CondCode::E, tackyJIZ.identifier));
+            return;
+        }
+        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         instructions.push_back(std::make_unique<CmpInstruction>(
             std::move(imm1), std::move(condition), assemblyTypeOf(tackyJIZ.condition)));
         instructions.push_back(
@@ -238,8 +326,23 @@ class codegenDriver
     void processTackyJumpIfNotZero(const TackyJumpIfNotZero &tackyJIZ,
                                    std::vector<std::unique_ptr<Instruction>> &instructions)
     {
-        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         auto condition = tackyValToOperand(tackyJIZ.condition);
+        if (isDouble(typeOf(tackyJIZ.condition)))
+        {
+            // No immediate compare for doubles: zero a scratch XMM with xorpd and
+            // compare the condition against it (ucomisd cond, %xmm15).
+            instructions.push_back(std::make_unique<BinaryInstruction>(
+                std::make_unique<Register>(RegisterName::XMM15, 8),
+                std::make_unique<Register>(RegisterName::XMM15, 8), BinaryOp::Xor,
+                AssemblyType::DOUBLE));
+            instructions.push_back(std::make_unique<CmpInstruction>(
+                std::move(condition), std::make_unique<Register>(RegisterName::XMM15, 8),
+                AssemblyType::DOUBLE));
+            instructions.push_back(
+                std::make_unique<JumpCCInstruction>(CondCode::NE, tackyJIZ.identifier));
+            return;
+        }
+        std::unique_ptr<Operand> imm1 = std::make_unique<Immediate>(0);
         instructions.push_back(std::make_unique<CmpInstruction>(
             std::move(imm1), std::move(condition), assemblyTypeOf(tackyJIZ.condition)));
         instructions.push_back(
@@ -265,18 +368,28 @@ class codegenDriver
                                   std::vector<std::unique_ptr<Instruction>> &instructions)
     {
 
-        std::vector<TackyVal> registerArgs, stackArgs;
+        std::vector<TackyVal> gpArgs, xmmArgs, stackArgs;
 
-        int argumentCount = 0;
-        while (argumentCount < 6 && argumentCount < static_cast<int>(tackyFunctionCall.args.size()))
+        int gpIndex = 0, xmmIndex = 0;
+        for (const auto &arg : tackyFunctionCall.args)
         {
-            registerArgs.push_back(tackyFunctionCall.args[argumentCount]);
-            argumentCount++;
-        }
-
-        for (int i = static_cast<int>(tackyFunctionCall.args.size()) - 1; i >= argumentCount; i--)
-        {
-            stackArgs.push_back(tackyFunctionCall.args[i]);
+            if (typeOf(arg) == ConstantType::DOUBLE)
+            {
+                if (xmmIndex < 8)
+                {
+                    xmmArgs.push_back(arg);
+                    xmmIndex++;
+                }
+                else
+                    stackArgs.push_back(arg);
+            }
+            else if (gpIndex < 6)
+            {
+                gpArgs.push_back(arg);
+                gpIndex++;
+            }
+            else
+                stackArgs.push_back(arg);
         }
 
         int stackPadding = 0;
@@ -294,7 +407,7 @@ class codegenDriver
         }
 
         int regIndex = 0;
-        for (auto &tackyArg : registerArgs)
+        for (auto &tackyArg : gpArgs)
         {
             const AssemblyType t = assemblyTypeOf(tackyArg);
             std::unique_ptr<Operand> r =
@@ -305,12 +418,26 @@ class codegenDriver
             regIndex++;
         }
 
-        for (auto &tackyArg : stackArgs)
+        regIndex = 0;
+        for (auto &tackyArg : xmmArgs)
         {
+            const AssemblyType t = assemblyTypeOf(tackyArg);
+            std::unique_ptr<Operand> r =
+                std::make_unique<Register>(xmmRegisters[regIndex], bytesOf(t));
+            auto assemblyArg = tackyValToOperand(tackyArg);
+            instructions.push_back(
+                std::make_unique<MoveInstruction>(std::move(assemblyArg), std::move(r), t));
+            regIndex++;
+        }
+
+        for (auto it = stackArgs.rbegin(); it != stackArgs.rend(); ++it)
+        {
+            auto &tackyArg = *it;
             auto assemblyArg = tackyValToOperand(tackyArg);
             // Immediates and quadwords can be pushed directly (pushq is 8-byte).
             // A longword in memory must go via %eax so we push a full 8-byte slot.
-            if (isImmediate(*assemblyArg) || assemblyTypeOf(tackyArg) == AssemblyType::QUADWORD)
+            if (isImmediate(*assemblyArg) || assemblyTypeOf(tackyArg) == AssemblyType::QUADWORD ||
+                assemblyTypeOf(tackyArg) == AssemblyType::DOUBLE)
             {
                 instructions.push_back(std::make_unique<PushInstruction>(std::move(assemblyArg)));
             }
@@ -323,6 +450,14 @@ class codegenDriver
             }
         }
 
+        if (tackyFunctionCall.variadic)
+        {
+            // SysV: a variadic callee expects %al = number of vector (XMM) registers
+            // used to pass args. movl into %eax sets %al; the upper bits don't matter.
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Immediate>(static_cast<long long>(xmmArgs.size())),
+                std::make_unique<Register>(RegisterName::AX, 4), AssemblyType::LONGWORD));
+        }
         instructions.push_back(std::make_unique<CallInstruction>(tackyFunctionCall.funcName));
 
         if (int bytesToRemove = 8 * static_cast<int>(stackArgs.size()) + stackPadding)
@@ -335,9 +470,18 @@ class codegenDriver
 
         const AssemblyType retType = assemblyTypeOf(tackyFunctionCall.dst);
         auto assemblyDst = tackyValToOperand(tackyFunctionCall.dst);
-        instructions.push_back(std::make_unique<MoveInstruction>(
-            std::make_unique<Register>(RegisterName::AX, bytesOf(retType)), std::move(assemblyDst),
-            retType));
+        if (retType == AssemblyType::DOUBLE)
+        {
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Register>(RegisterName::XMM0, bytesOf(retType)),
+                std::move(assemblyDst), retType));
+        }
+        else
+        {
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Register>(RegisterName::AX, bytesOf(retType)),
+                std::move(assemblyDst), retType));
+        }
     }
 
     void processTackySignExtend(const TackySignExtend &tackySignExtend,
@@ -365,6 +509,148 @@ class codegenDriver
         auto dst = tackyValToOperand(tackyTruncate.dst);
         instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst),
                                                                  AssemblyType::LONGWORD));
+    }
+
+    void processTackyIntToDouble(const TackyIntToDouble &tackyIntToDouble,
+                                 std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyIntToDouble.src);
+        auto dst = tackyValToOperand(tackyIntToDouble.dst);
+        instructions.push_back(std::make_unique<CVTSI2SD>(std::move(src), std::move(dst),
+                                                          assemblyTypeOf(tackyIntToDouble.src)));
+    }
+
+    void processTackyDoubleToInt(const TackyDoubleToInt &tackyDoubleToInt,
+                                 std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyDoubleToInt.src);
+        auto dst = tackyValToOperand(tackyDoubleToInt.dst);
+        instructions.push_back(std::make_unique<CVTTSD2SI>(std::move(src), std::move(dst),
+                                                           assemblyTypeOf(tackyDoubleToInt.dst)));
+    }
+
+    void processTackyUIntToDouble(const TackyUIntToDouble &tackyUIntToDouble,
+                                  std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyUIntToDouble.src);
+        auto dst = tackyValToOperand(tackyUIntToDouble.dst);
+        if (typeOf(tackyUIntToDouble.src) == ConstantType::UINT)
+        {
+            std::unique_ptr<Operand> reg_a = std::make_unique<Register>(RegisterName::AX, 4);
+            std::unique_ptr<Operand> reg_b = std::make_unique<Register>(RegisterName::AX, 8);
+            instructions.push_back(
+                std::make_unique<MoveZeroExtendInstruction>(std::move(src), std::move(reg_a)));
+            instructions.push_back(std::make_unique<CVTSI2SD>(std::move(reg_b), std::move(dst),
+                                                              AssemblyType::QUADWORD));
+            return;
+        }
+
+        // Unsigned long -> double. cvtsi2sd reads its source as signed, so a value
+        // with the top bit set (>= 2^63) would be misread as negative. Branch on
+        // the sign bit:
+        //   cmp $0, src ; jl large        (signed-negative <=> top bit set)
+        //   in range  -> cvtsi2sdq src, dst ; jmp end
+        //   out of range (large):
+        //     mov src, %rax ; mov src, %rdx
+        //     shr %rax                    (rax = src >> 1)
+        //     and $1, %rdx                (rdx = src & 1, the dropped low bit)
+        //     or  %rdx, %rax              (round to odd: keep the dropped bit)
+        //     cvtsi2sdq %rax, dst         (now in signed range)
+        //     addsd dst, dst              (double it back)
+        // Rounding to odd before halving stops the convert from double-rounding.
+        const std::string largeLabel = uniqueLabel("u2d_large");
+        const std::string endLabel = uniqueLabel("u2d_end");
+
+        instructions.push_back(std::make_unique<CmpInstruction>(
+            std::make_unique<Immediate>(0), std::move(src), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<JumpCCInstruction>(CondCode::L, largeLabel));
+
+        instructions.push_back(std::make_unique<CVTSI2SD>(tackyValToOperand(tackyUIntToDouble.src),
+                                                          std::move(dst), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<JumpInstruction>(endLabel));
+
+        instructions.push_back(std::make_unique<Label>(largeLabel));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            tackyValToOperand(tackyUIntToDouble.src),
+            std::make_unique<Register>(RegisterName::AX, 8), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            tackyValToOperand(tackyUIntToDouble.src),
+            std::make_unique<Register>(RegisterName::DX, 8), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<UnaryInstruction>(
+            std::make_unique<Register>(RegisterName::AX, 8), UnaryOp::Shr, AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<BinaryInstruction>(
+            std::make_unique<Immediate>(1), std::make_unique<Register>(RegisterName::DX, 8),
+            BinaryOp::BitwiseAnd, AssemblyType::QUADWORD));
+        instructions.push_back(
+            std::make_unique<BinaryInstruction>(std::make_unique<Register>(RegisterName::DX, 8),
+                                                std::make_unique<Register>(RegisterName::AX, 8),
+                                                BinaryOp::BitwiseOr, AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<CVTSI2SD>(
+            std::make_unique<Register>(RegisterName::AX, 8),
+            tackyValToOperand(tackyUIntToDouble.dst), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<BinaryInstruction>(
+            tackyValToOperand(tackyUIntToDouble.dst), tackyValToOperand(tackyUIntToDouble.dst),
+            BinaryOp::Add, AssemblyType::DOUBLE));
+        instructions.push_back(std::make_unique<Label>(endLabel));
+    }
+
+    void processTackyDoubleToUInt(const TackyDoubleToUInt &tackyDoubleToUInt,
+                                  std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyDoubleToUInt.src);
+        auto dst = tackyValToOperand(tackyDoubleToUInt.dst);
+        if (typeOf(tackyDoubleToUInt.dst) == ConstantType::UINT)
+        {
+            // double -> unsigned int: cvttsd2si is signed, but a value < 2^32 always
+            // fits in a signed quadword, so convert to a quadword and keep the low 32.
+            instructions.push_back(std::make_unique<CVTTSD2SI>(
+                std::move(src), std::make_unique<Register>(RegisterName::AX, 8),
+                AssemblyType::QUADWORD));
+            instructions.push_back(
+                std::make_unique<MoveInstruction>(std::make_unique<Register>(RegisterName::AX, 4),
+                                                  std::move(dst), AssemblyType::LONGWORD));
+            return;
+        }
+
+        // double -> unsigned long. cvttsd2si yields a SIGNED result, so a value >= 2^63
+        // would overflow it. Branch on whether src >= 2^63:
+        //   comisd 2^63, src ; jae large
+        //   in range -> cvttsd2siq src, dst ; jmp end
+        //   large (src >= 2^63):
+        //     movsd src, %xmm15
+        //     subsd 2^63, %xmm15        (bring into signed range)
+        //     cvttsd2siq %xmm15, dst
+        //     movabsq $2^63, %rax ; addq %rax, dst   (add the bias back)
+        // 2^63 is exactly representable as a double and is the signed-range boundary.
+        const std::string bound = internDouble(9223372036854775808.0, 8);
+        const std::string largeLabel = uniqueLabel("d2u_large");
+        const std::string endLabel = uniqueLabel("d2u_end");
+
+        instructions.push_back(std::make_unique<CmpInstruction>(
+            std::make_unique<Data>(bound), std::move(src), AssemblyType::DOUBLE));
+        instructions.push_back(std::make_unique<JumpCCInstruction>(CondCode::AE, largeLabel));
+
+        instructions.push_back(std::make_unique<CVTTSD2SI>(tackyValToOperand(tackyDoubleToUInt.src),
+                                                           std::move(dst), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<JumpInstruction>(endLabel));
+
+        instructions.push_back(std::make_unique<Label>(largeLabel));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            tackyValToOperand(tackyDoubleToUInt.src),
+            std::make_unique<Register>(RegisterName::XMM15, 8), AssemblyType::DOUBLE));
+        instructions.push_back(std::make_unique<BinaryInstruction>(
+            std::make_unique<Data>(bound), std::make_unique<Register>(RegisterName::XMM15, 8),
+            BinaryOp::Subtract, AssemblyType::DOUBLE));
+        instructions.push_back(std::make_unique<CVTTSD2SI>(
+            std::make_unique<Register>(RegisterName::XMM15, 8),
+            tackyValToOperand(tackyDoubleToUInt.dst), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::make_unique<Immediate>(static_cast<long long>(0x8000000000000000ULL)),
+            std::make_unique<Register>(RegisterName::AX, 8), AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<BinaryInstruction>(
+            std::make_unique<Register>(RegisterName::AX, 8),
+            tackyValToOperand(tackyDoubleToUInt.dst), BinaryOp::Add, AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<Label>(endLabel));
     }
 
     void processTackyInstructions(
@@ -421,29 +707,62 @@ class codegenDriver
             {
                 processTackyZeroExtend(*p, instructions);
             }
+            else if (auto *p = dynamic_cast<TackyIntToDouble *>(instruction.get()))
+            {
+                processTackyIntToDouble(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyDoubleToInt *>(instruction.get()))
+            {
+                processTackyDoubleToInt(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyUIntToDouble *>(instruction.get()))
+            {
+                processTackyUIntToDouble(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyDoubleToUInt *>(instruction.get()))
+            {
+                processTackyDoubleToUInt(*p, instructions);
+            }
         }
     }
 
     std::unique_ptr<codegenFunction> processFunction(const TackyFunction &functionNode)
     {
         std::vector<std::unique_ptr<Instruction>> instructions;
-        int regIndex = 0;
-        while (regIndex < 6 && regIndex < static_cast<int>(functionNode.params.size()))
+
+        // SysV: integer params arrive in RDI.. (6 slots), double params in XMM0..
+        // (8 slots), each bank counted independently. Params that overflow their
+        // bank were pushed by the caller and sit at 16(%rbp), 24(%rbp), ... in the
+        // order they appear.
+        int gpIndex = 0, xmmIndex = 0, stackOffset = 16;
+        for (const auto &[pname, pct] : functionNode.params)
         {
-            const auto &[pname, pct] = functionNode.params[regIndex];
             const AssemblyType pt = toAssemblyType(pct);
-            instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Register>(argRegisters[regIndex], bytesOf(pt)),
-                std::make_unique<PseudoRegister>(pname, pt), pt));
-            regIndex++;
-        }
-        for (int i = 6; i < static_cast<int>(functionNode.params.size()); i++)
-        {
-            const auto &[pname, pct] = functionNode.params[i];
-            const AssemblyType pt = toAssemblyType(pct);
-            int offset = 16 + 8 * (i - 6);
-            instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Stack>(offset), std::make_unique<PseudoRegister>(pname, pt), pt));
+            if (isDouble(pct))
+            {
+                if (xmmIndex < 8)
+                {
+                    instructions.push_back(std::make_unique<MoveInstruction>(
+                        std::make_unique<Register>(xmmRegisters[xmmIndex], 8),
+                        std::make_unique<PseudoRegister>(pname, pt), AssemblyType::DOUBLE));
+                    xmmIndex++;
+                    continue;
+                }
+            }
+            else if (gpIndex < 6)
+            {
+                instructions.push_back(std::make_unique<MoveInstruction>(
+                    std::make_unique<Register>(argRegisters[gpIndex], bytesOf(pt)),
+                    std::make_unique<PseudoRegister>(pname, pt), pt));
+                gpIndex++;
+                continue;
+            }
+
+            // Overflowed its register bank: read from the caller's stack frame.
+            instructions.push_back(
+                std::make_unique<MoveInstruction>(std::make_unique<Stack>(stackOffset),
+                                                  std::make_unique<PseudoRegister>(pname, pt), pt));
+            stackOffset += 8;
         }
 
         processTackyInstructions(functionNode.instructions, instructions);
@@ -467,7 +786,7 @@ class codegenDriver
         auto found = pseudoToOffset.find(p->name);
         if (found == pseudoToOffset.end())
         {
-            if (p->type == AssemblyType::QUADWORD)
+            if (p->type == AssemblyType::QUADWORD || p->type == AssemblyType::DOUBLE)
             {
                 used += (8 - used % 8) % 8; // align the slot to 8 bytes
                 used += 8;
@@ -533,6 +852,16 @@ class codegenDriver
             {
                 lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
             }
+            else if (auto *p = dynamic_cast<CVTSI2SD *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
+            }
+            else if (auto *p = dynamic_cast<CVTTSD2SI *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
+            }
         }
         if (int frameSize = used; frameSize > 0)
         {
@@ -593,9 +922,17 @@ class codegenDriver
             if (auto *m = dynamic_cast<MoveInstruction *>(instr.get()))
             {
                 const int b = bytesOf(m->type);
+                if (m->type == AssemblyType::DOUBLE && isMemory(*m->src) && isMemory(*m->dst))
+                {
+                    // movsd can't go memory->memory; stage through an XMM scratch.
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(m->src), reg(RegisterName::XMM14, 8), AssemblyType::DOUBLE));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::XMM14, 8), std::move(m->dst), AssemblyType::DOUBLE));
+                }
                 // A 64-bit immediate or a memory source can't move straight to
                 // memory; stage it in R10 first.
-                if (isMemory(*m->dst) && (isMemory(*m->src) || isLargeImmediate(*m->src)))
+                else if (isMemory(*m->dst) && (isMemory(*m->src) || isLargeImmediate(*m->src)))
                 {
                     rewritten.push_back(std::make_unique<MoveInstruction>(
                         std::move(m->src), reg(RegisterName::R10, b), m->type));
@@ -673,6 +1010,23 @@ class codegenDriver
             else if (auto *m = dynamic_cast<BinaryInstruction *>(instr.get()))
             {
                 const int b = bytesOf(m->type);
+                if (m->type == AssemblyType::DOUBLE)
+                {
+                    // SSE arithmetic (addsd/subsd/mulsd/divsd/xorpd) needs an XMM
+                    // register destination: load it, operate, store back.
+                    if (isMemory(*m->dst))
+                    {
+                        auto dstcopy1 = cloneMemory(m->dst.get());
+                        auto dstcopy2 = cloneMemory(m->dst.get());
+                        m->preStackFixInstruction = std::make_unique<MoveInstruction>(
+                            std::move(dstcopy1), reg(RegisterName::XMM15, 8), AssemblyType::DOUBLE);
+                        m->dst = reg(RegisterName::XMM15, 8);
+                        m->postStackFixInstruction = std::make_unique<MoveInstruction>(
+                            reg(RegisterName::XMM15, 8), std::move(dstcopy2), AssemblyType::DOUBLE);
+                    }
+                    rewritten.push_back(std::move(instr));
+                    continue;
+                }
                 // A 64-bit immediate can't be an operand of any binary op, so stage
                 // it in a register first (this also frees the fix slots for imul).
                 if (isLargeImmediate(*m->src))
@@ -719,6 +1073,18 @@ class codegenDriver
                 // (one preStackFix slot can't hold both). `a` can't be a 64-bit
                 // immediate or share memory with `b`; `b` can't be an immediate.
                 const int b = bytesOf(m->type);
+                if (m->type == AssemblyType::DOUBLE)
+                {
+                    // comisd/ucomisd: the second operand must be an XMM register.
+                    if (isMemory(*m->b))
+                    {
+                        rewritten.push_back(std::make_unique<MoveInstruction>(
+                            std::move(m->b), reg(RegisterName::XMM15, 8), AssemblyType::DOUBLE));
+                        m->b = reg(RegisterName::XMM15, 8);
+                    }
+                    rewritten.push_back(std::move(instr));
+                    continue;
+                }
                 if (isLargeImmediate(*m->a) || (isMemory(*m->a) && isMemory(*m->b)))
                 {
                     rewritten.push_back(std::make_unique<MoveInstruction>(
@@ -732,6 +1098,47 @@ class codegenDriver
                     m->b = reg(RegisterName::R11, b);
                 }
                 rewritten.push_back(std::move(instr));
+            }
+            else if (auto *m = dynamic_cast<CVTSI2SD *>(instr.get()))
+            {
+                // Source can be reg/mem but not an immediate; destination must be an
+                // XMM register. (type is the integer source's width.)
+                const int b = bytesOf(m->type);
+                if (isImmediate(*m->src))
+                {
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        std::move(m->src), reg(RegisterName::R10, b), m->type));
+                    m->src = reg(RegisterName::R10, b);
+                }
+                if (isMemory(*m->dst))
+                {
+                    auto dstcopy = cloneMemory(m->dst.get());
+                    m->dst = reg(RegisterName::XMM15, 8);
+                    rewritten.push_back(std::move(instr));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::XMM15, 8), std::move(dstcopy), AssemblyType::DOUBLE));
+                }
+                else
+                {
+                    rewritten.push_back(std::move(instr));
+                }
+            }
+            else if (auto *m = dynamic_cast<CVTTSD2SI *>(instr.get()))
+            {
+                // Destination must be a GP register. (type is the integer dest width.)
+                const int b = bytesOf(m->type);
+                if (isMemory(*m->dst))
+                {
+                    auto dstcopy = cloneMemory(m->dst.get());
+                    m->dst = reg(RegisterName::R11, b);
+                    rewritten.push_back(std::move(instr));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::R11, b), std::move(dstcopy), m->type));
+                }
+                else
+                {
+                    rewritten.push_back(std::move(instr));
+                }
             }
             else if (auto *m = dynamic_cast<PushInstruction *>(instr.get());
                      m && isLargeImmediate(*m->a))
@@ -790,6 +1197,10 @@ class codegenDriver
 
         removePseudos(*codegenAST);
         fixupInstructions(*codegenAST);
+
+        for (auto &c : constPool)
+            codegenAST->nodes.push_back(std::move(c));
+
         return codegenAST;
     }
 };

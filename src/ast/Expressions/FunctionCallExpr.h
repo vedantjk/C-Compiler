@@ -11,6 +11,9 @@ class FunctionCallExpr : public Expression
   public:
     std::shared_ptr<VariableExpr> functionName;
     std::vector<std::shared_ptr<Expression>> parameters;
+    // Set by semantic analysis from the callee's resolved type; codegen uses it to
+    // decide whether to set %al (vector-register count) before the call.
+    bool calleeVariadic = false;
 
     FunctionCallExpr(int line_, int col_, std::shared_ptr<VariableExpr> name_,
                      std::vector<std::shared_ptr<Expression>> parameters_)

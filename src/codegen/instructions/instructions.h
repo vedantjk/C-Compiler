@@ -172,3 +172,30 @@ class MoveZeroExtendInstruction : public Instruction
     {
     }
 };
+
+// double -> signed integer, truncating toward zero. `type` is the DESTINATION
+// integer's width (LONGWORD or QUADWORD); the source is always an 8-byte SSE reg.
+class CVTTSD2SI : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> src, dst;
+    AssemblyType type;
+    CVTTSD2SI(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_,
+              const AssemblyType type_)
+        : src(std::move(src_)), dst(std::move(dst_)), type(type_)
+    {
+    }
+};
+
+// signed integer -> double. `type` is the SOURCE integer's width (LONGWORD or
+// QUADWORD); the destination is always an 8-byte SSE reg.
+class CVTSI2SD : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> src, dst;
+    AssemblyType type;
+    CVTSI2SD(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_, const AssemblyType type_)
+        : src(std::move(src_)), dst(std::move(dst_)), type(type_)
+    {
+    }
+};

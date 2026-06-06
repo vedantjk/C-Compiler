@@ -13,8 +13,20 @@ enum class RegisterName
     R9,
     R10,
     R11,
-    SP
+    SP,
+    XMM0,
+    XMM1,
+    XMM2,
+    XMM3,
+    XMM4,
+    XMM5,
+    XMM6,
+    XMM7,
+    XMM14,
+    XMM15
 };
+
+inline bool isXmm(RegisterName r) { return r >= RegisterName::XMM0; }
 
 enum class CondCode
 {
@@ -33,7 +45,8 @@ enum class CondCode
 enum class AssemblyType
 {
     LONGWORD,
-    QUADWORD
+    QUADWORD,
+    DOUBLE
 };
 
 inline std::string condCodeToString(const CondCode c)

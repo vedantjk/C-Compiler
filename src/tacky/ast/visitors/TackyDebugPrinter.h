@@ -6,6 +6,7 @@
 #include "../ASTNodes/TackyProgram.h"
 #include "../TopLevelNodes/TackyFunction.h"
 
+#include <iomanip>
 #include <ostream>
 #include <stdexcept>
 #include <variant>
@@ -15,6 +16,13 @@ class TackyDebugPrinter
     std::ostream &out;
 
     void visit(const TackyConstant &c) const { out << c.value; }
+
+    // Tag doubles with a trailing 'd' and full precision so they're distinct from
+    // ints and exact in the dump (debug-only output).
+    void visit(const TackyFloatingConstant &c) const
+    {
+        out << std::setprecision(17) << c.value << "d";
+    }
 
     void visit(const TackyVar &v) const { out << v.name; }
 
@@ -125,6 +133,27 @@ class TackyDebugPrinter
         visit(node.src);
     }
 
+    // Width/representation conversions all share the `dst = <name> src` shape.
+    template <typename T> void visitConvert(const T &node, const char *name) const
+    {
+        visit(node.dst);
+        out << " = " << name << " ";
+        visit(node.src);
+    }
+
+    void visit(const TackyFunctionCall &node) const
+    {
+        visit(node.dst);
+        out << " = call " << node.funcName << "(";
+        for (size_t i = 0; i < node.args.size(); ++i)
+        {
+            if (i != 0)
+                out << ", ";
+            visit(node.args[i]);
+        }
+        out << ")";
+    }
+
     void visit(const TackyJump &node) const { out << "jump " << node.identifier; }
 
     void visit(const TackyJumpIfZero &node) const
@@ -161,6 +190,46 @@ class TackyDebugPrinter
             return;
         }
         if (auto *p = dynamic_cast<const TackyCopy *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackySignExtend *>(&node))
+        {
+            visitConvert(*p, "sign_extend");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyTruncate *>(&node))
+        {
+            visitConvert(*p, "truncate");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyZeroExtend *>(&node))
+        {
+            visitConvert(*p, "zero_extend");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyDoubleToInt *>(&node))
+        {
+            visitConvert(*p, "double_to_int");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyDoubleToUInt *>(&node))
+        {
+            visitConvert(*p, "double_to_uint");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyIntToDouble *>(&node))
+        {
+            visitConvert(*p, "int_to_double");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyUIntToDouble *>(&node))
+        {
+            visitConvert(*p, "uint_to_double");
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyFunctionCall *>(&node))
         {
             visit(*p);
             return;

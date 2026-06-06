@@ -4,7 +4,8 @@ enum class UnaryOp
 {
     Complement,
     Negate,
-    Not
+    Not,
+    Shr
 };
 
 enum class BinaryOp
@@ -24,5 +25,9 @@ enum class BinaryOp
     LessThan,
     LessOrEqual,
     GreaterThan,
-    GreaterThanOrEqual
+    GreaterThanOrEqual,
+    DivDouble,
+    And,
+    Or,
+    Xor
 };

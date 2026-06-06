@@ -30,6 +30,8 @@ class TackyDriver
             return ConstantType::UINT;
         if (std::dynamic_pointer_cast<LongType>(literalType))
             return ConstantType::LONG;
+        if (std::dynamic_pointer_cast<DoubleType>(literalType))
+            return ConstantType::DOUBLE;
         return ConstantType::INT;
     }
 
@@ -46,6 +48,11 @@ class TackyDriver
     {
         tempCounters[name]++;
         return "." + name + std::to_string(tempCounters[name]);
+    }
+
+    TackyVal processFloatingLiteral(const std::shared_ptr<FloatingLiterals> &floatLiteral)
+    {
+        return TackyFloatingConstant{floatLiteral->value, returnConstantType(floatLiteral->type)};
     }
 
     TackyVal processIntLiteral(const std::shared_ptr<IntLiterals> &intLiteral)
@@ -282,9 +289,9 @@ class TackyDriver
             args.push_back(processExpression(param, instructions));
         }
         TackyVar dst{makeTemp("tmp."), returnConstantType(functionCallExpr->resolvedType)};
-        instructions.push_back(
-            std::make_unique<TackyFunctionCall>(functionCallExpr->line, functionCallExpr->col,
-                                                functionCallExpr->functionName->name, args, dst));
+        instructions.push_back(std::make_unique<TackyFunctionCall>(
+            functionCallExpr->line, functionCallExpr->col, functionCallExpr->functionName->name,
+            args, dst, functionCallExpr->calleeVariadic));
         return dst;
     }
 
@@ -297,6 +304,34 @@ class TackyDriver
 
         const ConstantType srcCt = returnConstantType(srcType);
         const ConstantType dstCt = returnConstantType(dstType);
+        if (isDouble(srcCt) && isIntCt(dstCt))
+        {
+            TackyVar intDst{makeTemp("tmp."), dstCt};
+            instructions.push_back(
+                std::make_unique<TackyDoubleToInt>(castExpr->line, castExpr->col, result, intDst));
+            return intDst;
+        }
+        if (isDouble(srcCt) && isUnsignedCt(dstCt))
+        {
+            TackyVar uIntDst{makeTemp("tmp."), dstCt};
+            instructions.push_back(std::make_unique<TackyDoubleToUInt>(
+                castExpr->line, castExpr->col, result, uIntDst));
+            return uIntDst;
+        }
+        if (isIntCt(srcCt) && isDouble(dstCt))
+        {
+            TackyVar doubleCt{makeTemp("tmp."), dstCt};
+            instructions.push_back(std::make_unique<TackyIntToDouble>(castExpr->line, castExpr->col,
+                                                                      result, doubleCt));
+            return doubleCt;
+        }
+        if (isUnsignedCt(srcCt) && isDouble(dstCt))
+        {
+            TackyVar doubleCt{makeTemp("tmp."), dstCt};
+            instructions.push_back(std::make_unique<TackyUIntToDouble>(
+                castExpr->line, castExpr->col, result, doubleCt));
+            return doubleCt;
+        }
 
         // Same width: the bit pattern is unchanged. Identical types are a no-op,
         // but a signedness-only change (int<->uint, long<->ulong) must still copy
@@ -345,6 +380,10 @@ class TackyDriver
         if (const auto &p = std::dynamic_pointer_cast<IntLiterals>(expression))
         {
             return processIntLiteral(p);
+        }
+        if (const auto &p = std::dynamic_pointer_cast<FloatingLiterals>(expression))
+        {
+            return processFloatingLiteral(p);
         }
         if (const auto &p = std::dynamic_pointer_cast<BinaryExpr>(expression))
         {
@@ -636,10 +675,14 @@ class TackyDriver
         {
             if (!symbol->defined && !symbol->tentative)
                 continue;
+            const ConstantType ct = returnConstantType(symbol->type);
+            std::variant<long long, double> init =
+                isDouble(ct)
+                    ? std::variant<long long, double>{symbol->constInitDouble.value_or(0.0)}
+                    : std::variant<long long, double>{symbol->constInit.value_or(0LL)};
             nodes.push_back(std::make_unique<TackyStaticVariable>(
                 symbol->line, symbol->column, symbol->uniqueName,
-                symbol->linkage == Linkage::External, symbol->constInit.value_or(0),
-                returnConstantType(symbol->type)));
+                symbol->linkage == Linkage::External, init, ct));
         }
         auto program = std::make_unique<TackyProgram>(prog->line, prog->col, std::move(nodes));
         // Record every static-storage name (incl. extern-only declarations) so
