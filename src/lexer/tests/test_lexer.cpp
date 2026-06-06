@@ -293,46 +293,74 @@ void test_float_constants()
 
     TEST("simple float", {
         auto t = tokenize("3.14");
-        EXPECT_TOKEN(t, 0, "CONSTANT 3.14");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 3.14");
         return true;
     });
     TEST("float with leading zero", {
         auto t = tokenize("0.5");
-        EXPECT_TOKEN(t, 0, "CONSTANT 0.5");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 0.5");
         return true;
     });
     // C89: {D}+{E}{FS}?
     TEST("float with exponent", {
         auto t = tokenize("1e10");
-        EXPECT_TOKEN(t, 0, "CONSTANT 1e10");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 1e10");
         return true;
     });
     TEST("float with negative exponent", {
         auto t = tokenize("1e-5");
-        EXPECT_TOKEN(t, 0, "CONSTANT 1e-5");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 1e-5");
         return true;
     });
     // C89: {D}*"."{D}+({E})?{FS}?
     TEST("float starting with dot", {
         auto t = tokenize(".5");
-        EXPECT_TOKEN(t, 0, "CONSTANT .5");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT .5");
         return true;
     });
     // C89: {D}+"."{D}*({E})?{FS}?
     TEST("float with decimal and exponent", {
         auto t = tokenize("3.14e2");
-        EXPECT_TOKEN(t, 0, "CONSTANT 3.14e2");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 3.14e2");
         return true;
     });
     // C89: float suffixes f/F/l/L
     TEST("float with f suffix", {
         auto t = tokenize("3.14f");
-        EXPECT_TOKEN(t, 0, "CONSTANT 3.14f");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 3.14f");
         return true;
     });
     TEST("float trailing dot", {
         auto t = tokenize("42.");
-        EXPECT_TOKEN(t, 0, "CONSTANT 42.");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 42.");
+        return true;
+    });
+    TEST("integer stays a plain constant", {
+        auto t = tokenize("42");
+        EXPECT_TOKEN(t, 0, "CONSTANT 42");
+        return true;
+    });
+
+    // Malformed floating constants: a number followed by a pp-number continuation
+    // char (letter / '_' / '.') is a preprocessing number that can't be a constant.
+    TEST("bad exponent suffix 1E2x", {
+        auto r = tokenize_with_errors("1E2x");
+        EXPECT(r.errors.find("invalid numeric constant") != std::string::npos);
+        return true;
+    });
+    TEST("trailing underscore 2._", {
+        auto r = tokenize_with_errors("2._");
+        EXPECT(r.errors.find("invalid numeric constant") != std::string::npos);
+        return true;
+    });
+    TEST("double exponent 1.0e10.0", {
+        auto r = tokenize_with_errors("1.0e10.0");
+        EXPECT(r.errors.find("invalid numeric constant") != std::string::npos);
+        return true;
+    });
+    TEST("bad suffix after exponent 1.e-10x", {
+        auto r = tokenize_with_errors("1.e-10x");
+        EXPECT(r.errors.find("invalid numeric constant") != std::string::npos);
         return true;
     });
 }
@@ -916,12 +944,12 @@ void test_number_edge_cases()
     });
     TEST("float with positive exponent sign", {
         auto t = tokenize("1e+5");
-        EXPECT_TOKEN(t, 0, "CONSTANT 1e+5");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 1e+5");
         return true;
     });
     TEST("decimal float with exponent and sign", {
         auto t = tokenize("3.14e+2");
-        EXPECT_TOKEN(t, 0, "CONSTANT 3.14e+2");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 3.14e+2");
         return true;
     });
     TEST("two dots is two DOTs not ellipsis", {
@@ -932,15 +960,16 @@ void test_number_edge_cases()
     });
     TEST("1e2+3 should be three tokens", {
         auto t = tokenize("1e2+3");
-        EXPECT_TOKEN(t, 0, "CONSTANT 1e2");
+        EXPECT_TOKEN(t, 0, "FLOATING_CONSTANT 1e2");
         EXPECT_TOKEN(t, 1, "PLUS +");
         EXPECT_TOKEN(t, 2, "CONSTANT 3");
         return true;
     });
-    TEST("float suffix should be exactly one char", {
-        auto t = tokenize("3.14ff");
-        EXPECT_TOKEN(t, 0, "CONSTANT 3.14f");
-        EXPECT_TOKEN(t, 1, "IDENTIFIER f");
+    // A second float suffix makes 3.14ff a single invalid preprocessing number, not
+    // a constant plus an identifier.
+    TEST("double float suffix is rejected", {
+        auto r = tokenize_with_errors("3.14ff");
+        EXPECT(r.errors.find("invalid numeric constant") != std::string::npos);
         return true;
     });
 }

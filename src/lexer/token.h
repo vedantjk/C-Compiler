@@ -38,6 +38,7 @@
     X(WHILE)                                                                                       \
     X(IDENTIFIER)                                                                                  \
     X(CONSTANT)                                                                                    \
+    X(FLOATING_CONSTANT)                                                                           \
     X(STRING_LITERAL)                                                                              \
     X(RIGHT_ASSIGN)                                                                                \
     X(LEFT_ASSIGN)                                                                                 \

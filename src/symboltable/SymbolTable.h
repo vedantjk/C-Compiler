@@ -60,7 +60,8 @@ struct Symbol
     bool defined = false;               // function body, or variable with an initializer
     bool tentative = false;             // file-scope variable, no init, no extern
     std::optional<long long> constInit; // folded constant for static-duration vars
-
+    std::optional<double>
+        constInitDouble; // folded floating point constant for static-duration vars
     Symbol(std::string name, std::shared_ptr<Type> type, int line, int column, Kind kind)
         : name(std::move(name)), type(std::move(type)), kind(kind), line(line), column(column)
     {

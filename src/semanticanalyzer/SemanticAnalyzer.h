@@ -61,7 +61,15 @@ inline bool isVoid(const std::shared_ptr<Type> &t)
     return x != nullptr;
 }
 
-inline bool isScalar(const std::shared_ptr<Type> &t) { return isInteger(t) || isPointer(t); }
+inline bool isDouble(const std::shared_ptr<Type> &t)
+{
+    return std::dynamic_pointer_cast<DoubleType>(t) != nullptr;
+}
+
+inline bool isScalar(const std::shared_ptr<Type> &t)
+{
+    return isInteger(t) || isPointer(t) || isDouble(t);
+}
 
 inline bool isUnsigned(const std::shared_ptr<Type> &t)
 {
@@ -98,6 +106,11 @@ inline std::shared_ptr<Type> getCommonType(const std::shared_ptr<Type> &a,
 {
     if (a->equals(*b))
         return a;
+
+    if (isDouble(a) || isDouble(b))
+    {
+        return DoubleType::getInstance();
+    }
 
     const int sizeA = typeSize(a), sizeB = typeSize(b);
     if (isUnsigned(a) == isUnsigned(b))
@@ -280,6 +293,11 @@ class SemanticAnalyzer
             x->resolvedType = x->type; // parser typed it Int or Long by value/suffix
             x->isLvalue = false;
         }
+        else if (auto x = std::dynamic_pointer_cast<FloatingLiterals>(expr))
+        {
+            x->resolvedType = x->type;
+            x->isLvalue = false;
+        }
         else if (auto x = std::dynamic_pointer_cast<StringLiterals>(expr))
         {
             const size_t size = decodedLength(x->literal);
@@ -314,7 +332,8 @@ class SemanticAnalyzer
                           "Left expression and right expression are not same type, left type: " +
                               lType->toString() + ", right type: " + rType->toString() + ".");
                 }
-                else if (isInteger(lType) && isInteger(rType))
+                else if ((isInteger(lType) || isDouble(lType)) &&
+                         (isInteger(rType) || isDouble(rType)))
                 {
                     x->rhs = convertTo(x->rhs, lType); // convert-by-assignment
                 }
@@ -412,7 +431,9 @@ class SemanticAnalyzer
 
                     if (!leftIsPointer && !rightIsPointer)
                     {
-                        if (isInteger(lType) && isInteger(rType))
+                        const bool bothArith = (isInteger(lType) || isDouble(lType)) &&
+                                               (isInteger(rType) || isDouble(rType));
+                        if (bothArith)
                         {
                             auto common = getCommonType(lType, rType);
                             x->left = convertTo(x->left, common);
@@ -458,19 +479,25 @@ class SemanticAnalyzer
                 }
                 else
                 {
-                    if (!isInteger(lType))
+                    // '%' is integer-only; '*' and '/' also accept floating-point operands.
+                    const bool allowDouble = (x->binaryOp != "%");
+                    auto acceptable = [&](const std::shared_ptr<Type> &t)
+                    { return isInteger(t) || (allowDouble && isDouble(t)); };
+                    const std::string need = allowDouble ? "arithmetic" : "integer";
+
+                    if (!acceptable(lType))
                     {
                         error(x->left->getLine(), x->left->getCol(),
-                              "Arithmetic operator needs integer for left expression, got " +
-                                  lType->toString() + ".");
+                              "Arithmetic operator needs " + need +
+                                  " type for left expression, got " + lType->toString() + ".");
                     }
-                    if (!isInteger(rType))
+                    if (!acceptable(rType))
                     {
                         error(x->right->getLine(), x->right->getCol(),
-                              "Arithmetic operator needs integer for right expression, got " +
-                                  rType->toString() + ".");
+                              "Arithmetic operator needs " + need +
+                                  " type for right expression, got " + rType->toString() + ".");
                     }
-                    if (isInteger(lType) && isInteger(rType))
+                    if (acceptable(lType) && acceptable(rType))
                     {
                         auto common = getCommonType(lType, rType);
                         x->left = convertTo(x->left, common);
@@ -504,7 +531,8 @@ class SemanticAnalyzer
 
                 if (isScalar(lType) && isScalar(rType))
                 {
-                    const bool bothArith = isInteger(lType) && isInteger(rType);
+                    const bool bothArith = (isInteger(lType) || isDouble(lType)) &&
+                                           (isInteger(rType) || isDouble(rType));
                     const bool bothPtr = isPointer(lType) && isPointer(rType);
 
                     if (bothPtr && !lType->equals(*rType))
@@ -528,7 +556,7 @@ class SemanticAnalyzer
                     }
                 }
 
-                if (isInteger(lType) && isInteger(rType))
+                if ((isInteger(lType) || isDouble(lType)) && (isInteger(rType) || isDouble(rType)))
                 {
                     auto common = getCommonType(lType, rType);
                     x->left = convertTo(x->left, common);
@@ -767,7 +795,7 @@ class SemanticAnalyzer
             {
                 x->resolvedType = eType;
             }
-            else if (isInteger(tType) && isInteger(eType))
+            else if ((isInteger(tType) || isDouble(tType)) && (isInteger(eType) || isDouble(eType)))
             {
                 auto common = getCommonType(tType, eType);
                 x->thenBranch = convertTo(x->thenBranch, common);
@@ -789,15 +817,19 @@ class SemanticAnalyzer
             analyzeExpr(x->operand);
             if (x->op == "-" || x->op == "+" || x->op == "~")
             {
-                if (!isInteger(x->operand->resolvedType))
+                // '~' is integer-only; unary '-'/'+' also accept floating-point.
+                const auto operandType = x->operand->resolvedType;
+                const bool ok = (x->op == "~") ? isInteger(operandType)
+                                               : (isInteger(operandType) || isDouble(operandType));
+                if (!ok)
                 {
                     error(x->getLine(), x->getCol(),
-                          "required integer operand, received '" +
-                              x->operand->resolvedType->toString() + "'.");
+                          "required " + std::string(x->op == "~" ? "integer" : "arithmetic") +
+                              " operand, received '" + operandType->toString() + "'.");
                 }
                 // Negation/complement keep the operand's (promoted) type, so `-longVal`
                 // stays long rather than being truncated to int.
-                x->resolvedType = x->operand->resolvedType;
+                x->resolvedType = operandType;
                 x->isLvalue = false;
             }
             else if (x->op == "!")
@@ -925,7 +957,8 @@ class SemanticAnalyzer
                     analyzeExpr(expr->parameters[i]);
                     auto argType = expr->parameters[i]->resolvedType;
                     const auto &paramType = functionType->paramTypes[i];
-                    if (isInteger(argType) && isInteger(paramType))
+                    if ((isInteger(argType) || isDouble(argType)) &&
+                        (isInteger(paramType) || isDouble(paramType)))
                     {
                         expr->parameters[i] = convertTo(expr->parameters[i], paramType);
                     }
@@ -1013,6 +1046,60 @@ class SemanticAnalyzer
         if (sc == StorageClass::Extern)
             return priorLinked ? prior->linkage : Linkage::External;
         return Linkage::None;
+    }
+
+    bool evalConstDouble(const std::shared_ptr<Expression> &e, double &out)
+    {
+        if (auto lit = std::dynamic_pointer_cast<FloatingLiterals>(e))
+        {
+            out = lit->value;
+            return true;
+        }
+        if (auto u = std::dynamic_pointer_cast<UnaryExpr>(e))
+        {
+            double v;
+            if (!evalConstDouble(u->operand, v))
+                return false;
+            if (u->op == "-")
+                out = -v;
+            else if (u->op == "+")
+                out = v;
+            else
+                return false;
+
+            return true;
+        }
+        if (auto b = std::dynamic_pointer_cast<BinaryExpr>(e))
+        {
+            double l, r;
+            if (!evalConstDouble(b->left, l) || !evalConstDouble(b->right, r))
+                return false;
+            const auto &op = b->binaryOp;
+            if (op == "+")
+                out = l + r;
+            else if (op == "-")
+                out = l - r;
+            else if (op == "*")
+                out = l * r;
+            else if (op == "/")
+                out = l / r;
+            else
+                return false; // comparisons/logicals are int-typed, not folded here
+            return true;
+        }
+        if (auto c = std::dynamic_pointer_cast<CastExpr>(e))
+        {
+            if (isDouble(c->operand->resolvedType))
+                return evalConstDouble(c->operand, out); // double -> double
+            long long v;
+            if (!evalConstInt(c->operand, v)) // int -> double
+                return false;
+            out = isUnsigned(c->operand->resolvedType)
+                      ? static_cast<double>(static_cast<unsigned long long>(v))
+                      : static_cast<double>(v);
+            return true;
+        }
+        return false;
     }
 
     // Fold an integer constant expression. Returns false for anything with a
@@ -1146,6 +1233,15 @@ class SemanticAnalyzer
         }
         if (auto c = std::dynamic_pointer_cast<CastExpr>(e))
         {
+            if (isDouble(c->operand->resolvedType))
+            {
+                // double -> integer cast: truncate toward zero, then narrow.
+                double dv;
+                if (!evalConstDouble(c->operand, dv))
+                    return false;
+                out = reduceToType(static_cast<long long>(dv), c->type);
+                return true;
+            }
             long long v;
             if (!evalConstInt(c->operand, v))
                 return false;
@@ -1163,7 +1259,10 @@ class SemanticAnalyzer
     bool isConstantInitializer(const std::shared_ptr<Expression> &e)
     {
         long long tmp;
+        double tmp_d;
         if (evalConstInt(e, tmp))
+            return true;
+        if (evalConstDouble(e, tmp_d))
             return true;
         if (std::dynamic_pointer_cast<StringLiterals>(e))
             return true;
@@ -1305,18 +1404,37 @@ class SemanticAnalyzer
             // Static-duration variables require a constant initializer.
             if (variable->symbol && variable->symbol->duration == StorageDuration::Static)
             {
-                long long val;
-                if (!isConstantInitializer(variable->initialization))
+                const auto &init = variable->initialization;
+                if (!isConstantInitializer(init))
+                {
                     error(variable->getLine(), variable->getCol(),
                           "initializer for '" + variable->name +
                               "' with static storage duration must be a constant expression.");
-                else if (evalConstInt(variable->initialization, val))
+                }
+                else if (isDouble(variable->type))
                 {
-                    // Narrow the folded constant to the declared width at compile time
-                    // (e.g. `static int g = 4294967296L;` stores 0, not the full value).
-                    // Narrow the folded constant to the declared type's width
-                    // (long / unsigned long keep all 64 bits and emit as .quad).
-                    variable->symbol->constInit = reduceToType(val, variable->type);
+                    // Fold to a double; an integer constant initializer converts to double.
+                    double val_d;
+                    long long val_i;
+                    if (evalConstDouble(init, val_d))
+                        variable->symbol->constInitDouble = val_d;
+                    else if (evalConstInt(init, val_i))
+                        variable->symbol->constInitDouble =
+                            isUnsigned(init->resolvedType)
+                                ? static_cast<double>(static_cast<unsigned long long>(val_i))
+                                : static_cast<double>(val_i);
+                }
+                else
+                {
+                    // Fold to an integer, narrowed to the declared width; a double
+                    // constant initializer truncates toward zero.
+                    long long val_i;
+                    double val_d;
+                    if (evalConstInt(init, val_i))
+                        variable->symbol->constInit = reduceToType(val_i, variable->type);
+                    else if (evalConstDouble(init, val_d))
+                        variable->symbol->constInit =
+                            reduceToType(static_cast<long long>(val_d), variable->type);
                 }
             }
 
@@ -1374,10 +1492,9 @@ class SemanticAnalyzer
                           "Left expression and right expression are not same type, left type: " +
                               lType->toString() + ", right type: " + rType->toString() + ".");
                 }
-                else if (isInteger(lType) && isInteger(rType) && !staticDuration)
+                else if ((isInteger(lType) || isDouble(lType)) &&
+                         (isInteger(rType) || isDouble(rType)) && !staticDuration)
                 {
-                    // Convert-by-assignment for automatic vars; static initializers
-                    // are folded as constants above and must stay cast-free.
                     variable->initialization = convertTo(variable->initialization, lType);
                 }
             }
@@ -1413,7 +1530,8 @@ class SemanticAnalyzer
         {
             analyzeExpr(stmt->returnExpression);
             const auto retType = stmt->returnExpression->resolvedType;
-            if (isInteger(currentReturnType) && isInteger(retType))
+            if ((isInteger(currentReturnType) || isDouble(currentReturnType)) &&
+                (isInteger(retType) || isDouble(retType)))
             {
                 stmt->returnExpression = convertTo(stmt->returnExpression, currentReturnType);
             }

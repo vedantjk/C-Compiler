@@ -13,6 +13,7 @@
 #include "../ast/Expressions/AssignExpr.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/CastExpr.h"
+#include "../ast/Expressions/FloatingLiterals.h"
 #include "../ast/Expressions/FunctionCallExpr.h"
 #include "../ast/Expressions/InitExpr.h"
 #include "../ast/Expressions/IntLiterals.h"
@@ -96,7 +97,7 @@ class Parser
     static bool isTypeStart(const TokenType t)
     {
         return t == INT || t == CHAR || t == VOID || t == STRUCT || t == LONG || t == UNSIGNED ||
-               t == SIGNED;
+               t == SIGNED || t == DOUBLE;
     }
 
     static bool isStorageClassSpecifier(const TokenType t) { return t == STATIC || t == EXTERN; }
@@ -158,6 +159,15 @@ class Parser
             if (has(CHAR))
                 return CharType::getInstance();
             return std::make_shared<StructType>(structName->lexeme);
+        }
+
+        if (has(DOUBLE))
+        {
+            if (has(SIGNED) || has(UNSIGNED) || has(LONG) || has(INT))
+            {
+                throw std::logic_error("invalid combination of type specifiers");
+            }
+            return DoubleType::getInstance();
         }
 
         // What remains is some combination of unsigned / int / long; long subsumes
@@ -434,6 +444,15 @@ class Parser
             else
                 constantType = value > INT_MAX ? LongType::getInstance() : IntType::getInstance();
             node = std::make_shared<IntLiterals>(constant.line, constant.col, value, constantType);
+        }
+        else if (peek() == FLOATING_CONSTANT)
+        {
+            Token constant = consume();
+            const std::string &lex = constant.lexeme;
+            double value = strtod(lex.c_str(), nullptr);
+            std::shared_ptr<Type> constantType = DoubleType::getInstance();
+            node = std::make_shared<FloatingLiterals>(constant.line, constant.col, value,
+                                                      constantType);
         }
         else if (peek() == LEFT_PAREN)
         {

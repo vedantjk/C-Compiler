@@ -165,8 +165,13 @@ class Lexer
 
     void number()
     {
-        // Hex: 0x or 0X
-        if (input[start] == '0' && (peek() == 'x' || peek() == 'X'))
+        // A leading dot (dispatched from the '.' case when followed by a digit) is
+        // always a float, e.g. .5 or .01e+2. The integer digits, if any, are already
+        // consumed by the caller; here input[start] is the dot.
+        bool isFloat = (input[start] == '.');
+
+        // Hex integer (cannot start with '.').
+        if (!isFloat && input[start] == '0' && (peek() == 'x' || peek() == 'X'))
         {
             advance(); // consume x/X
             if (!std::isxdigit(peek()))
@@ -177,6 +182,11 @@ class Lexer
             while (std::isxdigit(peek()))
                 advance();
             consumeIntSuffix();
+            if (continuesNumber())
+            {
+                rejectBadNumber();
+                return;
+            }
             addToken(CONSTANT);
             return;
         }
@@ -184,31 +194,19 @@ class Lexer
         while (std::isdigit(peek()))
             advance();
 
-        if (peek() == '.')
+        // At most one dot: a second '.' (1.0e10.0, .5.5) is caught by the boundary
+        // check below as part of an invalid preprocessing number.
+        if (!isFloat && peek() == '.')
         {
+            isFloat = true;
             advance();
             while (std::isdigit(peek()))
                 advance();
-            if (peek() == 'e' || peek() == 'E')
-            {
-                advance();
-                if (peek() == '+' || peek() == '-')
-                    advance();
-                if (!std::isdigit(peek()))
-                {
-                    error(line, col, "Exponent requires at least one digit");
-                    return;
-                }
-                while (std::isdigit(peek()))
-                    advance();
-            }
-            consumeFloatSuffix();
-            addToken(CONSTANT);
-            return;
         }
 
         if (peek() == 'e' || peek() == 'E')
         {
+            isFloat = true;
             advance();
             if (peek() == '+' || peek() == '-')
                 advance();
@@ -219,13 +217,36 @@ class Lexer
             }
             while (std::isdigit(peek()))
                 advance();
+        }
+
+        if (isFloat)
             consumeFloatSuffix();
-            addToken(CONSTANT);
+        else
+            consumeIntSuffix();
+
+        // A constant must end at a non-(pp-number) character. A trailing letter, '_',
+        // or '.' means the whole run is a preprocessing number that can't convert to a
+        // constant (1E2x, 2._, 1.0e10.0, 1.e-10x, 123abc).
+        if (continuesNumber())
+        {
+            rejectBadNumber();
             return;
         }
 
-        consumeIntSuffix();
-        addToken(CONSTANT);
+        addToken(isFloat ? FLOATING_CONSTANT : CONSTANT);
+    }
+
+    bool continuesNumber()
+    {
+        char c = peek();
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.';
+    }
+
+    void rejectBadNumber()
+    {
+        error(line, col, "invalid numeric constant");
+        while (continuesNumber()) // absorb the junk so it doesn't leak out as more tokens
+            advance();
     }
 
     void consumeFloatSuffix()

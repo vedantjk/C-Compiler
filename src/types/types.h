@@ -74,6 +74,22 @@ class UnsignedLongType : public Type
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
 };
 
+class DoubleType : public Type
+{
+    DoubleType() = default;
+
+  public:
+    static std::shared_ptr<Type> getInstance()
+    {
+        static std::shared_ptr<Type> instance(new DoubleType());
+        return instance;
+    }
+
+    [[nodiscard]] std::string toString() const override { return "double"; }
+
+    [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+};
+
 class CharType : public Type
 {
     CharType() = default;
