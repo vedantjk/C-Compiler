@@ -9,6 +9,8 @@ Usage:
     tt.py build
     tt.py <stage> [target] [options]      stage = lex|parse|validate|tacky|codegen|run
     tt.py asm <file.c> [--save]
+    tt.py show <stage> <file.c>           print raw stage output (tokens/AST/asm),
+                                          or for `run`, the program's own stdout
 
     target = (none)        all implemented mainline chapters
              9 | chapter_9 one chapter
@@ -338,6 +340,52 @@ def cmd_asm(args) -> int:
     return proc.returncode
 
 
+def cmd_show(args) -> int:
+    """Run one file through a stage and print the raw output (no pass/fail judging).
+
+    For `run`, the program is compiled, linked, and executed with its stdout/stderr
+    streamed straight to the terminal so you can see what it prints.
+    """
+    cc89 = ensure_built(args)
+    f = (REPO_ROOT / args.file) if not Path(args.file).is_absolute() else Path(args.file)
+    if not f.exists():
+        die(f"file not found: {args.file}")
+    stage = args.stage
+
+    if stage == "run":
+        if shutil.which("gcc") is None:
+            die("'show run' needs gcc on PATH (use the Docker image or a Linux shell)")
+        art = build_dir(args) / "test-artifacts"
+        art.mkdir(parents=True, exist_ok=True)
+        base = artifact_base(f)
+        asm, exe = art / f"{base}.s", art / f"{base}.out"
+        with open(asm, "wb") as out:
+            cg = subprocess.run([str(cc89), "--codegen", str(f)], stdout=out, stderr=subprocess.PIPE)
+        if cg.returncode != 0:
+            sys.stderr.buffer.write(cg.stderr or b"")
+            die(f"cc89 --codegen failed (exit {cg.returncode})", cg.returncode)
+        link = subprocess.run(["gcc", "-w", str(asm), "-o", str(exe)], capture_output=True)
+        if link.returncode != 0:
+            sys.stderr.buffer.write(link.stderr or b"")
+            die("gcc could not assemble/link cc89 output", 1)
+        # Inherit stdio so the program's output streams directly to the terminal.
+        proc = subprocess.run([str(exe)])
+        print(f"\n[program exit {proc.returncode}]", file=sys.stderr)
+        return proc.returncode
+
+    # Non-run stages just print what cc89 emits at that stage. parse/validate need
+    # --debugAST and tacky needs --debugTacky to actually dump anything.
+    flags = {"parse": ["--debugAST"], "validate": ["--debugAST"], "tacky": ["--debugTacky"]}
+    proc = subprocess.run(
+        [str(cc89), f"--{stage}", *flags.get(stage, []), str(f)], capture_output=True, text=True
+    )
+    sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    print(f"[cc89 exit {proc.returncode}]", file=sys.stderr)
+    return proc.returncode
+
+
 def cmd_stage(args) -> int:
     stage = args.command
     if stage == "run" and shutil.which("gcc") is None:
@@ -427,6 +475,12 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--no-build", action="store_true")
     add_common(a)
 
+    s = sub.add_parser("show", help="run one file through a stage and print its raw output")
+    s.add_argument("stage", choices=STAGES, help="lex|parse|validate|tacky|codegen|run")
+    s.add_argument("file")
+    s.add_argument("--no-build", action="store_true")
+    add_common(s)
+
     for stage in STAGES:
         sp = sub.add_parser(stage, help=f"run the {stage} stage over selected tests")
         sp.add_argument("target", nargs="?", help="chapter | range | all | path")
@@ -444,6 +498,8 @@ def main(argv=None) -> int:
         return cmd_build(args)
     if args.command == "asm":
         return cmd_asm(args)
+    if args.command == "show":
+        return cmd_show(args)
     return cmd_stage(args)
 
 

@@ -22,6 +22,10 @@ param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 
+# Windows tab-completion fills paths with backslashes, but the args run inside the
+# Linux container where '\' isn't a separator. Normalize so either slash works.
+if ($Rest) { $Rest = @($Rest | ForEach-Object { $_ -replace '\\', '/' }) }
+
 if ($Rest.Count -ge 1 -and $Rest[0] -eq 'build-image') {
     docker build -t cc89-test "$repo"
     exit $LASTEXITCODE
