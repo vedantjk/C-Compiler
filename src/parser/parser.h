@@ -1,12 +1,13 @@
 #pragma once
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <memory>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "../ast/ASTNodes/Program.h"
@@ -39,17 +40,86 @@
 #include "../ast/TopLevelNodes/StructDecl.h"
 #include "../lexer/token.h"
 
+// The result of resolving a declarator against a base type: the declared name,
+// the fully-derived type, and (for function declarators) the parameter list.
 struct Declarator
 {
     std::shared_ptr<Type> type;
     std::string name;
     int line;
     int col;
+    std::vector<Parameter> params;
+};
+
+// ============================================================
+// Declarator grammar tree
+//
+// A declarator is parsed into this small recursive tree first, then resolved
+// against a base type by processDeclarator(). Parsing the shape separately from
+// resolving the type is what makes parenthesized declarators work: in
+// `int (*p)[10]` the grouping puts the pointer closer to the leaf than the array
+// suffix, so p comes out as "pointer to array" rather than "array of pointer".
+// An IdentDeclarator with an empty name is an abstract declarator (casts/sizeof,
+// and unnamed parameters).
+// ============================================================
+struct DeclaratorNode
+{
+    virtual ~DeclaratorNode() = default;
+};
+
+struct IdentDeclarator : DeclaratorNode
+{
+    std::string name;
+    int line = -1;
+    int col = -1;
+    IdentDeclarator() = default;
+    IdentDeclarator(std::string name_, int line_, int col_)
+        : name(std::move(name_)), line(line_), col(col_)
+    {
+    }
+};
+
+struct PointerDeclarator : DeclaratorNode
+{
+    std::shared_ptr<DeclaratorNode> inner;
+    explicit PointerDeclarator(std::shared_ptr<DeclaratorNode> inner_) : inner(std::move(inner_)) {}
+};
+
+struct ArrayDeclarator : DeclaratorNode
+{
+    std::shared_ptr<DeclaratorNode> inner;
+    size_t size;
+    ArrayDeclarator(std::shared_ptr<DeclaratorNode> inner_, size_t size_)
+        : inner(std::move(inner_)), size(size_)
+    {
+    }
+};
+
+// A parameter as it appears inside a function declarator: its own base type plus
+// its (possibly abstract) declarator, resolved later by processDeclarator().
+struct ParamInfo
+{
+    std::shared_ptr<Type> baseType;
+    std::shared_ptr<DeclaratorNode> declarator;
+    int line;
+    int col;
+};
+
+struct FunDeclarator : DeclaratorNode
+{
+    std::vector<ParamInfo> params;
+    bool variadic;
+    std::shared_ptr<DeclaratorNode> inner;
+    FunDeclarator(std::vector<ParamInfo> params_, bool variadic_,
+                  std::shared_ptr<DeclaratorNode> inner_)
+        : params(std::move(params_)), variadic(variadic_), inner(std::move(inner_))
+    {
+    }
 };
 
 class Parser
 {
-    std::unordered_map<TokenType, int> precedenceLevel = {
+    inline static const std::unordered_map<TokenType, int> precedenceLevel = {
         {OR_OP, 1},     {AND_OP, 2},  {PIPE, 3},      {CARET, 4},        {AMPERSAND, 5},
         {EQ_OP, 6},     {NE_OP, 6},   {LESS_THAN, 7}, {GREATER_THAN, 7}, {LE_OP, 7},
         {GE_OP, 7},     {LEFT_OP, 8}, {RIGHT_OP, 8},  {PLUS, 9},         {MINUS, 9},
@@ -80,13 +150,33 @@ class Parser
 
     Token consume() { return tokens[cur_token++]; }
 
+    // The token the cursor is on, clamped to the last token so error reporting at
+    // end-of-input still has a position to point at.
+    const Token &curToken() const { return tokens[std::min(cur_token, (int)tokens.size() - 1)]; }
+
+    // ============================================================
+    // Error reporting — every parse error funnels through here so the
+    // "line L, col C: message" format stays consistent.
+    // ============================================================
+
+    [[noreturn]] static void error(int line, int col, const std::string &message)
+    {
+        throw std::logic_error("line " + std::to_string(line) + ", col " + std::to_string(col) +
+                               ": " + message);
+    }
+
+    [[noreturn]] static void errorAt(const Token &tok, const std::string &message)
+    {
+        error(tok.line, tok.col, message);
+    }
+
+    [[noreturn]] void error(const std::string &message) { errorAt(curToken(), message); }
+
     Token expect(TokenType type)
     {
         if (peek() != type)
-            throw std::logic_error(
-                "Unexpected token at line " + std::to_string(tokens[cur_token].line) + ", col " +
-                std::to_string(tokens[cur_token].col) + ", expected " + tokenTypeToString(type) +
-                ", received " + tokenTypeToString(tokens[cur_token].type));
+            error("expected " + std::string(tokenTypeToString(type)) + ", got " +
+                  std::string(tokenTypeToString(peek())));
         return consume();
     }
 
@@ -139,21 +229,24 @@ class Parser
     // Map the distinct type-specifier tokens gathered for one declaration to the
     // Type they denote, or throw on an illegal combination. Duplicates are already
     // rejected by the caller, so each key appears at most once. `structName` holds
-    // the tag token when a `struct` specifier is present.
+    // the tag token when a `struct` specifier is present; line/col locate the run.
     std::shared_ptr<Type> typeFromSpecifiers(const std::unordered_map<TokenType, Token> &specs,
-                                             const std::optional<Token> &structName)
+                                             const std::optional<Token> &structName, int line,
+                                             int col)
     {
         const auto has = [&](TokenType t) { return specs.contains(t); };
+        const auto invalid = [&]() -> std::shared_ptr<Type>
+        { error(line, col, "invalid combination of type specifiers"); };
 
         // `signed` and `unsigned` are mutually exclusive.
         if (has(SIGNED) && has(UNSIGNED))
-            throw std::logic_error("invalid combination of type specifiers");
+            return invalid();
 
         // void / char / struct are standalone: they combine with nothing else.
         if (has(VOID) || has(CHAR) || has(STRUCT))
         {
             if (specs.size() != 1)
-                throw std::logic_error("invalid combination of type specifiers");
+                return invalid();
             if (has(VOID))
                 return VoidType::getInstance();
             if (has(CHAR))
@@ -164,9 +257,7 @@ class Parser
         if (has(DOUBLE))
         {
             if (has(SIGNED) || has(UNSIGNED) || has(LONG) || has(INT))
-            {
-                throw std::logic_error("invalid combination of type specifiers");
-            }
+                return invalid();
             return DoubleType::getInstance();
         }
 
@@ -186,45 +277,22 @@ class Parser
         if (has(SIGNED))
             return IntType::getInstance();
 
-        throw std::logic_error("invalid combination of type specifiers");
+        return invalid();
     }
 
-    // Gather a run of type-specifier keywords (in any order) and resolve them to a
-    // single base type. Used wherever a type name appears without a storage class:
-    // casts, sizeof, parameters, struct fields.
-    std::tuple<std::shared_ptr<Type>, int, int> parseBaseType()
+    // A run of declaration specifiers resolved to a base type plus optional storage
+    // class, with the position of the first specifier token.
+    struct Specifiers
     {
-        std::unordered_map<TokenType, Token> specs;
-        std::optional<Token> structName;
-        int line = -1, col = -1;
+        std::shared_ptr<Type> type;
+        std::optional<StorageClass> storageClass;
+        int line;
+        int col;
+    };
 
-        while (isTypeStart(peek()))
-        {
-            Token t = consume();
-            if (line < 0)
-            {
-                line = t.line;
-                col = t.col;
-            }
-            if (!specs.try_emplace(t.type, t).second)
-                throw std::logic_error("type specifier used multiple times at line:" +
-                                       std::to_string(t.line) + " col:" + std::to_string(t.col));
-            if (t.type == STRUCT)
-                structName = expect(IDENTIFIER);
-        }
-
-        if (line < 0)
-            throw std::logic_error("Expected type specifier, got " +
-                                   std::string(tokenTypeToString(peek())));
-
-        return {typeFromSpecifiers(specs, structName), line, col};
-    }
-
-    // Parse declaration-specifiers: a base type plus an optional storage class
-    // (static/extern), interleaved in any order (`static int`, `int static`).
-    // Returns the base type, the storage class if any, and the position of the
-    // first specifier token.
-    std::tuple<std::shared_ptr<Type>, std::optional<StorageClass>, int, int> parseDeclSpecifiers()
+    // Gather a run of type-specifier keywords (in any order), plus storage classes
+    // when allowStorageClass is set, and resolve them to a single base type.
+    Specifiers parseSpecifiers(bool allowStorageClass)
     {
         std::optional<StorageClass> storageClass;
         std::unordered_map<TokenType, Token> specs;
@@ -242,76 +310,180 @@ class Parser
 
             if (isStorageClassSpecifier(t.type))
             {
+                if (!allowStorageClass)
+                    errorAt(t, "storage-class specifier is not allowed here");
                 if (storageClass.has_value())
-                    throw std::logic_error("multiple storage-class specifiers at line " +
-                                           std::to_string(t.line) + ", col " +
-                                           std::to_string(t.col));
+                    errorAt(t, "multiple storage-class specifiers");
                 storageClass = (t.type == STATIC) ? StorageClass::Static : StorageClass::Extern;
             }
             else
             {
                 if (!specs.try_emplace(t.type, t).second)
-                    throw std::logic_error(
-                        "type specifier used multiple times at line:" + std::to_string(t.line) +
-                        " col:" + std::to_string(t.col));
+                    errorAt(t, "type specifier used more than once");
                 if (t.type == STRUCT)
                     structName = expect(IDENTIFIER);
             }
         }
 
         if (specs.empty())
-            throw std::logic_error("Expected type specifier, got " +
-                                   std::string(tokenTypeToString(peek())));
+            error("expected a type specifier, got " + std::string(tokenTypeToString(peek())));
 
-        return {typeFromSpecifiers(specs, structName), storageClass, line, col};
+        return {typeFromSpecifiers(specs, structName, line, col), storageClass, line, col};
     }
 
-    void parseDeclaratorHead(std::shared_ptr<Type> &base)
+    // Used wherever a type name appears without a storage class: casts, sizeof,
+    // parameters, struct fields.
+    std::tuple<std::shared_ptr<Type>, int, int> parseBaseType()
     {
-        // leading *s — leftmost is outermost, so wrap in-order
-        while (peek() == ASTERISK)
+        Specifiers s = parseSpecifiers(false);
+        return {s.type, s.line, s.col};
+    }
+
+    // Declaration-specifiers: a base type plus an optional storage class, in any
+    // order (`static int` / `int static`).
+    std::tuple<std::shared_ptr<Type>, std::optional<StorageClass>, int, int> parseDeclSpecifiers()
+    {
+        Specifiers s = parseSpecifiers(true);
+        return {s.type, s.storageClass, s.line, s.col};
+    }
+
+    // declarator = "*" declarator | direct-declarator
+    std::shared_ptr<DeclaratorNode> parseDeclarator(bool allowAbstract)
+    {
+        if (peek() == ASTERISK)
         {
             consume();
-            base = std::make_shared<PointerType>(base);
+            return std::make_shared<PointerDeclarator>(parseDeclarator(allowAbstract));
         }
-
-        if (peek() == LEFT_PAREN)
-        {
-            throw std::logic_error(
-                "parenthesized declarators (e.g. int (*p)[10]) not supported yet");
-        }
+        return parseDirectDeclarator(allowAbstract);
     }
 
-    void parseDeclaratorTail(std::shared_ptr<Type> &base)
+    // direct-declarator = simple-declarator [ param-list | "[" const "]" ... ]
+    std::shared_ptr<DeclaratorNode> parseDirectDeclarator(bool allowAbstract)
     {
-        // trailing [N]s — rightmost is innermost, so collect then reverse-wrap
-        std::vector<size_t> dims;
+        std::shared_ptr<DeclaratorNode> node = parseSimpleDeclarator(allowAbstract);
+        if (peek() == LEFT_PAREN)
+        {
+            auto [params, variadic] = parseParamList();
+            return std::make_shared<FunDeclarator>(std::move(params), variadic, std::move(node));
+        }
         while (peek() == LEFT_BRACKET)
         {
             consume();
             Token sz = expect(CONSTANT);
             expect(RIGHT_BRACKET);
-            dims.push_back(std::stoul(sz.lexeme));
+            node = std::make_shared<ArrayDeclarator>(std::move(node), std::stoul(sz.lexeme));
         }
-        for (const auto &dim : std::views::reverse(dims))
-        {
-            base = std::make_shared<ArrayType>(base, dim);
-        }
+        return node;
     }
 
-    Declarator parseDeclarator(std::shared_ptr<Type> base)
+    // simple-declarator = identifier | "(" declarator ")"
+    // A "(" only opens a grouping when what follows can start a declarator (*, (,
+    // or a name); otherwise it belongs to a function param list handled above.
+    std::shared_ptr<DeclaratorNode> parseSimpleDeclarator(bool allowAbstract)
     {
-        parseDeclaratorHead(base);
-        const Token id = expect(IDENTIFIER);
-        parseDeclaratorTail(base);
-        return Declarator{base, id.lexeme, id.line, id.col};
+        if (peek() == LEFT_PAREN &&
+            (peekNext() == ASTERISK || peekNext() == LEFT_PAREN || peekNext() == IDENTIFIER))
+        {
+            consume();
+            auto inner = parseDeclarator(allowAbstract);
+            expect(RIGHT_PAREN);
+            return inner;
+        }
+        if (peek() == IDENTIFIER)
+        {
+            Token id = consume();
+            return std::make_shared<IdentDeclarator>(id.lexeme, id.line, id.col);
+        }
+        if (allowAbstract)
+            return std::make_shared<IdentDeclarator>();
+        error("expected identifier in declarator");
+    }
+
+    // param-list = "(" [ "void" | param { "," param } [ "," "..." ] ] ")"
+    std::pair<std::vector<ParamInfo>, bool> parseParamList()
+    {
+        expect(LEFT_PAREN);
+        std::vector<ParamInfo> params;
+        bool variadic = false;
+
+        if (peek() == VOID && peekNext() == RIGHT_PAREN)
+        {
+            consume(); // void
+        }
+        else if (peek() != RIGHT_PAREN)
+        {
+            while (true)
+            {
+                if (peek() == ELLIPSIS)
+                {
+                    if (params.empty())
+                        error("there must be at least one named parameter before '...'");
+                    consume();
+                    variadic = true;
+                    break;
+                }
+                auto [baseType, line, col] = parseBaseType();
+                auto decl = parseDeclarator(true); // parameters may be abstract
+                params.push_back(ParamInfo{baseType, decl, line, col});
+                if (peek() == COMMA)
+                {
+                    consume();
+                    continue;
+                }
+                break;
+            }
+        }
+        expect(RIGHT_PAREN);
+        return {std::move(params), variadic};
+    }
+
+    // Resolve a declarator tree against a base type, deriving outermost-first so
+    // the type reads from the leaf out (the natural C declarator reading).
+    Declarator processDeclarator(const std::shared_ptr<DeclaratorNode> &node,
+                                 const std::shared_ptr<Type> &baseType)
+    {
+        if (auto id = std::dynamic_pointer_cast<IdentDeclarator>(node))
+            return Declarator{baseType, id->name, id->line, id->col, {}};
+        if (auto p = std::dynamic_pointer_cast<PointerDeclarator>(node))
+            return processDeclarator(p->inner, std::make_shared<PointerType>(baseType));
+        if (auto a = std::dynamic_pointer_cast<ArrayDeclarator>(node))
+            return processDeclarator(a->inner, std::make_shared<ArrayType>(baseType, a->size));
+
+        auto f = std::dynamic_pointer_cast<FunDeclarator>(node);
+        // The thing being declared as a function must be a plain identifier; a
+        // non-identifier inner means a function pointer or a function returning a
+        // function, neither of which this compiler supports.
+        auto idInner = std::dynamic_pointer_cast<IdentDeclarator>(f->inner);
+        if (!idInner)
+            error("function pointers and functions returning functions are not supported");
+
+        std::vector<Parameter> params;
+        std::vector<std::shared_ptr<Type>> paramTypes;
+        for (const auto &pinfo : f->params)
+        {
+            Declarator pd = processDeclarator(pinfo.declarator, pinfo.baseType);
+            if (std::dynamic_pointer_cast<FunctionType>(pd.type))
+                error("function pointers as parameters are not supported");
+            const int pl = pd.name.empty() ? pinfo.line : pd.line;
+            const int pc = pd.name.empty() ? pinfo.col : pd.col;
+            params.emplace_back(pd.type, pd.name, pl, pc);
+            paramTypes.push_back(pd.type);
+        }
+        auto fnType = std::make_shared<FunctionType>(baseType, paramTypes, f->variadic);
+        return Declarator{fnType, idInner->name, idInner->line, idInner->col, std::move(params)};
     }
 
     std::shared_ptr<Type> parseAbstractDeclarator(std::shared_ptr<Type> base)
     {
-        parseDeclaratorHead(base);
-        parseDeclaratorTail(base);
-        return base;
+        Declarator d = processDeclarator(parseDeclarator(true), base);
+        if (!d.name.empty())
+            error("unexpected identifier in abstract declarator");
+        // Abstract function declarators (e.g. the "(void)" in "(int (void)) 0") are
+        // not supported — there is no expression to cast to a function type.
+        if (std::dynamic_pointer_cast<FunctionType>(d.type))
+            error("abstract function declarators are not supported");
+        return d.type;
     }
 
     // ============================================================
@@ -363,10 +535,11 @@ class Parser
     {
 
         std::shared_ptr<Expression> left = parseUnary();
-        while (isBinaryOp(peek()) && precedenceLevel[peek()] >= minPrecedence)
+        while (isBinaryOp(peek()) && precedenceLevel.at(peek()) >= minPrecedence)
         {
             Token op = consume();
-            std::shared_ptr<Expression> right = parseBinaryExpression(precedenceLevel[op.type] + 1);
+            std::shared_ptr<Expression> right =
+                parseBinaryExpression(precedenceLevel.at(op.type) + 1);
             left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right,
                                                 op.lexeme);
         }
@@ -422,11 +595,7 @@ class Parser
             errno = 0;
             unsigned long long value = strtoull(lex.c_str(), nullptr, 0);
             if (errno == ERANGE)
-            {
-                throw std::logic_error("Number too big to be stored in 64 bits. line:" +
-                                       std::to_string(constant.line) +
-                                       " col:" + std::to_string(constant.col));
-            }
+                errorAt(constant, "integer constant too large to be stored in 64 bits");
             // Pick the constant's type from its suffix and magnitude, restricted to
             // our four integer types:
             //   u + l       -> unsigned long
@@ -481,8 +650,7 @@ class Parser
             node = std::make_shared<StringLiterals>(s.line, s.col, combined);
         }
         else
-            throw std::logic_error("Invalid token as a factor " +
-                                   std::string(tokenTypeToString(peek())));
+            error("expected an expression, got " + std::string(tokenTypeToString(peek())));
 
         while (true)
         {
@@ -490,7 +658,7 @@ class Parser
             {
                 auto var = std::dynamic_pointer_cast<VariableExpr>(node);
                 if (!var)
-                    throw std::logic_error("callee must be an identifier");
+                    error("callee must be an identifier");
                 node = parseFunctionCallExpr(var);
             }
             else if (peek() == INC_OP || peek() == DEC_OP)
@@ -546,9 +714,7 @@ class Parser
         {
             Token brace = consume();
             if (peek() == RIGHT_BRACE)
-            {
-                throw std::logic_error("Empty Initializations are disallowed");
-            }
+                error("empty initializer lists are not allowed");
             std::vector<std::shared_ptr<Expression>> initializations;
             if (peek() != RIGHT_BRACE)
             {
@@ -580,32 +746,56 @@ class Parser
         return std::make_shared<ExprStmt>(expr, expr->getLine(), expr->getCol(), semiColon);
     }
 
-    std::vector<std::shared_ptr<VarDecl>>
-    parseVarDecl(const std::shared_ptr<Type> &type, bool global = false,
-                 std::optional<StorageClass> storageClass = std::nullopt)
+    // A run of comma-separated declarators sharing one base type, resolving to
+    // either a single function declaration/definition or a list of variables.
+    struct DeclList
     {
+        bool isFunction = false;
+        std::shared_ptr<Function> function;
         std::vector<std::shared_ptr<VarDecl>> variables;
-        while (true)
+    };
+
+    DeclList parseDeclarationList(const std::shared_ptr<Type> &baseType, bool global,
+                                  std::optional<StorageClass> storageClass, int line, int col)
+    {
+        Declarator first = processDeclarator(parseDeclarator(false), baseType);
+
+        if (auto fnType = std::dynamic_pointer_cast<FunctionType>(first.type))
         {
-            auto [finalType, name, variable_line, variable_col] = parseDeclarator(type);
+            std::shared_ptr<BlockStmt> body;
+            if (peek() == LEFT_BRACE)
+                body = parseBlockStmt();
+            else
+                expect(SEMI_COLON);
+            auto fn =
+                std::make_shared<Function>(line, col, first.name, fnType->returnType, first.params,
+                                           body, fnType->isVariadic, storageClass);
+            return DeclList{true, fn, {}};
+        }
+
+        std::vector<std::shared_ptr<VarDecl>> variables;
+        const auto addVar = [&](const Declarator &d)
+        {
             std::shared_ptr<Expression> initialization;
             if (peek() == ASSIGN)
             {
                 consume();
                 initialization = parseInitializers();
             }
-            variables.emplace_back(std::make_shared<VarDecl>(variable_line, variable_col, name,
-                                                             finalType, initialization, global,
-                                                             storageClass));
-            if (peek() == COMMA)
-            {
-                consume();
-                continue;
-            }
-            break;
+            variables.emplace_back(std::make_shared<VarDecl>(d.line, d.col, d.name, d.type,
+                                                             initialization, global, storageClass));
+        };
+        addVar(first);
+        while (peek() == COMMA)
+        {
+            consume();
+            Declarator d = processDeclarator(parseDeclarator(false), baseType);
+            if (std::dynamic_pointer_cast<FunctionType>(d.type))
+                error("cannot mix function and variable declarations");
+            addVar(d);
         }
         expect(SEMI_COLON);
-        return variables;
+        return DeclList{false, nullptr, std::move(variables)};
     }
 
     std::shared_ptr<DeclareStmt>
@@ -617,8 +807,19 @@ class Parser
             auto structVar = parseStructDecl(type, line, col);
             return std::make_shared<DeclareStmt>(line, col, structVar);
         }
-        auto variables = parseVarDecl(type, false, storageClass);
-        return std::make_shared<DeclareStmt>(line, col, variables);
+        DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
+        if (dl.isFunction)
+            error(line, col, "function declaration not allowed here");
+        return std::make_shared<DeclareStmt>(line, col, dl.variables);
+    }
+
+    // Control-flow bodies in this language are always brace-delimited blocks; the
+    // brace-less single-statement forms are intentionally unsupported.
+    std::shared_ptr<BlockStmt> parseRequiredBlock(const char *context)
+    {
+        if (peek() != LEFT_BRACE)
+            error(std::string(context) + " expects a brace-delimited block");
+        return parseBlockStmt();
     }
 
     std::shared_ptr<ReturnStmt> parseReturnStmt()
@@ -637,11 +838,7 @@ class Parser
         expect(LEFT_PAREN);
         std::shared_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
-        if (peek() != LEFT_BRACE)
-        {
-            throw std::logic_error("if statement expects braces");
-        }
-        std::shared_ptr<BlockStmt> thenBlock = parseBlockStmt();
+        std::shared_ptr<BlockStmt> thenBlock = parseRequiredBlock("if statement");
 
         std::shared_ptr<BlockStmt> elseBlock;
         if (peek() == ELSE)
@@ -654,13 +851,9 @@ class Parser
                 std::vector<std::shared_ptr<Statement>> body = {parseIfStmt()};
                 elseBlock = std::make_shared<BlockStmt>(ifToken.line, ifToken.col, std::move(body));
             }
-            else if (peek() == LEFT_BRACE)
-            {
-                elseBlock = parseBlockStmt();
-            }
             else
             {
-                throw std::logic_error("else statement expects '{' or 'if'");
+                elseBlock = parseRequiredBlock("else statement");
             }
         }
         return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
@@ -672,11 +865,7 @@ class Parser
         expect(LEFT_PAREN);
         std::shared_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
-        if (peek() != LEFT_BRACE)
-        {
-            throw std::logic_error("while statement expects braces");
-        }
-        std::shared_ptr<BlockStmt> whileBlock = parseBlockStmt();
+        std::shared_ptr<BlockStmt> whileBlock = parseRequiredBlock("while statement");
 
         return std::make_shared<WhileStmt>(whileToken.line, whileToken.col, condition, whileBlock);
     }
@@ -684,11 +873,7 @@ class Parser
     std::shared_ptr<DoWhileStmt> parseDoWhileStmt()
     {
         Token doStart = expect(DO); // should not throw
-        if (peek() != LEFT_BRACE)
-        {
-            throw std::logic_error("do while statement expects braces");
-        }
-        std::shared_ptr<BlockStmt> doBlock = parseBlockStmt();
+        std::shared_ptr<BlockStmt> doBlock = parseRequiredBlock("do-while statement");
         expect(WHILE);
         expect(LEFT_PAREN);
         std::shared_ptr<Expression> condition = parseExpression();
@@ -710,9 +895,8 @@ class Parser
             // C99 6.8.5p3: a for-loop initializer declaration may only have auto
             // or register storage — static/extern are not allowed here.
             if (storageClass.has_value())
-                throw std::logic_error(
-                    "a storage-class specifier is not allowed in a for-loop initializer at line " +
-                    std::to_string(line) + ", col " + std::to_string(col));
+                error(line, col,
+                      "a storage-class specifier is not allowed in a for-loop initializer");
             initialization = parseDeclareStmt(type, line, col);
         }
         else
@@ -726,11 +910,7 @@ class Parser
         if (peek() != RIGHT_PAREN)
             update = parseExprStatement(false);
         expect(RIGHT_PAREN);
-        if (peek() != LEFT_BRACE)
-        {
-            throw std::logic_error("for statement expects braces");
-        }
-        std::shared_ptr<BlockStmt> forBlock = parseBlockStmt();
+        std::shared_ptr<BlockStmt> forBlock = parseRequiredBlock("for statement");
         return std::make_shared<ForStmt>(forStart.line, forStart.col, initialization, condition,
                                          update, forBlock);
     }
@@ -758,24 +938,27 @@ class Parser
             if (isDeclSpecifierStart(peek()))
             {
                 auto [type, storageClass, line, col] = parseDeclSpecifiers();
-                if (peek() == IDENTIFIER && peekNext() == LEFT_PAREN)
+                if (peek() == LEFT_BRACE)
                 {
-                    // Local function declaration: a forward prototype scoped to
-                    // this block. Parse it through the same path as file scope and
-                    // keep the node so SA can register it (and drop it at block exit).
-                    Token identifier = expect(IDENTIFIER); // function name
-                    consume();                             // (
-                    auto decl = parseFunction(type, line, col, identifier, storageClass);
-                    if (decl->statements)
-                    {
-                        throw std::logic_error(
-                            "function definition not allowed in block scope at line " +
-                            std::to_string(line) + ", col " + std::to_string(col));
-                    }
-                    statements.emplace_back(std::make_shared<FunctionDeclStmt>(line, col, decl));
+                    auto structVar = parseStructDecl(type, line, col);
+                    statements.emplace_back(std::make_shared<DeclareStmt>(line, col, structVar));
                     continue;
                 }
-                statements.emplace_back(parseDeclareStmt(type, line, col, storageClass));
+                DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
+                if (dl.isFunction)
+                {
+                    // Local function declaration: a forward prototype scoped to this
+                    // block. SA registers it and drops it at block exit; a body here
+                    // would be a definition, which C forbids in block scope.
+                    if (dl.function->statements)
+                        error(line, col, "function definition not allowed in block scope");
+                    statements.emplace_back(
+                        std::make_shared<FunctionDeclStmt>(line, col, dl.function));
+                }
+                else
+                {
+                    statements.emplace_back(std::make_shared<DeclareStmt>(line, col, dl.variables));
+                }
                 continue;
             }
             if (peek() == LEFT_BRACE)
@@ -829,91 +1012,20 @@ class Parser
     // Top-level / program — parameters, functions, structs, entry
     // ============================================================
 
-    void parseParam(std::vector<Parameter> &parameters)
-    {
-        auto [type, baseLine, baseCol] = parseBaseType();
-        parseDeclaratorHead(type);
-        std::string name;
-        int line = baseLine, col = baseCol;
-        if (peek() == IDENTIFIER)
-        {
-            Token id = consume();
-            name = id.lexeme;
-            line = id.line;
-            col = id.col;
-        }
-        parseDeclaratorTail(type);
-        parameters.emplace_back(type, name, line, col);
-    }
-
-    std::shared_ptr<Function> parseFunction(std::shared_ptr<Type> returnType, int line, int col,
-                                            Token functionName,
-                                            std::optional<StorageClass> storageClass = std::nullopt)
-    {
-        std::string functionNameString = functionName.lexeme;
-        std::vector<Parameter> parameters;
-        bool variadic = false;
-
-        if (peek() != RIGHT_PAREN && !(peek() == VOID && peekNext() == RIGHT_PAREN) &&
-            peek() != ELLIPSIS)
-        {
-            parseParam(parameters);
-            while (peek() == COMMA)
-            {
-                consume(); // comma
-                if (peek() == ELLIPSIS)
-                    break;
-                parseParam(parameters);
-            }
-        }
-        if (peek() == VOID && peekNext() == RIGHT_PAREN)
-            consume();
-        if (peek() == ELLIPSIS)
-        {
-            if (parameters.empty())
-            {
-                throw std::logic_error("There must be at least 1 named parameter. line: " +
-                                       std::to_string(functionName.line) +
-                                       ", col: " + std::to_string(functionName.col));
-            }
-            consume();
-            variadic = true;
-        }
-        Token rightParen = expect(RIGHT_PAREN);
-        std::shared_ptr<BlockStmt> blockStmt;
-        if (peek() == SEMI_COLON)
-        {
-            consume();
-            return std::make_shared<Function>(line, col, functionNameString, returnType, parameters,
-                                              blockStmt, variadic, storageClass);
-        }
-        if (peek() == LEFT_BRACE)
-            blockStmt = parseBlockStmt();
-        else
-            expect(SEMI_COLON);
-
-        return std::make_shared<Function>(line, col, functionNameString, returnType, parameters,
-                                          blockStmt, variadic, storageClass);
-    }
-
     std::shared_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type> &structType, int line,
                                                 int col)
     {
         expect(LEFT_BRACE);
         if (peek() == RIGHT_BRACE)
-        {
-            throw std::logic_error("Empty struct body not allowed");
-        }
+            error("empty struct body is not allowed");
         std::vector<StructField> fields;
         while (peek() != RIGHT_BRACE && peek() != EOF_TOKEN)
         {
-            auto [type, line, col] = parseBaseType();
+            auto [type, baseLine, baseCol] = parseBaseType();
             while (peek() != SEMI_COLON && peek() != EOF_TOKEN)
             {
-                parseDeclaratorHead(type);
-                const Token id = expect(IDENTIFIER);
-                parseDeclaratorTail(type);
-                fields.emplace_back(type, id.lexeme, line, col);
+                Declarator d = processDeclarator(parseDeclarator(false), type);
+                fields.emplace_back(d.type, d.name, d.line, d.col);
                 if (peek() == COMMA)
                     consume();
             }
@@ -935,44 +1047,25 @@ class Parser
             if (isDeclSpecifierStart(peek()))
             {
                 auto [type, storageClass, line, col] = parseDeclSpecifiers();
-                parseDeclaratorHead(type);
-                if (peek() == IDENTIFIER)
-                {
-                    if (peekNext() == LEFT_PAREN) // handle functions
-                    {
-                        Token identifier = expect(IDENTIFIER);
-                        consume();
-                        nodes.emplace_back(
-                            parseFunction(type, line, col, identifier, storageClass));
-                    }
-                    else // handle variable declarations
-                    {
-                        parseDeclaratorTail(type);
-                        auto variables = parseVarDecl(type, true, storageClass);
-                        for (const auto &var : variables)
-                        {
-                            nodes.emplace_back(var);
-                        }
-                    }
-                }
-                else if (peek() == LEFT_BRACE)
+                if (peek() == LEFT_BRACE)
                 {
                     nodes.emplace_back(parseStructDecl(type, line, col));
+                    continue;
+                }
+                DeclList dl = parseDeclarationList(type, true, storageClass, line, col);
+                if (dl.isFunction)
+                {
+                    nodes.emplace_back(dl.function);
                 }
                 else
                 {
-                    throw std::logic_error("Expected identifier or '{' at file scope, got " +
-                                           std::string(tokenTypeToString(peek())) + " at line " +
-                                           std::to_string(tokens[cur_token].line) + ", col " +
-                                           std::to_string(tokens[cur_token].col));
+                    for (const auto &var : dl.variables)
+                        nodes.emplace_back(var);
                 }
             }
             else
             {
-                throw std::logic_error(
-                    "Unexpected token at file scope: " + std::string(tokenTypeToString(peek())) +
-                    " at line " + std::to_string(tokens[cur_token].line) + ", col " +
-                    std::to_string(tokens[cur_token].col));
+                error("unexpected token at file scope: " + std::string(tokenTypeToString(peek())));
             }
         }
         return std::make_shared<Program>(nodes);
