@@ -273,6 +273,41 @@ class SemanticAnalyzer
         return cast;
     }
 
+    // C's assignment conversions, shared by `=`, initializers, `return`, and call
+    // arguments: an rvalue is assignable to a target when the types are equal, both
+    // are arithmetic, or the target is a pointer and the rvalue is a null pointer
+    // constant. Notably int<->pointer, double<->pointer, and mismatched pointer
+    // types are NOT assignable. (Array-to-pointer decay is handled separately by
+    // callers via canDecayTo.)
+    bool isAssignmentCompatible(const std::shared_ptr<Type> &target,
+                                const std::shared_ptr<Expression> &rhs)
+    {
+        const auto &src = rhs->resolvedType;
+        if (src->equals(*target))
+            return true;
+        if ((isInteger(src) || isDouble(src)) && (isInteger(target) || isDouble(target)))
+            return true;
+        if (isPointer(target) && isNullPointerConstant(rhs))
+            return true;
+        return false;
+    }
+
+    // Validate an assignment-style conversion and, when valid, return the rvalue
+    // converted to the target type (arithmetic conversion or null-constant ->
+    // pointer). On a type mismatch, report an error and return the rvalue as-is.
+    std::shared_ptr<Expression> convertByAssignment(const std::shared_ptr<Expression> &e,
+                                                    const std::shared_ptr<Type> &target, int line,
+                                                    int col)
+    {
+        if (!isAssignmentCompatible(target, e))
+        {
+            error(line, col,
+                  "cannot convert " + e->resolvedType->toString() + " to " + target->toString());
+            return e;
+        }
+        return convertTo(e, target);
+    }
+
     size_t decodedLength(const std::string &s)
     {
         // s is "..." (with outer quotes)
@@ -322,21 +357,7 @@ class SemanticAnalyzer
 
             if (x->op == "=")
             {
-                bool sameStruct = std::dynamic_pointer_cast<StructType>(lType) &&
-                                  std::dynamic_pointer_cast<StructType>(rType) &&
-                                  lType->equals(*rType);
-                if (!(isScalar(lType) && isScalar(rType)) &&
-                    !(isPointer(lType) && isNullPointerConstant(x->rhs)) && !sameStruct)
-                {
-                    error(x->lhs->getLine(), x->lhs->getCol(),
-                          "Left expression and right expression are not same type, left type: " +
-                              lType->toString() + ", right type: " + rType->toString() + ".");
-                }
-                else if ((isInteger(lType) || isDouble(lType)) &&
-                         (isInteger(rType) || isDouble(rType)))
-                {
-                    x->rhs = convertTo(x->rhs, lType); // convert-by-assignment
-                }
+                x->rhs = convertByAssignment(x->rhs, lType, x->lhs->getLine(), x->lhs->getCol());
             }
             else if (x->op == "+=" || x->op == "-=")
             {
@@ -628,10 +649,20 @@ class SemanticAnalyzer
         {
             analyzeExpr(x->operand);
 
-            if (!isScalar(x->operand->resolvedType) || (!isScalar(x->type) && !isVoid(x->type)))
+            const auto &srcType = x->operand->resolvedType;
+            if (!isScalar(srcType) || (!isScalar(x->type) && !isVoid(x->type)))
             {
                 error(x->getLine(), x->getCol(),
-                      "Cannot cast to or from struct, got " + x->operand->resolvedType->toString() +
+                      "Cannot cast to or from struct, got " + srcType->toString() + " and " +
+                          x->type->toString() + ".");
+            }
+            // A pointer and a double share no representation, so neither converts to
+            // the other; such a cast is a constraint violation.
+            else if ((isPointer(srcType) && isDouble(x->type)) ||
+                     (isDouble(srcType) && isPointer(x->type)))
+            {
+                error(x->getLine(), x->getCol(),
+                      "cannot cast between pointer and double, got " + srcType->toString() +
                           " and " + x->type->toString() + ".");
             }
 
@@ -958,16 +989,14 @@ class SemanticAnalyzer
                     analyzeExpr(expr->parameters[i]);
                     auto argType = expr->parameters[i]->resolvedType;
                     const auto &paramType = functionType->paramTypes[i];
-                    if ((isInteger(argType) || isDouble(argType)) &&
-                        (isInteger(paramType) || isDouble(paramType)))
+                    if (canDecayTo(argType, paramType))
                     {
-                        expr->parameters[i] = convertTo(expr->parameters[i], paramType);
+                        // array argument decaying to a pointer parameter; leave as-is
                     }
-                    else if (!canDecayTo(argType, paramType))
+                    else
                     {
-                        error(expr->getLine(), expr->getCol(),
-                              "mismatched param types, expected " + paramType->toString() +
-                                  " got " + argType->toString());
+                        expr->parameters[i] = convertByAssignment(expr->parameters[i], paramType,
+                                                                  expr->getLine(), expr->getCol());
                     }
                 }
                 for (int i = functionType->paramTypes.size(); i < expr->parameters.size(); i++)
@@ -1487,25 +1516,27 @@ class SemanticAnalyzer
                 bool stringInit = lArr && rArr && isInteger(lArr->getInner()) &&
                                   isInteger(rArr->getInner()) && rArr->getSize() <= lArr->getSize();
 
-                bool sameStruct = std::dynamic_pointer_cast<StructType>(lType) &&
-                                  std::dynamic_pointer_cast<StructType>(rType) &&
-                                  lType->equals(*rType);
-
                 const bool staticDuration =
                     variable->symbol && variable->symbol->duration == StorageDuration::Static;
 
-                if (!(isScalar(lType) && (isScalar(rType) || canDecayTo(rType, lType))) &&
-                    !(isPointer(lType) && isNullPointerConstant(variable->initialization)) &&
-                    !stringInit && !sameStruct)
+                if (stringInit || canDecayTo(rType, lType))
                 {
-                    error(variable->getLine(), variable->getCol(),
-                          "Left expression and right expression are not same type, left type: " +
-                              lType->toString() + ", right type: " + rType->toString() + ".");
+                    // array / string-literal initialization keeps its own rules
                 }
-                else if ((isInteger(lType) || isDouble(lType)) &&
-                         (isInteger(rType) || isDouble(rType)) && !staticDuration)
+                else if (staticDuration)
                 {
-                    variable->initialization = convertTo(variable->initialization, lType);
+                    // The constant was already folded above; just validate the type.
+                    // (Conversions aren't materialized for static initializers.)
+                    if (!isAssignmentCompatible(lType, variable->initialization))
+                        error(
+                            variable->getLine(), variable->getCol(),
+                            "Left expression and right expression are not same type, left type: " +
+                                lType->toString() + ", right type: " + rType->toString() + ".");
+                }
+                else
+                {
+                    variable->initialization = convertByAssignment(
+                        variable->initialization, lType, variable->getLine(), variable->getCol());
                 }
             }
         }
@@ -1539,18 +1570,9 @@ class SemanticAnalyzer
         if (stmt->returnExpression != nullptr)
         {
             analyzeExpr(stmt->returnExpression);
-            const auto retType = stmt->returnExpression->resolvedType;
-            if ((isInteger(currentReturnType) || isDouble(currentReturnType)) &&
-                (isInteger(retType) || isDouble(retType)))
-            {
-                stmt->returnExpression = convertTo(stmt->returnExpression, currentReturnType);
-            }
-            else if (!currentReturnType->equals(*retType))
-            {
-                error(stmt->returnExpression->getLine(), stmt->returnExpression->col,
-                      "expected type - " + currentReturnType->toString() + ", got " +
-                          retType->toString());
-            }
+            stmt->returnExpression =
+                convertByAssignment(stmt->returnExpression, currentReturnType,
+                                    stmt->returnExpression->getLine(), stmt->returnExpression->col);
         }
         else
         {
