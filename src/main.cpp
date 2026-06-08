@@ -1,5 +1,6 @@
 #include "ast/ASTNodes/Program.h"
 #include "ast/visitors/ASTDebugPrinter.h"
+#include "codegen/ABI.h"
 #include "codegen/AsmWriter.h"
 #include "codegen/ast/visitors/codegenASTPrinter.h"
 #include "codegen/codegen.h"
@@ -169,7 +170,8 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         if (stage == "tacky")
             return 0;
 
-        codegenDriver driver;
+        SysVx86_64ABI sysVAbi;
+        codegenDriver driver{sysVAbi};
         auto cgProgram = driver.codegen(*tackyProg);
 
         // --codegen: emit assembly to stdout (the test harness captures this).
