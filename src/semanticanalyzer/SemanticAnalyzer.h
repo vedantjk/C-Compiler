@@ -503,18 +503,25 @@ class SemanticAnalyzer
 
     void analyzeExpr(Expression &expr)
     {
-        if (auto *x = dyn_cast<IntLiterals>(&expr))
+        switch (expr.getKind())
         {
+        case NodeKind::IntLiterals:
+        {
+            auto *x = cast<IntLiterals>(&expr);
             x->resolvedType = x->type; // parser typed it Int or Long by value/suffix
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<FloatingLiterals>(&expr))
+        case NodeKind::FloatingLiterals:
         {
+            auto *x = cast<FloatingLiterals>(&expr);
             x->resolvedType = x->type;
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<StringLiterals>(&expr))
+        case NodeKind::StringLiterals:
         {
+            auto *x = cast<StringLiterals>(&expr);
             const size_t size = decodedLength(x->literal);
             const auto type = CharType::getInstance();
             auto stringType = std::make_shared<ArrayType>(type, size);
@@ -523,9 +530,11 @@ class SemanticAnalyzer
             // lvalue (`&"..."` is valid). Assignment to it is still rejected by the
             // non-modifiable-array rule.
             x->isLvalue = true;
+            break;
         }
-        else if (auto *x = dyn_cast<AssignExpr>(&expr))
+        case NodeKind::AssignExpr:
         {
+            auto *x = cast<AssignExpr>(&expr);
             analyzeExpr(*x->lhs);
             analyzeAndDecay(x->rhs);
 
@@ -645,9 +654,11 @@ class SemanticAnalyzer
 
             x->resolvedType = x->lhs->resolvedType;
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<BinaryExpr>(&expr))
+        case NodeKind::BinaryExpr:
         {
+            auto *x = cast<BinaryExpr>(&expr);
             analyzeAndDecay(x->left);
             analyzeAndDecay(x->right);
 
@@ -907,9 +918,11 @@ class SemanticAnalyzer
                 x->resolvedType = rType;
                 x->isLvalue = x->right->isLvalue;
             }
+            break;
         }
-        else if (auto *x = dyn_cast<CastExpr>(&expr))
+        case NodeKind::CastExpr:
         {
+            auto *x = cast<CastExpr>(&expr);
             analyzeAndDecay(x->operand);
             resolveTags(x->type, x->getLine(), x->getCol());
             validateType(x->type, x->getLine(), x->getCol());
@@ -942,22 +955,28 @@ class SemanticAnalyzer
 
             x->resolvedType = x->type;
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<FunctionCallExpr>(&expr))
+        case NodeKind::FunctionCallExpr:
         {
+            auto *x = cast<FunctionCallExpr>(&expr);
             analyzeFunctionCallExpr(*x);
+            break;
         }
-        else if (auto *x = dyn_cast<InitExpr>(&expr))
+        case NodeKind::InitExpr:
         {
+            auto *x = cast<InitExpr>(&expr);
             for (auto &element : x->elements)
             {
                 analyzeExpr(*element);
             }
             x->resolvedType = IntType::getInstance();
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<MemberExpr>(&expr))
+        case NodeKind::MemberExpr:
         {
+            auto *x = cast<MemberExpr>(&expr);
             // `p->m` may apply to an array that decays to a pointer (e.g. an array
             // struct member: `s->arr->m`); a struct operand of `.` never decays.
             analyzeAndDecay(x->object);
@@ -1020,9 +1039,11 @@ class SemanticAnalyzer
             // `p->m` is always an lvalue; `s.m` is an lvalue only when s is (so the
             // member of a struct returned by value is a non-lvalue, like the value).
             x->isLvalue = x->isArrow ? true : x->object->isLvalue;
+            break;
         }
-        else if (auto *x = dyn_cast<SizeOfExpr>(&expr))
+        case NodeKind::SizeOfExpr:
         {
+            auto *x = cast<SizeOfExpr>(&expr);
             // The operand is analyzed for its type only: it is not decayed (sizeof
             // of an array is the whole array, not a pointer) and, since the result
             // folds to a constant, it is never evaluated. sizeof(type) uses the
@@ -1047,9 +1068,11 @@ class SemanticAnalyzer
 
             x->resolvedType = UnsignedLongType::getInstance();
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<SubscriptExpr>(&expr))
+        case NodeKind::SubscriptExpr:
         {
+            auto *x = cast<SubscriptExpr>(&expr);
             // a[i] == *(a + i): after decay both operands are values, one a pointer
             // and one an integer, in either order (i[a] is legal C). The result is
             // an lvalue of the pointed-to type.
@@ -1085,9 +1108,11 @@ class SemanticAnalyzer
 
             x->resolvedType = elemType;
             x->isLvalue = true;
+            break;
         }
-        else if (auto *x = dyn_cast<TernaryExpr>(&expr))
+        case NodeKind::TernaryExpr:
         {
+            auto *x = cast<TernaryExpr>(&expr);
             analyzeAndDecay(x->condition);
             analyzeAndDecay(x->thenBranch);
             analyzeAndDecay(x->elseBranch);
@@ -1145,9 +1170,11 @@ class SemanticAnalyzer
             }
 
             x->isLvalue = false;
+            break;
         }
-        else if (auto *x = dyn_cast<UnaryExpr>(&expr))
+        case NodeKind::UnaryExpr:
         {
+            auto *x = cast<UnaryExpr>(&expr);
             // `&*p` cancels: the dereference is never actually performed, so p may
             // point to an incomplete type. Type it as p's own type and skip the
             // deref's completeness check (which would wrongly reject `&*p`).
@@ -1261,9 +1288,11 @@ class SemanticAnalyzer
                 x->resolvedType = x->operand->resolvedType;
                 x->isLvalue = false;
             }
+            break;
         }
-        else if (auto *x = dyn_cast<VariableExpr>(&expr))
+        case NodeKind::VariableExpr:
         {
+            auto *x = cast<VariableExpr>(&expr);
             auto sym = symbolTable.find(x->name, Kind::VARIABLE);
             if (!sym)
                 sym = symbolTable.find(x->name, Kind::PARAMETER);
@@ -1282,9 +1311,9 @@ class SemanticAnalyzer
                 x->isLvalue = sym->kind != Kind::FUNCTION;
                 x->symbol = sym;
             }
+            break;
         }
-        else
-        {
+        default:
             throw std::runtime_error("Reached invalid expression at line " +
                                      std::to_string(expr.getLine()) + ", col " +
                                      std::to_string(expr.getCol()));
@@ -1508,13 +1537,17 @@ class SemanticAnalyzer
 
     bool evalConstDouble(const Expression *e, double &out)
     {
-        if (const auto *lit = dyn_cast<FloatingLiterals>(e))
+        switch (e->getKind())
         {
+        case NodeKind::FloatingLiterals:
+        {
+            const auto *lit = cast<FloatingLiterals>(e);
             out = lit->value;
             return true;
         }
-        if (const auto *u = dyn_cast<UnaryExpr>(e))
+        case NodeKind::UnaryExpr:
         {
+            const auto *u = cast<UnaryExpr>(e);
             double v;
             if (!evalConstDouble(u->operand.get(), v))
                 return false;
@@ -1527,8 +1560,9 @@ class SemanticAnalyzer
 
             return true;
         }
-        if (const auto *b = dyn_cast<BinaryExpr>(e))
+        case NodeKind::BinaryExpr:
         {
+            const auto *b = cast<BinaryExpr>(e);
             double l, r;
             if (!evalConstDouble(b->left.get(), l) || !evalConstDouble(b->right.get(), r))
                 return false;
@@ -1545,8 +1579,9 @@ class SemanticAnalyzer
                 return false; // comparisons/logicals are int-typed, not folded here
             return true;
         }
-        if (const auto *c = dyn_cast<CastExpr>(e))
+        case NodeKind::CastExpr:
         {
+            const auto *c = cast<CastExpr>(e);
             if (isDouble(c->operand->resolvedType))
                 return evalConstDouble(c->operand.get(), out); // double -> double
             long long v;
@@ -1557,15 +1592,20 @@ class SemanticAnalyzer
                       : static_cast<double>(v);
             return true;
         }
-        return false;
+        default:
+            return false;
+        }
     }
 
     // Fold an integer constant expression. Returns false for anything with a
     // runtime value (variable reads, calls, non-constant operands).
     bool evalConstInt(const Expression *e, long long &out)
     {
-        if (const auto *lit = dyn_cast<IntLiterals>(e))
+        switch (e->getKind())
         {
+        case NodeKind::IntLiterals:
+        {
+            const auto *lit = cast<IntLiterals>(e);
             try
             {
                 out = lit->value;
@@ -1576,8 +1616,9 @@ class SemanticAnalyzer
             }
             return true;
         }
-        if (const auto *u = dyn_cast<UnaryExpr>(e))
+        case NodeKind::UnaryExpr:
         {
+            const auto *u = cast<UnaryExpr>(e);
             long long v;
             if (!evalConstInt(u->operand.get(), v))
                 return false;
@@ -1596,8 +1637,9 @@ class SemanticAnalyzer
             out = reduceToType(out, u->resolvedType);
             return true;
         }
-        if (const auto *b = dyn_cast<BinaryExpr>(e))
+        case NodeKind::BinaryExpr:
         {
+            const auto *b = cast<BinaryExpr>(e);
             long long l, r;
             if (!evalConstInt(b->left.get(), l) || !evalConstInt(b->right.get(), r))
                 return false;
@@ -1689,8 +1731,9 @@ class SemanticAnalyzer
             out = reduceToType(out, b->resolvedType);
             return true;
         }
-        if (const auto *c = dyn_cast<CastExpr>(e))
+        case NodeKind::CastExpr:
         {
+            const auto *c = cast<CastExpr>(e);
             if (isDouble(c->operand->resolvedType))
             {
                 // double -> integer cast: truncate toward zero, then narrow. An
@@ -1714,7 +1757,9 @@ class SemanticAnalyzer
             out = reduceToType(v, c->type);
             return true;
         }
-        return false;
+        default:
+            return false;
+        }
     }
 
     // Is `e` a valid initializer for a static-duration object? Integer constant
@@ -2291,47 +2336,72 @@ class SemanticAnalyzer
     {
         for (auto &statement : blockStmt.statements)
         {
-            if (auto *x = dyn_cast<DeclareStmt>(statement.get()))
+            switch (statement->getKind())
             {
+            case NodeKind::DeclareStmt:
+            {
+                auto *x = cast<DeclareStmt>(statement.get());
                 analyzeDeclareStmt(*x);
+                break;
             }
-            else if (auto *x = dyn_cast<ExprStmt>(statement.get()))
+            case NodeKind::ExprStmt:
             {
+                auto *x = cast<ExprStmt>(statement.get());
                 analyzeExprStmt(*x);
+                break;
             }
-            else if (auto *x = dyn_cast<BlockStmt>(statement.get()))
+            case NodeKind::BlockStmt:
             {
+                auto *x = cast<BlockStmt>(statement.get());
                 symbolTable.enterScope();
                 analyzeStatements(*x);
                 symbolTable.exitScope();
+                break;
             }
-            else if (auto *x = dyn_cast<ReturnStmt>(statement.get()))
+            case NodeKind::ReturnStmt:
             {
+                auto *x = cast<ReturnStmt>(statement.get());
                 analyzeReturnStmt(*x);
+                break;
             }
-            else if (auto *x = dyn_cast<IfStmt>(statement.get()))
+            case NodeKind::IfStmt:
             {
+                auto *x = cast<IfStmt>(statement.get());
                 analyzeIfStmt(*x);
+                break;
             }
-            else if (auto *x = dyn_cast<WhileStmt>(statement.get()))
+            case NodeKind::WhileStmt:
             {
+                auto *x = cast<WhileStmt>(statement.get());
                 analyzeWhileStmt(*x);
+                break;
             }
-            else if (auto *x = dyn_cast<DoWhileStmt>(statement.get()))
+            case NodeKind::DoWhileStmt:
             {
+                auto *x = cast<DoWhileStmt>(statement.get());
                 analyzeDoWhileStmt(*x);
+                break;
             }
-            else if (auto *x = dyn_cast<ForStmt>(statement.get()))
+            case NodeKind::ForStmt:
             {
+                auto *x = cast<ForStmt>(statement.get());
                 analyzeForStmt(*x);
+                break;
             }
-            else if (isa<BreakStmt>(statement.get()) || isa<ContinueStmt>(statement.get()))
+            case NodeKind::BreakStmt:
+            case NodeKind::ContinueStmt:
             {
                 analyzeBreakContinueStmt(*statement);
+                break;
             }
-            else if (auto *x = dyn_cast<FunctionDeclStmt>(statement.get()))
+            case NodeKind::FunctionDeclStmt:
             {
+                auto *x = cast<FunctionDeclStmt>(statement.get());
                 analyzeFunctionDeclStmt(*x);
+                break;
+            }
+            default:
+                break;
             }
         }
     }
