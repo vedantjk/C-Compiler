@@ -14,6 +14,7 @@ enum class RegisterName
     R10,
     R11,
     SP,
+    BP,
     XMM0,
     XMM1,
     XMM2,
@@ -105,16 +106,17 @@ class PseudoRegister : public Operand
         : name(std::move(name_)), type(type_) {};
 };
 
-class Stack : public Operand
-{
-  public:
-    int depth;
-    explicit Stack(const int depth_) : depth(depth_) {};
-};
-
 class Data : public Operand
 {
   public:
     std::string identifier;
     explicit Data(std::string identifier_) : identifier(std::move(identifier_)) {}
+};
+
+class Memory : public Operand
+{
+  public:
+    RegisterName reg;
+    int offset;
+    Memory(RegisterName reg_, int offset_) : reg(reg_), offset(offset_) {}
 };

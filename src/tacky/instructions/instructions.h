@@ -2,6 +2,7 @@
 #include "../../utils/common.h"
 #include "val.h"
 #include <optional>
+#include <utility>
 
 class TackyInstruction
 {
@@ -177,6 +178,36 @@ class TackyFunctionCall : public TackyInstruction
                       TackyVal dst_, bool variadic_ = false)
         : TackyInstruction(line_, col_), funcName(std::move(funcName_)), args(std::move(args_)),
           dst(std::move(dst_)), variadic(variadic_)
+    {
+    }
+};
+
+class TackyGetAddress : public TackyInstruction
+{
+  public:
+    TackyVal src, dst;
+    TackyGetAddress(int line_, int col_, TackyVal src_, TackyVal dst_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class TackyLoad : public TackyInstruction
+{
+  public:
+    TackyVal srcPtr, dst;
+    TackyLoad(int line_, int col_, TackyVal srcPtr_, TackyVal dst_)
+        : TackyInstruction(line_, col_), srcPtr(std::move(srcPtr_)), dst(std::move(dst_))
+    {
+    }
+};
+
+class TackyStore : public TackyInstruction
+{
+  public:
+    TackyVal src, dstPtr;
+    TackyStore(int line_, int col_, TackyVal src_, TackyVal dstPtr_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dstPtr(std::move(dstPtr_))
     {
     }
 };

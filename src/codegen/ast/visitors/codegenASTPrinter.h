@@ -330,6 +330,15 @@ class codegenASTPrinter
         out << "call    " << node.identifier << "@PLT";
     }
 
+    void visit(const LeaInstruction &node) const
+    {
+        // leaq computes an effective address: always a quadword operation.
+        out << "leaq    ";
+        dispatch(*node.src);
+        out << ", ";
+        dispatch(*node.dst);
+    }
+
     void dispatch(const Instruction &node) const
     {
         if (auto *p = dynamic_cast<const MoveInstruction *>(&node))
@@ -400,9 +409,26 @@ class codegenASTPrinter
         {
             visit(*p);
         }
+        else if (auto *p = dynamic_cast<const LeaInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else
+        {
+            throw std::runtime_error("codegenASTPrinter: unhandled instruction kind");
+        }
     }
 
-    void visit(const Stack &node) const { out << node.depth << "(%rbp)"; }
+    // disp(%base): the base register is always addressed as 64-bit. A zero
+    // displacement is omitted, so Memory(AX, 0) prints as the bare "(%rax)".
+    void visit(const Memory &node) const
+    {
+        if (node.offset != 0)
+            out << node.offset;
+        out << "(";
+        visit(Register(node.reg, 8));
+        out << ")";
+    }
 
     void visit(const Data &node) const { out << node.identifier << "(%rip)"; }
 
@@ -495,6 +521,10 @@ class codegenASTPrinter
         {
             out << "%rsp"; // the stack pointer is always addressed as the 64-bit register
         }
+        else if (node.name == RegisterName::BP)
+        {
+            out << "%rbp"; // the frame pointer is always addressed as the 64-bit register
+        }
         // XMM registers have no sub-register widths: `bytes` is ignored.
         else if (node.name == RegisterName::XMM0)
             out << "%xmm0";
@@ -528,17 +558,21 @@ class codegenASTPrinter
         {
             visit(*p);
         }
-        else if (auto *p = dynamic_cast<const Stack *>(&node))
+        else if (auto *p = dynamic_cast<const Data *>(&node))
         {
             visit(*p);
         }
-        else if (auto *p = dynamic_cast<const Data *>(&node))
+        else if (auto *p = dynamic_cast<const Memory *>(&node))
         {
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const PseudoRegister *>(&node))
         {
             throw std::runtime_error("PseudoRegister leaked past pass 2");
+        }
+        else
+        {
+            throw std::runtime_error("codegenASTPrinter: unhandled operand kind");
         }
     }
 

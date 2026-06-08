@@ -199,3 +199,13 @@ class CVTSI2SD : public Instruction
     {
     }
 };
+
+class LeaInstruction : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> src, dst;
+    LeaInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_)
+        : src(std::move(src_)), dst(std::move(dst_))
+    {
+    }
+};

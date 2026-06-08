@@ -653,6 +653,40 @@ class codegenDriver
         instructions.push_back(std::make_unique<Label>(endLabel));
     }
 
+    void processTackyLoad(const TackyLoad &tackyLoad,
+                          std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto ptr = tackyValToOperand(tackyLoad.srcPtr);
+        auto dst = tackyValToOperand(tackyLoad.dst);
+        auto dstType = assemblyTypeOf(tackyLoad.dst);
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::move(ptr), std::make_unique<Register>(RegisterName::AX, 8),
+            AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::make_unique<Memory>(RegisterName::AX, 0), std::move(dst), dstType));
+    }
+
+    void processTackyStore(const TackyStore &tackyStore,
+                           std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto ptr = tackyValToOperand(tackyStore.dstPtr);
+        auto src = tackyValToOperand(tackyStore.src);
+        auto srcType = assemblyTypeOf(tackyStore.src);
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::move(ptr), std::make_unique<Register>(RegisterName::AX, 8),
+            AssemblyType::QUADWORD));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::move(src), std::make_unique<Memory>(RegisterName::AX, 0), srcType));
+    }
+
+    void processTackyGetAddress(const TackyGetAddress &tackyGetAddress,
+                                std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(tackyGetAddress.src);
+        auto dst = tackyValToOperand(tackyGetAddress.dst);
+        instructions.push_back(std::make_unique<LeaInstruction>(std::move(src), std::move(dst)));
+    }
+
     void processTackyInstructions(
         const std::vector<std::unique_ptr<TackyInstruction>> &tackyInstructions,
         std::vector<std::unique_ptr<Instruction>> &instructions)
@@ -723,6 +757,22 @@ class codegenDriver
             {
                 processTackyDoubleToUInt(*p, instructions);
             }
+            else if (auto *p = dynamic_cast<TackyLoad *>(instruction.get()))
+            {
+                processTackyLoad(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyStore *>(instruction.get()))
+            {
+                processTackyStore(*p, instructions);
+            }
+            else if (auto *p = dynamic_cast<TackyGetAddress *>(instruction.get()))
+            {
+                processTackyGetAddress(*p, instructions);
+            }
+            else
+            {
+                throw std::runtime_error("codegen: unhandled TACKY instruction kind");
+            }
         }
     }
 
@@ -759,9 +809,9 @@ class codegenDriver
             }
 
             // Overflowed its register bank: read from the caller's stack frame.
-            instructions.push_back(
-                std::make_unique<MoveInstruction>(std::make_unique<Stack>(stackOffset),
-                                                  std::make_unique<PseudoRegister>(pname, pt), pt));
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Memory>(RegisterName::BP, stackOffset),
+                std::make_unique<PseudoRegister>(pname, pt), pt));
             stackOffset += 8;
         }
 
@@ -797,7 +847,7 @@ class codegenDriver
             }
             found = pseudoToOffset.emplace(p->name, -used).first;
         }
-        slot = std::make_unique<Stack>(found->second);
+        slot = std::make_unique<Memory>(RegisterName::BP, found->second);
     }
 
     void removePseudosFromFunction(codegenFunction &func,
@@ -862,6 +912,11 @@ class codegenDriver
                 lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
                 lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
             }
+            else if (auto *p = dynamic_cast<LeaInstruction *>(instruction.get()))
+            {
+                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
+                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
+            }
         }
         if (int frameSize = used; frameSize > 0)
         {
@@ -884,18 +939,20 @@ class codegenDriver
         }
     }
 
-    bool isStack(const Operand &op) { return dynamic_cast<const Stack *>(&op) != nullptr; }
     bool isData(const Operand &op) { return dynamic_cast<const Data *>(&op) != nullptr; }
-    bool isMemory(const Operand &op) { return isStack(op) || isData(op); }
+    bool isMemory(const Operand &op)
+    {
+        return dynamic_cast<const Memory *>(&op) != nullptr || isData(op);
+    }
 
-    // Clone a memory operand (Stack or Data) — used when a fixup needs two copies
+    // Clone a memory operand (Memory or Data) — used when a fixup needs two copies
     // of an instruction's memory destination.
     std::unique_ptr<Operand> cloneMemory(const Operand *op)
     {
-        if (auto *s = dynamic_cast<const Stack *>(op))
-            return std::make_unique<Stack>(*s);
         if (auto *d = dynamic_cast<const Data *>(op))
             return std::make_unique<Data>(*d);
+        if (auto *m = dynamic_cast<const Memory *>(op))
+            return std::make_unique<Memory>(*m);
         return nullptr;
     }
 
@@ -1147,6 +1204,23 @@ class codegenDriver
                 rewritten.push_back(std::make_unique<MoveInstruction>(
                     std::move(m->a), reg(RegisterName::R10, 8), AssemblyType::QUADWORD));
                 rewritten.push_back(std::make_unique<PushInstruction>(reg(RegisterName::R10, 8)));
+            }
+            else if (auto *m = dynamic_cast<LeaInstruction *>(instr.get()))
+            {
+                auto src = std::move(m->src);
+                auto dst = std::move(m->dst);
+                if (isMemory(*dst))
+                {
+                    rewritten.push_back(std::make_unique<LeaInstruction>(
+                        std::move(src), reg(RegisterName::R11, 8)));
+                    rewritten.push_back(std::make_unique<MoveInstruction>(
+                        reg(RegisterName::R11, 8), std::move(dst), AssemblyType::QUADWORD));
+                }
+                else
+                {
+                    rewritten.push_back(
+                        std::make_unique<LeaInstruction>(std::move(src), std::move(dst)));
+                }
             }
             else
             {

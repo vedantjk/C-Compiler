@@ -8,18 +8,22 @@ enum class ConstantType
     LONG,
     UINT,
     ULONG,
-    DOUBLE
+    DOUBLE,
+    POINTER
 };
 
 // Width in bytes: int/uint are 4, long/ulong are 8.
 inline int ctBytes(const ConstantType t)
 {
-    return (t == ConstantType::LONG || t == ConstantType::ULONG) ? 8 : 4;
+    return (t == ConstantType::LONG || t == ConstantType::ULONG || t == ConstantType::POINTER) ? 8
+                                                                                               : 4;
 }
 
 inline bool isUnsignedCt(const ConstantType t)
 {
-    return t == ConstantType::UINT || t == ConstantType::ULONG;
+    // Pointers compare as unsigned quantities (an address with the high bit set
+    // must order above a low one), so POINTER counts as unsigned here.
+    return t == ConstantType::UINT || t == ConstantType::ULONG || t == ConstantType::POINTER;
 }
 
 inline bool isIntCt(const ConstantType t)
@@ -56,6 +60,15 @@ class TackyVar
 };
 
 using TackyVal = std::variant<TackyConstant, TackyVar, TackyFloatingConstant>;
+
+class DereferencedPointer
+{
+  public:
+    TackyVal ptr; // the pointer operand; ptr's type is POINTER
+    explicit DereferencedPointer(TackyVal ptr_) : ptr(std::move(ptr_)) {}
+};
+
+using ExpResult = std::variant<TackyVal, DereferencedPointer>;
 
 // Both alternatives carry a `type`, so every TackyVal is self-describing.
 inline ConstantType typeOf(const TackyVal &v)

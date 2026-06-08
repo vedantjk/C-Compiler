@@ -172,6 +172,28 @@ class TackyDebugPrinter
 
     void visit(const TackyLabel &node) const { out << node.identifier << ":"; }
 
+    void visit(const TackyGetAddress &node) const
+    {
+        visit(node.dst);
+        out << " = &";
+        visit(node.src);
+    }
+
+    void visit(const TackyLoad &node) const
+    {
+        visit(node.dst);
+        out << " = load ";
+        visit(node.srcPtr);
+    }
+
+    void visit(const TackyStore &node) const
+    {
+        out << "store ";
+        visit(node.src);
+        out << " -> ";
+        visit(node.dstPtr);
+    }
+
     void dispatch(const TackyInstruction &node) const
     {
         if (auto *p = dynamic_cast<const TackyReturn *>(&node))
@@ -250,6 +272,21 @@ class TackyDebugPrinter
             return;
         }
         if (auto *p = dynamic_cast<const TackyLabel *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyGetAddress *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyLoad *>(&node))
+        {
+            visit(*p);
+            return;
+        }
+        if (auto *p = dynamic_cast<const TackyStore *>(&node))
         {
             visit(*p);
             return;

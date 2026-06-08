@@ -32,6 +32,8 @@ class TackyDriver
             return ConstantType::LONG;
         if (std::dynamic_pointer_cast<DoubleType>(literalType))
             return ConstantType::DOUBLE;
+        if (std::dynamic_pointer_cast<PointerType>(literalType))
+            return ConstantType::POINTER;
         return ConstantType::INT;
     }
 
@@ -48,6 +50,15 @@ class TackyDriver
     {
         tempCounters[name]++;
         return "." + name + std::to_string(tempCounters[name]);
+    }
+
+    ExpResult processLvalue(const std::shared_ptr<Expression> &e,
+                            std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (auto u = std::dynamic_pointer_cast<UnaryExpr>(e); u && u->op == "*")
+            return DereferencedPointer{processExpression(u->operand, instructions)};
+        // plain variable (or anything else that's a simple operand)
+        return processExpression(e, instructions);
     }
 
     TackyVal processFloatingLiteral(const std::shared_ptr<FloatingLiterals> &floatLiteral)
@@ -120,6 +131,29 @@ class TackyDriver
         else if (unaryExpr->op == "++" || unaryExpr->op == "--")
         {
             return processIncrementDecrement(unaryExpr, instructions);
+        }
+        else if (unaryExpr->op == "*")
+        {
+            auto ptr = processExpression(unaryExpr->operand, instructions); // the pointer
+            TackyVar dst{makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType)};
+            instructions.push_back(
+                std::make_unique<TackyLoad>(unaryExpr->line, unaryExpr->col, ptr, dst));
+            return dst;
+        }
+        else if (unaryExpr->op == "&")
+        {
+            auto inner = processLvalue(unaryExpr->operand, instructions);
+
+            if (auto *dp = std::get_if<DereferencedPointer>(&inner))
+            {
+                return dp->ptr;
+            }
+
+            auto *operand = std::get_if<TackyVal>(&inner);
+            TackyVar dst{makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType)};
+            instructions.push_back(
+                std::make_unique<TackyGetAddress>(unaryExpr->line, unaryExpr->col, *operand, dst));
+            return dst;
         }
         else
             throw std::runtime_error("unhandled unary op: " + unaryExpr->op);
@@ -239,21 +273,45 @@ class TackyDriver
     TackyVal processAssignExpr(const std::shared_ptr<AssignExpr> &assignExpr,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        auto lhs = processExpression(assignExpr->lhs, instructions);
+        auto lhs = processLvalue(assignExpr->lhs, instructions);
         auto rhs = processExpression(assignExpr->rhs, instructions);
-        if (assignExpr->op != "=")
-        {
-            BinaryOp op = stringToBinaryOp(assignExpr->op);
-            instructions.push_back(std::make_unique<TackyBinary>(assignExpr->line, assignExpr->col,
-                                                                 op, lhs, rhs, lhs));
-        }
-        else
-        {
-            instructions.push_back(
-                std::make_unique<TackyCopy>(assignExpr->line, assignExpr->col, rhs, lhs));
-        }
 
-        return lhs;
+        if (auto *v = std::get_if<TackyVal>(&lhs))
+        {
+            if (assignExpr->op != "=")
+            {
+                BinaryOp op = stringToBinaryOp(assignExpr->op);
+                instructions.push_back(std::make_unique<TackyBinary>(
+                    assignExpr->line, assignExpr->col, op, *v, rhs, *v));
+            }
+            else
+            {
+                instructions.push_back(
+                    std::make_unique<TackyCopy>(assignExpr->line, assignExpr->col, rhs, *v));
+            }
+            return *v;
+        }
+        if (auto *v = std::get_if<DereferencedPointer>(&lhs))
+        {
+            TackyVal stored = rhs;
+            if (assignExpr->op != "=")
+            {
+                // *p OP= rhs  ->  load *p, combine, store back
+                ConstantType ct = returnConstantType(assignExpr->lhs->resolvedType); // type of *p
+                TackyVar cur{makeTemp("tmp."), ct};
+                instructions.push_back(
+                    std::make_unique<TackyLoad>(assignExpr->line, assignExpr->col, v->ptr, cur));
+                TackyVar res{makeTemp("tmp."), ct};
+                BinaryOp op = stringToBinaryOp(assignExpr->op);
+                instructions.push_back(std::make_unique<TackyBinary>(
+                    assignExpr->line, assignExpr->col, op, cur, rhs, res));
+                stored = res;
+            }
+            instructions.push_back(
+                std::make_unique<TackyStore>(assignExpr->line, assignExpr->col, stored, v->ptr));
+            return stored;
+        }
+        return rhs;
     }
 
     TackyVal processTernaryExpr(const std::shared_ptr<TernaryExpr> &ternaryExpr,
