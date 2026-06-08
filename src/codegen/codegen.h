@@ -91,7 +91,14 @@ class codegenDriver
         }
         if (auto *v = std::get_if<TackyVar>(&t))
         {
-            return std::make_unique<PseudoRegister>(v->name, assemblyTypeOf(t));
+            auto pr = std::make_unique<PseudoRegister>(v->name, assemblyTypeOf(t));
+            // Copy self-typing fields from the TackyVar. Inert this step (CG2 reads
+            // them in lowerPseudoSlot); side-maps remain authoritative.
+            pr->isStatic = v->isStatic;
+            pr->objSize = v->objSize;
+            pr->objAlign = v->objAlign;
+            pr->structTag = v->structTag;
+            return pr;
         }
         return nullptr;
     }

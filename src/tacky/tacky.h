@@ -73,9 +73,18 @@ class TackyDriver
     void recordArrayObject(const std::string &name, const std::shared_ptr<Type> &t)
     {
         if (std::dynamic_pointer_cast<ArrayType>(t))
+        {
             arrayObjects[name] = ArrayObject{sizeOfType(t), objectAlignOf(t)};
+            // Stamp varInfo in parallel with the side-map.
+            varInfo[name].objSize = sizeOfType(t);
+            varInfo[name].objAlign = objectAlignOf(t);
+        }
         else if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        {
             structObjects[name] = classifyStruct(s->getName());
+            // Stamp varInfo in parallel with the side-map.
+            varInfo[name].structTag = s->getName();
+        }
     }
 
     static bool isStructType(const std::shared_ptr<Type> &t)
@@ -88,6 +97,19 @@ class TackyDriver
     std::set<Symbol *> seenVarDecls;
     std::unordered_map<std::string, ArrayObject> arrayObjects;
     std::unordered_map<std::string, StructABI> structObjects;
+
+    // Self-typing metadata parallel to the three side-maps above. Populated at
+    // the same sites so TK3 can stamp TackyVars as they are created. The maps
+    // remain authoritative; this table is the source of truth for TackyVar fields
+    // only — lowerPseudoSlot still reads the maps (until CG2).
+    struct VarInfo
+    {
+        bool isStatic = false;
+        long long objSize = 0;
+        int objAlign = 0;
+        std::string structTag; // non-empty => struct
+    };
+    std::unordered_map<std::string, VarInfo> varInfo;
 
     // Anonymous read-only constants for string literals used as values. Each gets a
     // label, its decoded bytes, and an alignment; emitted as null-terminated data.
@@ -121,7 +143,15 @@ class TackyDriver
 
     TackyVal internStringLiteral(const StringLiterals *s)
     {
-        return TackyVar(internBytes(decodeStringLiteral(s->literal)), ConstantType::POINTER);
+        const std::string label = internBytes(decodeStringLiteral(s->literal));
+        // String-constant labels are static (RIP-relative); mark the varInfo entry so
+        // the TackyVar returned here gets isStatic=true in processVariableExpr or via
+        // the final staticNames sweep in tacky(). We stamp eagerly here too so the
+        // value is correct if anything reads it before the final sweep.
+        varInfo[label].isStatic = true;
+        TackyVar v(label, ConstantType::POINTER);
+        v.isStatic = true;
+        return v;
     }
 
     // Element address ptrExpr +/- index*elementSize, the shared core of pointer
@@ -271,6 +301,7 @@ class TackyDriver
     {
         std::string name = makeTemp("struct.");
         structObjects[name] = classifyStruct(structTagOf(type));
+        varInfo[name].structTag = structTagOf(type); // stamp parallel to side-map
         return name;
     }
 
@@ -281,6 +312,7 @@ class TackyDriver
         {
             const std::string name = v->symbol ? v->symbol->uniqueName : v->name;
             structObjects[name] = classifyStruct(structTagOf(e->resolvedType));
+            varInfo[name].structTag = structTagOf(e->resolvedType); // stamp parallel to side-map
             return name;
         }
         const std::string name = freshStructTemp(e->resolvedType);
@@ -566,9 +598,19 @@ class TackyDriver
     TackyVal processVariableExpr(const VariableExpr *variableExpr,
                                  std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        return TackyVar(variableExpr->symbol ? variableExpr->symbol->uniqueName
-                                             : variableExpr->name,
-                        returnConstantType(variableExpr->resolvedType));
+        const std::string &name =
+            variableExpr->symbol ? variableExpr->symbol->uniqueName : variableExpr->name;
+        TackyVar v(name, returnConstantType(variableExpr->resolvedType));
+        // Stamp self-typing fields from the varInfo table (populated at the same
+        // sites as the side-maps; inert until CG2 reads them in lowerPseudoSlot).
+        if (auto it = varInfo.find(name); it != varInfo.end())
+        {
+            v.isStatic = it->second.isStatic;
+            v.objSize = it->second.objSize;
+            v.objAlign = it->second.objAlign;
+            v.structTag = it->second.structTag;
+        }
+        return v;
     }
 
     // For `ptr += n` / `ptr -= n` the integer is scaled by the element size, like
@@ -1039,6 +1081,8 @@ class TackyDriver
                 if (vd->symbol->duration == StorageDuration::Static)
                 {
                     seenVarDecls.insert(vd->symbol.get());
+                    varInfo[vd->symbol->uniqueName].isStatic =
+                        true; // stamp parallel to seenVarDecls
                 }
                 else if (vd->symbol->linkage == Linkage::External &&
                          vd->symbol->duration == StorageDuration::Automatic)
@@ -1252,7 +1296,10 @@ class TackyDriver
             // A by-value struct parameter needs a sized slot and a classification so
             // codegen can reassemble it from its incoming registers/stack bytes.
             if (isStructType(param.type))
+            {
                 structObjects[param.name] = classifyStruct(structTagOf(param.type));
+                varInfo[param.name].structTag = structTagOf(param.type); // stamp parallel
+            }
             params.push_back({param.name, returnConstantType(param.type)});
         }
         processBlockStmt(*functionNode.statements, instructions);
@@ -1278,6 +1325,14 @@ class TackyDriver
 
     std::unique_ptr<TackyProgram> tacky(Program &prog)
     {
+        // Pre-scan: seed varInfo.isStatic for all file-scope VarDecls before
+        // processing function bodies, so processVariableExpr stamps them correctly
+        // even when a function references a global that appears later in source order.
+        for (const auto &node : prog.nodes)
+            if (const auto *p = dyn_cast<VarDecl>(node.get()))
+                if (p->symbol)
+                    varInfo[p->symbol->uniqueName].isStatic = true;
+
         std::vector<std::unique_ptr<TackyTopLevelNode>> nodes;
         for (const auto &node : prog.nodes)
         {
@@ -1323,15 +1378,25 @@ class TackyDriver
         // Record every static-storage name (incl. extern-only declarations) so
         // codegen resolves their references to RIP-relative data, not stack slots.
         for (const auto &symbol : seenVarDecls)
+        {
             program->staticNames.insert(symbol->uniqueName);
+            varInfo[symbol->uniqueName].isStatic = true; // stamp parallel to staticNames
+        }
         // String-constant labels are static data too: references lower to RIP data.
         for (const auto &sc : stringConstants)
+        {
             program->staticNames.insert(sc.label);
+            varInfo[sc.label].isStatic = true; // stamp parallel to staticNames
+        }
         // Static-storage struct objects also need a classification (e.g. when one is
         // passed or returned by value), though their storage is data, not a slot.
         for (const auto &symbol : seenVarDecls)
             if (isStructType(symbol->type))
+            {
                 structObjects[symbol->uniqueName] = classifyStruct(structTagOf(symbol->type));
+                varInfo[symbol->uniqueName].structTag =
+                    structTagOf(symbol->type); // stamp parallel to structObjects
+            }
         program->arrayObjects = std::move(arrayObjects);
         program->structObjects = std::move(structObjects);
         return program;

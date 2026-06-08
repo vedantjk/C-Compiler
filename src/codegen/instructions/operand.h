@@ -103,6 +103,14 @@ class PseudoRegister : public Operand
   public:
     std::string name;
     AssemblyType type; // width of the value, so the stack-slot pass sizes it 4 vs 8
+
+    // Self-typing fields copied from TackyVar (inert until CG2 reads them in
+    // lowerPseudoSlot; side-maps remain authoritative this stage).
+    bool isStatic = false;
+    long long objSize = 0;
+    int objAlign = 0;
+    std::string structTag;
+
     explicit PseudoRegister(std::string name_, AssemblyType type_ = AssemblyType::LONGWORD)
         : name(std::move(name_)), type(type_) {};
 };
@@ -135,6 +143,14 @@ class PseudoMem : public Operand
     std::string name;
     int offset;
     AssemblyType type;
+
+    // Self-typing fields copied from TackyVar (inert until CG2 reads them in
+    // lowerPseudoSlot; side-maps remain authoritative this stage).
+    bool isStatic = false;
+    long long objSize = 0;
+    int objAlign = 0;
+    std::string structTag;
+
     PseudoMem(std::string name_, int offset_, AssemblyType type_ = AssemblyType::LONGWORD)
         : name(std::move(name_)), offset(offset_), type(type_)
     {

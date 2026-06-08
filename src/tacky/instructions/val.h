@@ -61,6 +61,15 @@ class TackyVar
   public:
     std::string name;
     ConstantType type; // width of the value this virtual register holds
+
+    // Self-typing fields (additive; not yet read by codegen — side-maps are still
+    // authoritative). Populated at the same sites that write the side-maps so the
+    // next refactor stage (CG2) can drop the maps and read these instead.
+    bool isStatic = false; // true iff the name is in staticNames (RIP-relative)
+    long long objSize = 0; // aggregate slot size in bytes; 0 => scalar
+    int objAlign = 0;      // aggregate slot alignment; 0 => scalar
+    std::string structTag; // non-empty => struct; codegen calls classifyStruct(structTag)
+
     TackyVar(std::string name_, const ConstantType type_) : name(std::move(name_)), type(type_) {};
 };
 
