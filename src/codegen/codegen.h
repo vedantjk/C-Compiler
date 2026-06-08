@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../support/RTTI.h"
 #include "../tacky/ast/ASTNodes/TackyProgram.h"
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
 #include "ast/TopLevelNodes/codegenStaticConstant.h"
@@ -969,88 +970,110 @@ class codegenDriver
     {
         for (const auto &instruction : tackyInstructions)
         {
-            if (auto *p = dynamic_cast<TackyReturn *>(instruction.get()))
+            switch (instruction->getKind())
             {
-                processTackyReturn(*p, instructions);
+            case TackyKind::Return:
+            {
+                processTackyReturn(*cast<TackyReturn>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyUnary *>(instruction.get()))
+            case TackyKind::Unary:
             {
-                processTackyUnary(*p, instructions);
+                processTackyUnary(*cast<TackyUnary>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyBinary *>(instruction.get()))
+            case TackyKind::Binary:
             {
-                processTackyBinary(*p, instructions);
+                processTackyBinary(*cast<TackyBinary>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyJump *>(instruction.get()))
+            case TackyKind::Jump:
             {
-                processTackyJump(*p, instructions);
+                processTackyJump(*cast<TackyJump>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyJumpIfZero *>(instruction.get()))
+            case TackyKind::JumpIfZero:
             {
-                processTackyJumpIfZero(*p, instructions);
+                processTackyJumpIfZero(*cast<TackyJumpIfZero>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyJumpIfNotZero *>(instruction.get()))
+            case TackyKind::JumpIfNotZero:
             {
-                processTackyJumpIfNotZero(*p, instructions);
+                processTackyJumpIfNotZero(*cast<TackyJumpIfNotZero>(instruction.get()),
+                                          instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyCopy *>(instruction.get()))
+            case TackyKind::Copy:
             {
-                processTackyCopy(*p, instructions);
+                processTackyCopy(*cast<TackyCopy>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyLabel *>(instruction.get()))
+            case TackyKind::Label:
             {
-                processTackyLabel(*p, instructions);
+                processTackyLabel(*cast<TackyLabel>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyFunctionCall *>(instruction.get()))
+            case TackyKind::FunctionCall:
             {
-                processTackyFunctionCall(*p, instructions);
+                processTackyFunctionCall(*cast<TackyFunctionCall>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackySignExtend *>(instruction.get()))
+            case TackyKind::SignExtend:
             {
-                processTackySignExtend(*p, instructions);
+                processTackySignExtend(*cast<TackySignExtend>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyTruncate *>(instruction.get()))
+            case TackyKind::Truncate:
             {
-                processTackyTruncate(*p, instructions);
+                processTackyTruncate(*cast<TackyTruncate>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyZeroExtend *>(instruction.get()))
+            case TackyKind::ZeroExtend:
             {
-                processTackyZeroExtend(*p, instructions);
+                processTackyZeroExtend(*cast<TackyZeroExtend>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyIntToDouble *>(instruction.get()))
+            case TackyKind::IntToDouble:
             {
-                processTackyIntToDouble(*p, instructions);
+                processTackyIntToDouble(*cast<TackyIntToDouble>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyDoubleToInt *>(instruction.get()))
+            case TackyKind::DoubleToInt:
             {
-                processTackyDoubleToInt(*p, instructions);
+                processTackyDoubleToInt(*cast<TackyDoubleToInt>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyUIntToDouble *>(instruction.get()))
+            case TackyKind::UIntToDouble:
             {
-                processTackyUIntToDouble(*p, instructions);
+                processTackyUIntToDouble(*cast<TackyUIntToDouble>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyDoubleToUInt *>(instruction.get()))
+            case TackyKind::DoubleToUInt:
             {
-                processTackyDoubleToUInt(*p, instructions);
+                processTackyDoubleToUInt(*cast<TackyDoubleToUInt>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyLoad *>(instruction.get()))
+            case TackyKind::Load:
             {
-                processTackyLoad(*p, instructions);
+                processTackyLoad(*cast<TackyLoad>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyStore *>(instruction.get()))
+            case TackyKind::Store:
             {
-                processTackyStore(*p, instructions);
+                processTackyStore(*cast<TackyStore>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyGetAddress *>(instruction.get()))
+            case TackyKind::GetAddress:
             {
-                processTackyGetAddress(*p, instructions);
+                processTackyGetAddress(*cast<TackyGetAddress>(instruction.get()), instructions);
+                break;
             }
-            else if (auto *p = dynamic_cast<TackyCopyToOffset *>(instruction.get()))
+            case TackyKind::CopyToOffset:
             {
-                processTackyCopyToOffset(*p, instructions);
+                processTackyCopyToOffset(*cast<TackyCopyToOffset>(instruction.get()), instructions);
+                break;
             }
-            else
-            {
+            default:
                 throw std::runtime_error("codegen: unhandled TACKY instruction kind");
             }
         }

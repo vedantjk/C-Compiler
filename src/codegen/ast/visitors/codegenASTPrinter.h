@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../support/RTTI.h"
 #include "../../instructions/instructions.h"
 #include "../ASTNodes/codegenProgram.h"
 #include "../TopLevelNodes/codegenFunction.h"
@@ -405,84 +406,104 @@ class codegenASTPrinter
 
     void dispatch(const Instruction &node) const
     {
-        if (auto *p = dynamic_cast<const MoveInstruction *>(&node))
+        switch (node.getKind())
         {
-            visit(*p);
+        case InstrKind::MoveInstruction:
+        {
+            visit(*cast<const MoveInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const ReturnInstruction *>(&node))
+        case InstrKind::ReturnInstruction:
         {
-            visit(*p);
+            visit(*cast<const ReturnInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const UnaryInstruction *>(&node))
+        case InstrKind::UnaryInstruction:
         {
-            visit(*p);
+            visit(*cast<const UnaryInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const BinaryInstruction *>(&node))
+        case InstrKind::BinaryInstruction:
         {
-            visit(*p);
+            visit(*cast<const BinaryInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const IDivInstruction *>(&node))
+        case InstrKind::IDivInstruction:
         {
-            visit(*p);
+            visit(*cast<const IDivInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const DivInstruction *>(&node))
+        case InstrKind::DivInstruction:
         {
-            visit(*p);
+            visit(*cast<const DivInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const CdqInstruction *>(&node))
+        case InstrKind::CdqInstruction:
         {
-            visit(*p);
+            visit(*cast<const CdqInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const CmpInstruction *>(&node))
+        case InstrKind::CmpInstruction:
         {
-            visit(*p);
+            visit(*cast<const CmpInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const JumpInstruction *>(&node))
+        case InstrKind::JumpInstruction:
         {
-            visit(*p);
+            visit(*cast<const JumpInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const JumpCCInstruction *>(&node))
+        case InstrKind::JumpCCInstruction:
         {
-            visit(*p);
+            visit(*cast<const JumpCCInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const SetCCInstruction *>(&node))
+        case InstrKind::SetCCInstruction:
         {
-            visit(*p);
+            visit(*cast<const SetCCInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const Label *>(&node))
+        case InstrKind::Label:
         {
-            visit(*p);
+            visit(*cast<const Label>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const PushInstruction *>(&node))
+        case InstrKind::PushInstruction:
         {
-            visit(*p);
+            visit(*cast<const PushInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const CallInstruction *>(&node))
+        case InstrKind::CallInstruction:
         {
-            visit(*p);
+            visit(*cast<const CallInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const MoveSXInstruction *>(&node))
+        case InstrKind::MoveSXInstruction:
         {
-            visit(*p);
+            visit(*cast<const MoveSXInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const MoveZeroExtendInstruction *>(&node))
+        case InstrKind::MoveZeroExtendInstruction:
         {
-            visit(*p);
+            visit(*cast<const MoveZeroExtendInstruction>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const CVTSI2SD *>(&node))
+        case InstrKind::CVTSI2SD:
         {
-            visit(*p);
+            visit(*cast<const CVTSI2SD>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const CVTTSD2SI *>(&node))
+        case InstrKind::CVTTSD2SI:
         {
-            visit(*p);
+            visit(*cast<const CVTTSD2SI>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const LeaInstruction *>(&node))
+        case InstrKind::LeaInstruction:
         {
-            visit(*p);
+            visit(*cast<const LeaInstruction>(&node));
+            break;
         }
-        else
-        {
+        default:
             throw std::runtime_error("codegenASTPrinter: unhandled instruction kind");
         }
     }
@@ -624,28 +645,37 @@ class codegenASTPrinter
 
     void dispatch(const Operand &node) const
     {
-        if (auto *p = dynamic_cast<const Immediate *>(&node))
+        switch (node.getKind())
         {
-            visit(*p);
-        }
-        else if (auto *p = dynamic_cast<const Register *>(&node))
+        case OperandKind::Immediate:
         {
-            visit(*p);
+            visit(*cast<const Immediate>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const Data *>(&node))
+        case OperandKind::Register:
         {
-            visit(*p);
+            visit(*cast<const Register>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const Memory *>(&node))
+        case OperandKind::Data:
         {
-            visit(*p);
+            visit(*cast<const Data>(&node));
+            break;
         }
-        else if (auto *p = dynamic_cast<const PseudoRegister *>(&node))
+        case OperandKind::Memory:
+        {
+            visit(*cast<const Memory>(&node));
+            break;
+        }
+        case OperandKind::PseudoRegister:
         {
             throw std::runtime_error("PseudoRegister leaked past pass 2");
         }
-        else
+        case OperandKind::PseudoMem:
         {
+            throw std::runtime_error("PseudoMem leaked past pass 2");
+        }
+        default:
             throw std::runtime_error("codegenASTPrinter: unhandled operand kind");
         }
     }
