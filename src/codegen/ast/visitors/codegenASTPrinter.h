@@ -1,5 +1,6 @@
 #pragma once
 #include "../../../support/RTTI.h"
+#include "../../AsmWriter.h"
 #include "../../instructions/instructions.h"
 #include "../ASTNodes/codegenProgram.h"
 #include "../TopLevelNodes/codegenFunction.h"
@@ -16,6 +17,7 @@
 class codegenASTPrinter
 {
     std::ostream &out;
+    const AsmWriter &wr;
 
     // Render raw bytes as a gas string-literal body: printable characters as-is
     // (with " and \ escaped), everything else as a 3-digit octal escape.
@@ -43,16 +45,6 @@ class codegenASTPrinter
         return out;
     }
 
-    // AT&T operation-size suffix for an integer assembly type.
-    static char suffix(const AssemblyType t)
-    {
-        if (t == AssemblyType::BYTE)
-            return 'b';
-        if (t == AssemblyType::QUADWORD)
-            return 'q';
-        return 'l';
-    }
-
     void visit(const codegenProgram &node) const
     {
         // Each function emits its own .text and each static its own .data/.bss,
@@ -61,15 +53,14 @@ class codegenASTPrinter
         {
             dispatch(*child);
         }
-        // Mark the stack non-executable. Without this section GNU ld defaults to
-        // an executable stack and warns; required for clean System V/ELF output.
-        out << "    .section .note.GNU-stack,\"\",@progbits\n";
+        // Mark the stack non-executable (required for clean SysV/ELF output).
+        wr.emitFileEpilogue(out);
     }
 
     void visit(const codegenStaticVariable &node) const
     {
         if (node.global)
-            out << "    .globl " << node.name << "\n";
+            wr.emitGlobal(out, node.name);
 
         // All-zero objects (uninitialized statics, fully-padded arrays) go in .bss
         // as a single .zero; anything with a non-zero entry goes in .data.
@@ -77,39 +68,41 @@ class codegenASTPrinter
             std::all_of(node.inits.begin(), node.inits.end(),
                         [](const StaticInit &si) { return si.kind == StaticInit::Kind::Zero; });
 
-        out << (allZero ? "    .bss\n" : "    .data\n");
-        out << "    .align " << node.align << "\n";
+        if (allZero)
+            wr.emitBssSection(out);
+        else
+            wr.emitDataSection(out);
+        wr.emitAlign(out, node.align);
         out << node.name << ":\n";
         for (const auto &si : node.inits)
         {
             switch (si.kind)
             {
             case StaticInit::Kind::Char:
-                out << "    .byte " << si.intVal << "\n";
+                wr.emitInitByte(out, si.intVal);
                 break;
             case StaticInit::Kind::Int:
-                out << "    .long " << si.intVal << "\n";
+                wr.emitInitInt(out, si.intVal);
                 break;
             case StaticInit::Kind::Long:
-                out << "    .quad " << si.intVal << "\n";
+                wr.emitInitLong(out, si.intVal);
                 break;
             case StaticInit::Kind::Double:
                 // 17 significant digits round-trip an IEEE double exactly through gas.
-                out << "    .double " << std::setprecision(17) << si.dblVal << "\n";
+                wr.emitInitDouble(out, si.dblVal);
                 break;
             case StaticInit::Kind::Zero:
-                out << "    .zero " << si.zeroBytes << "\n";
+                wr.emitInitZero(out, si.zeroBytes);
                 break;
             case StaticInit::Kind::String:
                 // .asciz appends a null terminator; .ascii does not.
-                out << (si.strNull ? "    .asciz \"" : "    .ascii \"") << gasStringBody(si.strVal)
-                    << "\"\n";
+                wr.emitInitString(out, gasStringBody(si.strVal), si.strNull);
                 break;
             case StaticInit::Kind::PointerString:
                 // Should have been rewritten to PointerLabel in TACKY.
                 throw std::runtime_error("unresolved PointerString static initializer");
             case StaticInit::Kind::PointerLabel:
-                out << "    .quad " << si.strVal << "\n";
+                wr.emitInitPointerLabel(out, si.strVal);
                 break;
             }
         }
@@ -121,22 +114,21 @@ class codegenASTPrinter
         // conversion bias). Emitted as the raw bit pattern via .quad so values like
         // -0.0 are exact rather than relying on gas re-parsing a printed double.
         const auto bits = std::bit_cast<unsigned long long>(node.value);
-        out << "    .section .rodata\n";
-        out << "    .align " << node.alignment << "\n";
+        wr.emitRodataSection(out);
+        wr.emitAlign(out, node.alignment);
         out << node.name << ":\n";
-        out << "    .quad " << bits << "\n";
+        wr.emitInitLong(out, static_cast<long long>(bits));
         if (node.alignment == 16)
-            out << "    .quad 0\n"; // fill the 128-bit slot xorpd reads packed
+            wr.emitInitLong(out, 0); // fill the 128-bit slot xorpd reads packed
     }
 
     void visit(const codegenFunction &node) const
     {
-        out << "    .text\n";
+        wr.emitTextSection(out);
         if (node.global)
-            out << "    .globl " << node.name << "\n";
+            wr.emitGlobal(out, node.name);
         out << node.name << ":\n";
-        out << "    pushq    %rbp\n";
-        out << "    movq    %rsp, %rbp\n";
+        wr.emitFunctionPrologue(out);
         if (node.stackAllocation != nullptr)
         {
             out << "    ";
@@ -175,92 +167,72 @@ class codegenASTPrinter
     void visit(const MoveInstruction &node) const
     {
         if (node.type == AssemblyType::DOUBLE)
-            out << "movsd    ";
+            out << wr.movsdMnemonic() << "    ";
         else
-            out << "mov" << suffix(node.type) << "    ";
+            out << "mov" << wr.suffix(node.type) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
     }
 
-    void visit(const ReturnInstruction &node) const
-    {
-        out << "movq    %rbp, %rsp\n";
-        out << "    popq    %rbp\n";
-        out << "    ret";
-    }
+    void visit(const ReturnInstruction & /*node*/) const { wr.emitReturnSequence(out); }
 
-    void visit(const UnaryOp &op, const char suffix) const
+    void visit(const UnaryOp &op, const char sfx) const
     {
         if (op == UnaryOp::Complement)
         {
-            out << "not" << suffix;
+            out << "not" << sfx;
         }
         else if (op == UnaryOp::Negate)
         {
-            out << "neg" << suffix;
+            out << "neg" << sfx;
         }
         else if (op == UnaryOp::Shr)
         {
-            out << "shr" << suffix;
+            out << "shr" << sfx;
         }
     }
 
-    // suffix is 'l' for a longword operation, 'q' for a quadword.
-    void visit(const BinaryOp &op, const char suffix) const
+    // sfx is 'l' for a longword operation, 'q' for a quadword.
+    void visit(const BinaryOp &op, const char sfx) const
     {
         if (op == BinaryOp::Add)
         {
-            out << "add" << suffix;
+            out << "add" << sfx;
         }
         else if (op == BinaryOp::Subtract)
         {
-            out << "sub" << suffix;
+            out << "sub" << sfx;
         }
         else if (op == BinaryOp::Multiply)
         {
-            out << "imul" << suffix;
+            out << "imul" << sfx;
         }
         else if (op == BinaryOp::BitwiseAnd)
         {
-            out << "and" << suffix;
+            out << "and" << sfx;
         }
         else if (op == BinaryOp::BitwiseOr)
         {
-            out << "or" << suffix;
+            out << "or" << sfx;
         }
         else if (op == BinaryOp::BitwiseXor)
         {
-            out << "xor" << suffix;
+            out << "xor" << sfx;
         }
         else if (op == BinaryOp::LeftShift)
         {
-            out << "shl" << suffix;
+            out << "shl" << sfx;
         }
         else if (op == BinaryOp::RightShift)
         {
-            out << "sar" << suffix;
+            out << "sar" << sfx;
         }
-    }
-
-    // SSE scalar-double arithmetic: distinct mnemonics, no l/q suffix.
-    void visitDoubleBinaryOp(const BinaryOp &op) const
-    {
-        if (op == BinaryOp::Add)
-            out << "addsd";
-        else if (op == BinaryOp::Subtract)
-            out << "subsd";
-        else if (op == BinaryOp::Multiply)
-            out << "mulsd";
-        else if (op == BinaryOp::Divide)
-            out << "divsd";
-        else if (op == BinaryOp::Xor)
-            out << "xorpd";
     }
 
     void visit(const UnaryInstruction &node) const
     {
-        visit(node.op, suffix(node.type));
+        visit(node.op, wr.suffix(node.type));
         out << "    ";
         dispatch(*node.operand);
     }
@@ -273,9 +245,9 @@ class codegenASTPrinter
             out << "\n    ";
         }
         if (node.type == AssemblyType::DOUBLE)
-            visitDoubleBinaryOp(node.op);
+            out << wr.doubleBinaryMnemonic(node.op);
         else
-            visit(node.op, suffix(node.type));
+            visit(node.op, wr.suffix(node.type));
         out << "    ";
         dispatch(*node.src);
         out << ", ";
@@ -295,7 +267,7 @@ class codegenASTPrinter
             out << "\n    ";
         }
 
-        out << "idiv" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        out << "idiv" << wr.suffix(node.type) << "    ";
         dispatch(*node.operand);
     }
 
@@ -307,14 +279,11 @@ class codegenASTPrinter
             out << "\n    ";
         }
 
-        out << "div" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        out << "div" << wr.suffix(node.type) << "    ";
         dispatch(*node.operand);
     }
 
-    void visit(const CdqInstruction &node) const
-    {
-        out << (node.type == AssemblyType::QUADWORD ? "cqo" : "cdq");
-    }
+    void visit(const CdqInstruction &node) const { out << wr.cdqMnemonic(node.type); }
 
     void visit(const CmpInstruction &node) const
     {
@@ -324,19 +293,23 @@ class codegenASTPrinter
             out << "\n    ";
         }
         if (node.type == AssemblyType::DOUBLE)
-            out << "ucomisd    ";
+            out << wr.ucomisdMnemonic() << "    ";
         else
-            out << "cmp" << suffix(node.type) << "    ";
+            out << "cmp" << wr.suffix(node.type) << "    ";
         dispatch(*node.a);
         out << ", ";
         dispatch((*node.b));
     }
 
-    void visit(const JumpInstruction &node) const { out << "jmp    .L" << node.identifier; }
+    void visit(const JumpInstruction &node) const
+    {
+        out << "jmp    " << wr.localLabelRef(node.identifier);
+    }
 
     void visit(const JumpCCInstruction &node) const
     {
-        out << "j" << condCodeToString(node.condCode) << "    .L" << node.identifier;
+        out << "j" << condCodeToString(node.condCode) << "    "
+            << wr.localLabelRef(node.identifier);
     }
 
     void visit(const SetCCInstruction &node) const
@@ -345,13 +318,13 @@ class codegenASTPrinter
         dispatch(*node.a);
     }
 
-    void visit(const Label &node) const { out << ".L" << node.identifier << ":"; }
+    void visit(const Label &node) const { out << wr.localLabelDef(node.identifier); }
 
     void visit(const MoveSXInstruction &node) const
     {
         // movs<src><dst>: e.g. movsbl (byte->long), movsbq (byte->quad),
         // movslq (long->quad).
-        out << "movs" << suffix(node.srcType) << suffix(node.dstType) << "    ";
+        out << "movs" << wr.suffix(node.srcType) << wr.suffix(node.dstType) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -360,7 +333,7 @@ class codegenASTPrinter
     void visit(const MoveZeroExtendInstruction &node) const
     {
         // Only the byte form survives the fixup pass: movzbl / movzbq.
-        out << "movz" << suffix(node.srcType) << suffix(node.dstType) << "    ";
+        out << "movz" << wr.suffix(node.srcType) << wr.suffix(node.dstType) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -368,14 +341,14 @@ class codegenASTPrinter
 
     void visit(const PushInstruction &node) const
     {
-        out << "pushq    ";
+        out << wr.pushqMnemonic() << "    ";
         dispatch(*node.a);
     }
 
     void visit(const CVTSI2SD &node) const
     {
         // suffix is the integer SOURCE width (l/q); destination is an XMM reg.
-        out << "cvtsi2sd" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        out << wr.cvtsi2sdMnemonic(node.type) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -384,7 +357,7 @@ class codegenASTPrinter
     void visit(const CVTTSD2SI &node) const
     {
         // suffix is the integer DESTINATION width (l/q); source is an XMM reg/mem.
-        out << "cvttsd2si" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+        out << wr.cvttsd2siMnemonic(node.type) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -392,13 +365,13 @@ class codegenASTPrinter
 
     void visit(const CallInstruction &node) const
     {
-        out << "call    " << node.identifier << "@PLT";
+        out << "call    " << wr.callTarget(node.identifier);
     }
 
     void visit(const LeaInstruction &node) const
     {
         // leaq computes an effective address: always a quadword operation.
-        out << "leaq    ";
+        out << wr.leaqMnemonic() << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -510,138 +483,13 @@ class codegenASTPrinter
 
     // disp(%base): the base register is always addressed as 64-bit. A zero
     // displacement is omitted, so Memory(AX, 0) prints as the bare "(%rax)".
-    void visit(const Memory &node) const
-    {
-        if (node.offset != 0)
-            out << node.offset;
-        out << "(";
-        visit(Register(node.reg, 8));
-        out << ")";
-    }
+    void visit(const Memory &node) const { out << wr.memory(node.reg, node.offset); }
 
-    void visit(const Data &node) const
-    {
-        out << node.identifier;
-        if (node.offset != 0)
-            out << "+" << node.offset;
-        out << "(%rip)";
-    }
+    void visit(const Data &node) const { out << wr.dataRef(node.identifier, node.offset); }
 
-    void visit(const Immediate &node) const { out << "$" << node.value; }
+    void visit(const Immediate &node) const { out << wr.immediate(node.value); }
 
-    void visit(const Register &node) const
-    {
-        if (node.name == RegisterName::AX)
-        {
-            if (node.bytes == 8)
-                out << "%rax";
-            else if (node.bytes == 4)
-                out << "%eax";
-            else
-                out << "%al";
-        }
-        else if (node.name == RegisterName::DX)
-        {
-            if (node.bytes == 8)
-                out << "%rdx";
-            else if (node.bytes == 4)
-                out << "%edx";
-            else
-                out << "%dl";
-        }
-        else if (node.name == RegisterName::CX)
-        {
-            if (node.bytes == 8)
-                out << "%rcx";
-            else if (node.bytes == 4)
-                out << "%ecx";
-            else
-                out << "%cl";
-        }
-        else if (node.name == RegisterName::DI)
-        {
-            if (node.bytes == 8)
-                out << "%rdi";
-            else if (node.bytes == 4)
-                out << "%edi";
-            else
-                out << "%dil";
-        }
-        else if (node.name == RegisterName::SI)
-        {
-            if (node.bytes == 8)
-                out << "%rsi";
-            else if (node.bytes == 4)
-                out << "%esi";
-            else
-                out << "%sil";
-        }
-        else if (node.name == RegisterName::R8)
-        {
-            if (node.bytes == 8)
-                out << "%r8";
-            else if (node.bytes == 4)
-                out << "%r8d";
-            else
-                out << "%r8b";
-        }
-        else if (node.name == RegisterName::R9)
-        {
-            if (node.bytes == 8)
-                out << "%r9";
-            else if (node.bytes == 4)
-                out << "%r9d";
-            else
-                out << "%r9b";
-        }
-        else if (node.name == RegisterName::R10)
-        {
-            if (node.bytes == 8)
-                out << "%r10";
-            else if (node.bytes == 4)
-                out << "%r10d";
-            else
-                out << "%r10b";
-        }
-        else if (node.name == RegisterName::R11)
-        {
-            if (node.bytes == 8)
-                out << "%r11";
-            else if (node.bytes == 4)
-                out << "%r11d";
-            else
-                out << "%r11b";
-        }
-        else if (node.name == RegisterName::SP)
-        {
-            out << "%rsp"; // the stack pointer is always addressed as the 64-bit register
-        }
-        else if (node.name == RegisterName::BP)
-        {
-            out << "%rbp"; // the frame pointer is always addressed as the 64-bit register
-        }
-        // XMM registers have no sub-register widths: `bytes` is ignored.
-        else if (node.name == RegisterName::XMM0)
-            out << "%xmm0";
-        else if (node.name == RegisterName::XMM1)
-            out << "%xmm1";
-        else if (node.name == RegisterName::XMM2)
-            out << "%xmm2";
-        else if (node.name == RegisterName::XMM3)
-            out << "%xmm3";
-        else if (node.name == RegisterName::XMM4)
-            out << "%xmm4";
-        else if (node.name == RegisterName::XMM5)
-            out << "%xmm5";
-        else if (node.name == RegisterName::XMM6)
-            out << "%xmm6";
-        else if (node.name == RegisterName::XMM7)
-            out << "%xmm7";
-        else if (node.name == RegisterName::XMM14)
-            out << "%xmm14";
-        else if (node.name == RegisterName::XMM15)
-            out << "%xmm15";
-    }
+    void visit(const Register &node) const { out << wr.reg(node.name, node.bytes); }
 
     void dispatch(const Operand &node) const
     {
@@ -681,7 +529,7 @@ class codegenASTPrinter
     }
 
   public:
-    codegenASTPrinter(std::ostream &out_) : out(out_) {}
+    codegenASTPrinter(std::ostream &out_, const AsmWriter &writer) : out(out_), wr(writer) {}
 
     void print(const codegenProgram &node) const { dispatch(node); }
 };

@@ -1,5 +1,6 @@
 #include "ast/ASTNodes/Program.h"
 #include "ast/visitors/ASTDebugPrinter.h"
+#include "codegen/AsmWriter.h"
 #include "codegen/ast/visitors/codegenASTPrinter.h"
 #include "codegen/codegen.h"
 #include "lexer/lexer.h"
@@ -174,14 +175,16 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         // --codegen: emit assembly to stdout (the test harness captures this).
         if (stage == "codegen")
         {
-            codegenASTPrinter(std::cout).print(*cgProgram);
+            SysVAsmWriter sysv;
+            codegenASTPrinter(std::cout, sysv).print(*cgProgram);
             return 0;
         }
 
         // --compile (default): emit the assembly to a sibling .s, then hand it to
         // gcc to assemble + link into an executable named after the source.
         std::ostringstream asmBuffer;
-        codegenASTPrinter(asmBuffer).print(*cgProgram);
+        SysVAsmWriter sysv;
+        codegenASTPrinter(asmBuffer, sysv).print(*cgProgram);
 
         std::string base = inputSourcePath;
         if (base.size() > 2 && base.compare(base.size() - 2, 2, ".c") == 0)
