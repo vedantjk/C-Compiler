@@ -115,8 +115,15 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         return 0;
     }
 
-    Parser parser{tokens};
+    Parser parser{tokens, diagnosticEngine};
     auto p = parser.ParseProgram();
+
+    if (diagnosticEngine.hasErrors())
+    {
+        diagnosticEngine.print();
+        return 1;
+    }
+
     ASTDebugPrinter dbg(std::cout);
 
     if (stage == "parse")
@@ -130,7 +137,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
     {
         Diagnostic::DiagnosticEngine preludeDiag{"<prelude>"};
         Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
-        Parser preludeParser{preludeLexer.generateTokens()};
+        Parser preludeParser{preludeLexer.generateTokens(), preludeDiag};
         auto preludeProgram = preludeParser.ParseProgram();
         p->nodes.insert(p->nodes.begin(), std::make_move_iterator(preludeProgram->nodes.begin()),
                         std::make_move_iterator(preludeProgram->nodes.end()));

@@ -40,6 +40,7 @@
 #include "../ast/TopLevelNodes/StructDecl.h"
 #include "../lexer/token.h"
 #include "../support/RTTI.h"
+#include "../utils/diagnostic.h"
 
 // The result of resolving a declarator against a base type: the declared name,
 // the fully-derived type, and (for function declarators) the parameter list.
@@ -118,6 +119,12 @@ struct FunDeclarator : DeclaratorNode
     }
 };
 
+// Internal exception used only to unwind deep parse recursion on error.
+// Never escapes the Parser — caught at the two recovery boundaries.
+struct ParseError
+{
+};
+
 class Parser
 {
     inline static const std::unordered_map<TokenType, int> precedenceLevel = {
@@ -127,9 +134,13 @@ class Parser
         {ASTERISK, 10}, {SLASH, 10},  {PERCENT, 10}};
     std::vector<Token> tokens;
     int cur_token = 0;
+    Diagnostic::DiagnosticEngine &diagnosticEngine;
 
   public:
-    Parser(std::vector<Token> tokens_) : tokens(std::move(tokens_)) {}
+    Parser(std::vector<Token> tokens_, Diagnostic::DiagnosticEngine &eng)
+        : tokens(std::move(tokens_)), diagnosticEngine(eng)
+    {
+    }
 
     // ============================================================
     // Cursor helpers — peek, consume, expect
@@ -158,15 +169,17 @@ class Parser
     // ============================================================
     // Error reporting — every parse error funnels through here so the
     // "line L, col C: message" format stays consistent.
+    // Reports via the diagnostic engine then throws ParseError to unwind;
+    // caught at the two recovery boundaries in ParseProgram/parseBlockStmt.
     // ============================================================
 
-    [[noreturn]] static void error(int line, int col, const std::string &message)
+    [[noreturn]] void error(int line, int col, const std::string &message)
     {
-        throw std::logic_error("line " + std::to_string(line) + ", col " + std::to_string(col) +
-                               ": " + message);
+        diagnosticEngine.report(Diagnostic::DiagLevel::PARSER, {line, col}, message);
+        throw ParseError{};
     }
 
-    [[noreturn]] static void errorAt(const Token &tok, const std::string &message)
+    [[noreturn]] void errorAt(const Token &tok, const std::string &message)
     {
         error(tok.line, tok.col, message);
     }
@@ -179,6 +192,38 @@ class Parser
             error("expected " + std::string(tokenTypeToString(type)) + ", got " +
                   std::string(tokenTypeToString(peek())));
         return consume();
+    }
+
+    // ============================================================
+    // Panic-mode recovery — advance to a safe resync point.
+    // Always consumes at least one token to guarantee progress.
+    // Stops when:
+    //   - The just-consumed token was ';'  (end of a statement)
+    //   - The current token starts a new statement/declaration
+    //   - EOF
+    // ============================================================
+    void synchronize()
+    {
+        // Consume at least one token unconditionally to guarantee forward progress.
+        if (peek() == EOF_TOKEN)
+            return;
+        Token prev = consume();
+
+        while (peek() != EOF_TOKEN)
+        {
+            // Previous token was a statement terminator — resync after it.
+            if (prev.type == SEMI_COLON)
+                return;
+
+            // Current token starts a fresh declaration or statement.
+            const TokenType cur = peek();
+            if (isDeclSpecifierStart(cur) || cur == LEFT_BRACE || cur == RIGHT_BRACE || cur == IF ||
+                cur == FOR || cur == WHILE || cur == DO || cur == RETURN || cur == BREAK ||
+                cur == CONTINUE)
+                return;
+
+            prev = consume();
+        }
     }
 
     // ============================================================
@@ -1051,86 +1096,104 @@ class Parser
     {
         Token blockStart = expect(LEFT_BRACE); // should never throw
         std::vector<std::unique_ptr<Statement>> statements;
-        while (peek() != RIGHT_BRACE)
+        while (peek() != RIGHT_BRACE && peek() != EOF_TOKEN)
         {
-            if (isDeclSpecifierStart(peek()))
+            try
             {
-                auto [type, storageClass, line, col] = parseDeclSpecifiers();
+                if (isDeclSpecifierStart(peek()))
+                {
+                    auto [type, storageClass, line, col] = parseDeclSpecifiers();
+                    if (peek() == LEFT_BRACE)
+                    {
+                        auto structVar = parseStructDecl(type, line, col);
+                        statements.emplace_back(
+                            std::make_unique<DeclareStmt>(line, col, std::move(structVar)));
+                        continue;
+                    }
+                    if (atStructForwardDecl(type))
+                    {
+                        statements.emplace_back(std::make_unique<DeclareStmt>(
+                            line, col, parseStructForwardDecl(type, line, col)));
+                        continue;
+                    }
+                    DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
+                    if (dl.isFunction)
+                    {
+                        // Local function declaration: a forward prototype scoped to this
+                        // block. SA registers it and drops it at block exit; a body here
+                        // would be a definition, which C forbids in block scope.
+                        if (dl.function->statements)
+                            error(line, col, "function definition not allowed in block scope");
+                        statements.emplace_back(
+                            std::make_unique<FunctionDeclStmt>(line, col, std::move(dl.function)));
+                    }
+                    else
+                    {
+                        statements.emplace_back(
+                            std::make_unique<DeclareStmt>(line, col, std::move(dl.variables)));
+                    }
+                    continue;
+                }
                 if (peek() == LEFT_BRACE)
                 {
-                    auto structVar = parseStructDecl(type, line, col);
-                    statements.emplace_back(
-                        std::make_unique<DeclareStmt>(line, col, std::move(structVar)));
-                    continue;
+                    statements.emplace_back(parseBlockStmt());
                 }
-                if (atStructForwardDecl(type))
+                else if (peek() == SEMI_COLON)
                 {
-                    statements.emplace_back(std::make_unique<DeclareStmt>(
-                        line, col, parseStructForwardDecl(type, line, col)));
-                    continue;
+                    consume();
                 }
-                DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
-                if (dl.isFunction)
+                else if (peek() == DO)
                 {
-                    // Local function declaration: a forward prototype scoped to this
-                    // block. SA registers it and drops it at block exit; a body here
-                    // would be a definition, which C forbids in block scope.
-                    if (dl.function->statements)
-                        error(line, col, "function definition not allowed in block scope");
-                    statements.emplace_back(
-                        std::make_unique<FunctionDeclStmt>(line, col, std::move(dl.function)));
+                    statements.emplace_back(parseDoWhileStmt());
+                }
+                else if (peek() == RETURN)
+                {
+                    statements.emplace_back(parseReturnStmt());
+                }
+                else if (peek() == IF)
+                {
+                    statements.emplace_back(parseIfStmt());
+                }
+                else if (peek() == WHILE)
+                {
+                    statements.emplace_back(parseWhileStmt());
+                }
+                else if (peek() == IDENTIFIER)
+                {
+                    statements.emplace_back(parseExprStatement());
+                }
+                else if (peek() == FOR)
+                {
+                    statements.emplace_back(parseForStmt());
+                }
+                else if (peek() == BREAK)
+                {
+                    statements.emplace_back(parseBreakStmt());
+                }
+                else if (peek() == CONTINUE)
+                {
+                    statements.emplace_back(parseContinueStmt());
                 }
                 else
-                {
-                    statements.emplace_back(
-                        std::make_unique<DeclareStmt>(line, col, std::move(dl.variables)));
-                }
-                continue;
+                    statements.emplace_back(parseExprStatement());
             }
-            if (peek() == LEFT_BRACE)
+            catch (const ParseError &)
             {
-                statements.emplace_back(parseBlockStmt());
+                synchronize();
+                if (peek() == RIGHT_BRACE || peek() == EOF_TOKEN)
+                    break;
             }
-            else if (peek() == SEMI_COLON)
-            {
-                consume();
-            }
-            else if (peek() == DO)
-            {
-                statements.emplace_back(parseDoWhileStmt());
-            }
-            else if (peek() == RETURN)
-            {
-                statements.emplace_back(parseReturnStmt());
-            }
-            else if (peek() == IF)
-            {
-                statements.emplace_back(parseIfStmt());
-            }
-            else if (peek() == WHILE)
-            {
-                statements.emplace_back(parseWhileStmt());
-            }
-            else if (peek() == IDENTIFIER)
-            {
-                statements.emplace_back(parseExprStatement());
-            }
-            else if (peek() == FOR)
-            {
-                statements.emplace_back(parseForStmt());
-            }
-            else if (peek() == BREAK)
-            {
-                statements.emplace_back(parseBreakStmt());
-            }
-            else if (peek() == CONTINUE)
-            {
-                statements.emplace_back(parseContinueStmt());
-            }
-            else
-                statements.emplace_back(parseExprStatement());
         }
-        consume(); // consume the right brace
+        // A block must close with `}`. If we instead ran off the end of the
+        // token stream (an unterminated block), report it against the opening
+        // brace and return the partial block — reporting, not throwing, so the
+        // hasErrors() gate still rejects the file without unwinding further.
+        if (peek() == RIGHT_BRACE)
+            consume();
+        else
+            diagnosticEngine.report(Diagnostic::DiagLevel::PARSER,
+                                    {blockStart.line, blockStart.col},
+                                    "missing '}' to close this block");
         return std::make_unique<BlockStmt>(blockStart.line, blockStart.col, std::move(statements));
     }
 
@@ -1192,34 +1255,42 @@ class Parser
         std::vector<std::unique_ptr<TopLevelNode>> nodes;
         while (peek() != EOF_TOKEN)
         {
-
-            if (isDeclSpecifierStart(peek()))
+            try
             {
-                auto [type, storageClass, line, col] = parseDeclSpecifiers();
-                if (peek() == LEFT_BRACE)
+                if (isDeclSpecifierStart(peek()))
                 {
-                    nodes.emplace_back(parseStructDecl(type, line, col));
-                    continue;
-                }
-                if (atStructForwardDecl(type))
-                {
-                    nodes.emplace_back(parseStructForwardDecl(type, line, col));
-                    continue;
-                }
-                DeclList dl = parseDeclarationList(type, true, storageClass, line, col);
-                if (dl.isFunction)
-                {
-                    nodes.emplace_back(std::move(dl.function));
+                    auto [type, storageClass, line, col] = parseDeclSpecifiers();
+                    if (peek() == LEFT_BRACE)
+                    {
+                        nodes.emplace_back(parseStructDecl(type, line, col));
+                        continue;
+                    }
+                    if (atStructForwardDecl(type))
+                    {
+                        nodes.emplace_back(parseStructForwardDecl(type, line, col));
+                        continue;
+                    }
+                    DeclList dl = parseDeclarationList(type, true, storageClass, line, col);
+                    if (dl.isFunction)
+                    {
+                        nodes.emplace_back(std::move(dl.function));
+                    }
+                    else
+                    {
+                        for (auto &var : dl.variables)
+                            nodes.emplace_back(std::move(var));
+                    }
                 }
                 else
                 {
-                    for (auto &var : dl.variables)
-                        nodes.emplace_back(std::move(var));
+                    error("unexpected token at file scope: " +
+                          std::string(tokenTypeToString(peek())));
                 }
             }
-            else
+            catch (const ParseError &)
             {
-                error("unexpected token at file scope: " + std::string(tokenTypeToString(peek())));
+                synchronize();
+                // synchronize() guarantees progress; loop condition re-checks EOF.
             }
         }
         return std::make_unique<Program>(std::move(nodes));
