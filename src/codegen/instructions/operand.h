@@ -120,3 +120,18 @@ class Memory : public Operand
     int offset;
     Memory(RegisterName reg_, int offset_) : reg(reg_), offset(offset_) {}
 };
+
+// A reference into an aggregate object's storage at a byte offset, before the
+// stack-slot pass resolves it. Lowered to Memory(BP, slotBase + offset) for a
+// local object. `type` sizes the access (mov vs movsd width).
+class PseudoMem : public Operand
+{
+  public:
+    std::string name;
+    int offset;
+    AssemblyType type;
+    PseudoMem(std::string name_, int offset_, AssemblyType type_ = AssemblyType::LONGWORD)
+        : name(std::move(name_)), offset(offset_), type(type_)
+    {
+    }
+};

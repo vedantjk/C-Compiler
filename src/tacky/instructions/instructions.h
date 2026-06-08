@@ -211,3 +211,18 @@ class TackyStore : public TackyInstruction
     {
     }
 };
+
+// Store `src` into the aggregate object `dst` at byte `offset`. Used to fill array
+// elements during initialization; codegen lowers it to a mov into the object's
+// stack slot (or static data) at slot + offset.
+class TackyCopyToOffset : public TackyInstruction
+{
+  public:
+    TackyVal src;
+    std::string dst;
+    int offset;
+    TackyCopyToOffset(int line_, int col_, TackyVal src_, std::string dst_, int offset_)
+        : TackyInstruction(line_, col_), src(std::move(src_)), dst(std::move(dst_)), offset(offset_)
+    {
+    }
+};

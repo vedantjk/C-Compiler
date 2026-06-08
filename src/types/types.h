@@ -2,6 +2,28 @@
 #include <memory>
 #include <string>
 
+// One entry in a static initializer's data image. A scalar is a single entry; an
+// array is a flat sequence of entries with a trailing Zero for any uninitialized
+// tail. Emitted as .long / .quad / .double / .zero.
+struct StaticInit
+{
+    enum class Kind
+    {
+        Int,    // 4-byte integer
+        Long,   // 8-byte integer (also pointers)
+        Double, // 8-byte IEEE double
+        Zero    // `zeroBytes` bytes of zero
+    } kind;
+    long long intVal = 0;
+    double dblVal = 0.0;
+    long long zeroBytes = 0;
+
+    static StaticInit i32(long long v) { return {Kind::Int, v, 0.0, 0}; }
+    static StaticInit i64(long long v) { return {Kind::Long, v, 0.0, 0}; }
+    static StaticInit dbl(double d) { return {Kind::Double, 0, d, 0}; }
+    static StaticInit zero(long long n) { return {Kind::Zero, 0, 0.0, n}; }
+};
+
 class Type
 {
   public:

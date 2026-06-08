@@ -372,7 +372,7 @@ class Parser
             consume();
             Token sz = expect(CONSTANT);
             expect(RIGHT_BRACKET);
-            node = std::make_shared<ArrayDeclarator>(std::move(node), std::stoul(sz.lexeme));
+            node = std::make_shared<ArrayDeclarator>(std::move(node), std::stoull(sz.lexeme));
         }
         return node;
     }

@@ -57,11 +57,11 @@ struct Symbol
     // Filled in by semantic analysis for storage-class handling / codegen.
     Linkage linkage = Linkage::None;
     StorageDuration duration = StorageDuration::Automatic;
-    bool defined = false;               // function body, or variable with an initializer
-    bool tentative = false;             // file-scope variable, no init, no extern
-    std::optional<long long> constInit; // folded constant for static-duration vars
-    std::optional<double>
-        constInitDouble; // folded floating point constant for static-duration vars
+    bool defined = false;   // function body, or variable with an initializer
+    bool tentative = false; // file-scope variable, no init, no extern
+    // Folded static-initializer image for static-duration vars (scalars: one
+    // entry; arrays: a flat sequence). Empty means "zero the whole object".
+    std::vector<StaticInit> staticInits;
     Symbol(std::string name, std::shared_ptr<Type> type, int line, int column, Kind kind)
         : name(std::move(name)), type(std::move(type)), kind(kind), line(line), column(column)
     {

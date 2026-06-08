@@ -4,6 +4,7 @@
 #include "../TopLevelNodes/codegenFunction.h"
 #include "../TopLevelNodes/codegenStaticConstant.h"
 #include "../TopLevelNodes/codegenStaticVariable.h"
+#include <algorithm>
 #include <bit>
 #include <iomanip>
 #include <memory>
@@ -32,32 +33,33 @@ class codegenASTPrinter
         if (node.global)
             out << "    .globl " << node.name << "\n";
 
-        if (isDouble(node.type))
-        {
-            // 17 significant digits round-trip an IEEE double exactly through gas.
-            out << "    .data\n";
-            out << "    .align 8\n";
-            out << node.name << ":\n";
-            out << "    .double " << std::setprecision(17) << std::get<double>(node.init) << "\n";
-            return;
-        }
+        // All-zero objects (uninitialized statics, fully-padded arrays) go in .bss
+        // as a single .zero; anything with a non-zero entry goes in .data.
+        const bool allZero =
+            std::all_of(node.inits.begin(), node.inits.end(),
+                        [](const StaticInit &si) { return si.kind == StaticInit::Kind::Zero; });
 
-        const bool isLong = ctBytes(node.type) == 8;
-        const int align = isLong ? 8 : 4;
-        const long long value = std::get<long long>(node.init);
-        if (value != 0)
+        out << (allZero ? "    .bss\n" : "    .data\n");
+        out << "    .align " << node.align << "\n";
+        out << node.name << ":\n";
+        for (const auto &si : node.inits)
         {
-            out << "    .data\n";
-            out << "    .align " << align << "\n";
-            out << node.name << ":\n";
-            out << (isLong ? "    .quad " : "    .long ") << value << "\n";
-        }
-        else
-        {
-            out << "    .bss\n";
-            out << "    .align " << align << "\n";
-            out << node.name << ":\n";
-            out << (isLong ? "    .zero 8\n" : "    .zero 4\n");
+            switch (si.kind)
+            {
+            case StaticInit::Kind::Int:
+                out << "    .long " << si.intVal << "\n";
+                break;
+            case StaticInit::Kind::Long:
+                out << "    .quad " << si.intVal << "\n";
+                break;
+            case StaticInit::Kind::Double:
+                // 17 significant digits round-trip an IEEE double exactly through gas.
+                out << "    .double " << std::setprecision(17) << si.dblVal << "\n";
+                break;
+            case StaticInit::Kind::Zero:
+                out << "    .zero " << si.zeroBytes << "\n";
+                break;
+            }
         }
     }
 

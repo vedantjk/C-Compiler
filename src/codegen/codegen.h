@@ -22,6 +22,8 @@ class codegenDriver
     // Names of all static-storage variables (file-scope, block static, extern),
     // supplied by TACKY. Their pseudos lower to RIP-relative Data, not stack slots.
     std::unordered_set<std::string> staticNames;
+    // Array objects (by name) that need a sized, aligned stack slot; supplied by TACKY.
+    std::unordered_map<std::string, ArrayObject> arrayObjects;
 
     int constCounter = 0;
     std::map<std::pair<uint64_t, int>, std::string> constLabels;
@@ -687,6 +689,15 @@ class codegenDriver
         instructions.push_back(std::make_unique<LeaInstruction>(std::move(src), std::move(dst)));
     }
 
+    void processTackyCopyToOffset(const TackyCopyToOffset &copy,
+                                  std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        auto src = tackyValToOperand(copy.src);
+        const AssemblyType type = assemblyTypeOf(copy.src);
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::move(src), std::make_unique<PseudoMem>(copy.dst, copy.offset, type), type));
+    }
+
     void processTackyInstructions(
         const std::vector<std::unique_ptr<TackyInstruction>> &tackyInstructions,
         std::vector<std::unique_ptr<Instruction>> &instructions)
@@ -769,6 +780,10 @@ class codegenDriver
             {
                 processTackyGetAddress(*p, instructions);
             }
+            else if (auto *p = dynamic_cast<TackyCopyToOffset *>(instruction.get()))
+            {
+                processTackyCopyToOffset(*p, instructions);
+            }
             else
             {
                 throw std::runtime_error("codegen: unhandled TACKY instruction kind");
@@ -825,18 +840,42 @@ class codegenDriver
                          std::unordered_map<std::string, int> &pseudoToOffset, int &used,
                          const std::unordered_set<std::string> &staticNames)
     {
-        auto *p = dynamic_cast<PseudoRegister *>(slot.get());
-        if (!p)
-            return;
-        if (staticNames.count(p->name))
+        // A pseudo register (scalar) or a pseudo-mem (an aggregate referenced at a
+        // byte offset). Both resolve to the same per-name stack slot.
+        std::string name;
+        int extra = 0;
+        AssemblyType type = AssemblyType::LONGWORD;
+        if (auto *p = dynamic_cast<PseudoRegister *>(slot.get()))
         {
-            slot = std::make_unique<Data>(p->name);
+            name = p->name;
+            type = p->type;
+        }
+        else if (auto *m = dynamic_cast<PseudoMem *>(slot.get()))
+        {
+            name = m->name;
+            extra = m->offset;
+            type = m->type;
+        }
+        else
+            return;
+
+        if (staticNames.count(name))
+        {
+            slot = std::make_unique<Data>(name);
             return;
         }
-        auto found = pseudoToOffset.find(p->name);
+
+        auto found = pseudoToOffset.find(name);
         if (found == pseudoToOffset.end())
         {
-            if (p->type == AssemblyType::QUADWORD || p->type == AssemblyType::DOUBLE)
+            if (auto ai = arrayObjects.find(name); ai != arrayObjects.end())
+            {
+                // Reserve the whole array, then align the base (-used) to the
+                // object's alignment.
+                used += static_cast<int>(ai->second.size);
+                used += (ai->second.align - used % ai->second.align) % ai->second.align;
+            }
+            else if (type == AssemblyType::QUADWORD || type == AssemblyType::DOUBLE)
             {
                 used += (8 - used % 8) % 8; // align the slot to 8 bytes
                 used += 8;
@@ -845,9 +884,9 @@ class codegenDriver
             {
                 used += 4;
             }
-            found = pseudoToOffset.emplace(p->name, -used).first;
+            found = pseudoToOffset.emplace(name, -used).first;
         }
-        slot = std::make_unique<Memory>(RegisterName::BP, found->second);
+        slot = std::make_unique<Memory>(RegisterName::BP, found->second + extra);
     }
 
     void removePseudosFromFunction(codegenFunction &func,
@@ -1247,12 +1286,13 @@ class codegenDriver
     {
         return std::make_unique<codegenStaticVariable>(variable.line, variable.column,
                                                        variable.identifier, variable.global,
-                                                       variable.init, variable.type);
+                                                       variable.inits, variable.align);
     }
 
     std::unique_ptr<codegenProgram> codegen(const TackyProgram &prog)
     {
         staticNames = prog.staticNames;
+        arrayObjects = prog.arrayObjects;
         std::vector<std::unique_ptr<codegenTopLevelNode>> nodes;
         for (const auto &node : prog.nodes)
         {

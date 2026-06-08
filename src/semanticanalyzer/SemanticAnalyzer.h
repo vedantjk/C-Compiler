@@ -137,6 +137,27 @@ inline long long reduceToType(long long v, const std::shared_ptr<Type> &t)
     return v;
 }
 
+// Object size in bytes; arrays recurse (count * element size).
+inline long long sizeOfTypeBytes(const std::shared_ptr<Type> &t)
+{
+    if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
+        return static_cast<long long>(a->getSize()) * sizeOfTypeBytes(a->getInner());
+    if (std::dynamic_pointer_cast<CharType>(t))
+        return 1;
+    if (std::dynamic_pointer_cast<IntType>(t) || std::dynamic_pointer_cast<UnsignedIntType>(t))
+        return 4;
+    return 8; // long, unsigned long, double, pointer
+}
+
+// Natural alignment; arrays align like their element, but objects >= 16 bytes get
+// 16-byte alignment (SysV / book rule).
+inline int alignOfTypeBytes(const std::shared_ptr<Type> &t)
+{
+    if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
+        return sizeOfTypeBytes(t) >= 16 ? 16 : alignOfTypeBytes(a->getInner());
+    return static_cast<int>(sizeOfTypeBytes(t));
+}
+
 class SemanticAnalyzer
 {
     SymbolTable symbolTable;
@@ -308,6 +329,40 @@ class SemanticAnalyzer
         return convertTo(e, target);
     }
 
+    // Array-to-pointer decay: in any value context an array becomes a pointer to
+    // its first element. We synthesize &arr typed as pointer-to-element (same
+    // address, scalar type) so the rest of the pipeline reuses the address-of
+    // path. Non-array expressions pass through unchanged.
+    std::shared_ptr<Expression> decayArray(const std::shared_ptr<Expression> &e)
+    {
+        const auto arr = std::dynamic_pointer_cast<ArrayType>(e->resolvedType);
+        if (!arr)
+            return e;
+        auto addr = std::make_shared<UnaryExpr>(e->getLine(), e->getCol(), "&", e);
+        addr->resolvedType = std::make_shared<PointerType>(arr->getInner());
+        addr->isLvalue = false;
+        return addr;
+    }
+
+    // analyzeExpr followed by array-to-pointer decay, for sub-expressions used as
+    // rvalues. Contexts that need the array itself (operands of `&`, `sizeof`, and
+    // the target of an assignment) call analyzeExpr directly instead.
+    void analyzeAndDecay(std::shared_ptr<Expression> &slot)
+    {
+        analyzeExpr(slot);
+        slot = decayArray(slot);
+    }
+
+    // A parameter declared with array type is adjusted to a pointer to its element
+    // type (the outermost dimension is dropped). Applied before the function type
+    // is built so that declarations differing only in that dimension still match.
+    std::shared_ptr<Type> adjustParamType(const std::shared_ptr<Type> &t)
+    {
+        if (const auto arr = std::dynamic_pointer_cast<ArrayType>(t))
+            return std::make_shared<PointerType>(arr->getInner());
+        return t;
+    }
+
     size_t decodedLength(const std::string &s)
     {
         // s is "..." (with outer quotes)
@@ -344,7 +399,7 @@ class SemanticAnalyzer
         else if (auto x = std::dynamic_pointer_cast<AssignExpr>(expr))
         {
             analyzeExpr(x->lhs);
-            analyzeExpr(x->rhs);
+            analyzeAndDecay(x->rhs);
 
             const auto lType = x->lhs->resolvedType;
             const auto rType = x->rhs->resolvedType;
@@ -353,6 +408,13 @@ class SemanticAnalyzer
                 error(x->lhs->getLine(), x->lhs->getCol(),
                       "Left expression must be an lvalue, got rvalue of type: " +
                           lType->toString() + ".");
+            }
+            // Arrays are non-modifiable lvalues: assigning to one (or to a
+            // dereferenced pointer-to-array) is a constraint violation.
+            if (isArray(lType))
+            {
+                error(x->lhs->getLine(), x->lhs->getCol(),
+                      "cannot assign to an array (type " + lType->toString() + ").");
             }
 
             if (x->op == "=")
@@ -368,27 +430,37 @@ class SemanticAnalyzer
                         "Arithmetic assignment needs integer or pointer for left expression, got " +
                             lType->toString() + ".");
                 }
-                if (!isInteger(rType))
+                else if (isPointer(lType))
+                {
+                    // ptr += n / ptr -= n: the right operand is an integer offset.
+                    if (!isInteger(rType))
+                        error(
+                            x->rhs->getLine(), x->rhs->getCol(),
+                            "Pointer compound assignment needs an integer right expression, got " +
+                                rType->toString() + ".");
+                }
+                else if (!isInteger(rType) && !isDouble(rType))
                 {
                     error(x->rhs->getLine(), x->rhs->getCol(),
-                          "Arithmetic assignment needs integer for right expression, got " +
+                          "Arithmetic assignment needs an arithmetic right expression, got " +
                               rType->toString() + ".");
                 }
             }
             else if (x->op == "*=" || x->op == "/=" || x->op == "%=")
             {
-                if (!isInteger(lType))
-                {
+                // '%=' is integer-only; '*='/'/=' also accept floating-point operands.
+                const bool modulo = x->op == "%=";
+                auto ok = [&](const std::shared_ptr<Type> &t)
+                { return modulo ? isInteger(t) : (isInteger(t) || isDouble(t)); };
+                const std::string need = modulo ? "integer" : "arithmetic";
+                if (!ok(lType))
                     error(x->lhs->getLine(), x->lhs->getCol(),
-                          "Arithmetic assignment needs integer for left expression, got " +
+                          "Arithmetic assignment needs " + need + " for left expression, got " +
                               lType->toString() + ".");
-                }
-                if (!isInteger(rType))
-                {
+                if (!ok(rType))
                     error(x->rhs->getLine(), x->rhs->getCol(),
-                          "Arithmetic assignment needs integer for right expression, got " +
+                          "Arithmetic assignment needs " + need + " for right expression, got " +
                               rType->toString() + ".");
-                }
             }
             else if (x->op == "&=" || x->op == "^=" || x->op == "|=" || x->op == "<<=" ||
                      x->op == ">>=")
@@ -414,7 +486,13 @@ class SemanticAnalyzer
             const bool compoundInPlace = x->op == "+=" || x->op == "-=" || x->op == "*=" ||
                                          x->op == "/=" || x->op == "%=" || x->op == "&=" ||
                                          x->op == "^=" || x->op == "|=";
-            if (compoundInPlace && isInteger(lType) && isInteger(rType))
+            // Pointer compound assignment widens the offset to long (it is scaled by
+            // the element size in TACKY, like ordinary pointer arithmetic); an
+            // arithmetic lhs brings the rhs to its own type so the in-place op runs
+            // at the lhs width.
+            if (compoundInPlace && isPointer(lType))
+                x->rhs = convertTo(x->rhs, LongType::getInstance());
+            else if (compoundInPlace && (isInteger(lType) || isDouble(lType)))
                 x->rhs = convertTo(x->rhs, lType);
 
             x->resolvedType = x->lhs->resolvedType;
@@ -422,8 +500,8 @@ class SemanticAnalyzer
         }
         else if (auto x = std::dynamic_pointer_cast<BinaryExpr>(expr))
         {
-            analyzeExpr(x->left);
-            analyzeExpr(x->right);
+            analyzeAndDecay(x->left);
+            analyzeAndDecay(x->right);
 
             const auto lType = x->left->resolvedType;
             const auto rType = x->right->resolvedType;
@@ -468,16 +546,29 @@ class SemanticAnalyzer
                     }
                     else if (leftIsPointer && !rightIsPointer)
                     {
+                        // ptr +/- int: the integer is the (scaled) offset. Widen it
+                        // to long so codegen always scales a 64-bit index.
+                        if (!isInteger(rType))
+                            error(x->right->getLine(), x->right->getCol(),
+                                  "pointer arithmetic needs an integer operand, got " +
+                                      rType->toString() + ".");
+                        else
+                            x->right = convertTo(x->right, LongType::getInstance());
                         x->resolvedType = lType;
                     }
                     else if (!leftIsPointer && rightIsPointer)
                     {
+                        // int + ptr is the only legal mixed form (int - ptr is not).
                         if (x->binaryOp == "-")
-                        {
                             error(x->right->getLine(), x->right->getCol(),
                                   "'-' Cannot have rhs as a pointer, got " + rType->toString() +
                                       ".");
-                        }
+                        if (!isInteger(lType))
+                            error(x->left->getLine(), x->left->getCol(),
+                                  "pointer arithmetic needs an integer operand, got " +
+                                      lType->toString() + ".");
+                        else
+                            x->left = convertTo(x->left, LongType::getInstance());
                         x->resolvedType = rType;
                     }
                     else if (leftIsPointer && rightIsPointer)
@@ -493,7 +584,8 @@ class SemanticAnalyzer
                                   "Need pointers of same type for subtraction, got lhs:" +
                                       lType->toString() + ", rhs " + rType->toString() + ".");
                         }
-                        x->resolvedType = IntType::getInstance();
+                        // Pointer difference yields a signed element count (ptrdiff).
+                        x->resolvedType = LongType::getInstance();
                     }
 
                     x->isLvalue = false;
@@ -647,7 +739,7 @@ class SemanticAnalyzer
         }
         else if (auto x = std::dynamic_pointer_cast<CastExpr>(expr))
         {
-            analyzeExpr(x->operand);
+            analyzeAndDecay(x->operand);
 
             const auto &srcType = x->operand->resolvedType;
             if (!isScalar(srcType) || (!isScalar(x->type) && !isVoid(x->type)))
@@ -772,37 +864,41 @@ class SemanticAnalyzer
         }
         else if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(expr))
         {
-            analyzeExpr(x->lvalue);
-            analyzeExpr(x->index);
+            // a[i] == *(a + i): after decay both operands are values, one a pointer
+            // and one an integer, in either order (i[a] is legal C). The result is
+            // an lvalue of the pointed-to type.
+            analyzeAndDecay(x->lvalue);
+            analyzeAndDecay(x->index);
 
-            if (!isInteger(x->index->resolvedType))
+            const auto lt = x->lvalue->resolvedType;
+            const auto it = x->index->resolvedType;
+
+            std::shared_ptr<Type> elemType = IntType::getInstance();
+            if (isPointer(lt) && isInteger(it))
             {
-                error(x->index->getLine(), x->index->getCol(),
-                      "required integer index, received '" + x->index->resolvedType->toString() +
-                          "'.");
+                elemType = std::dynamic_pointer_cast<PointerType>(lt)->getInner();
+                x->index = convertTo(x->index, LongType::getInstance());
             }
-
-            auto lt = x->lvalue->resolvedType;
-            std::shared_ptr<Type> finalType = IntType::getInstance();
-            if (auto arr = std::dynamic_pointer_cast<ArrayType>(lt))
-                finalType = arr->getInner();
-            else if (auto ptr = std::dynamic_pointer_cast<PointerType>(lt))
-                finalType = ptr->getInner();
+            else if (isInteger(lt) && isPointer(it))
+            {
+                elemType = std::dynamic_pointer_cast<PointerType>(it)->getInner();
+                x->lvalue = convertTo(x->lvalue, LongType::getInstance());
+            }
             else
             {
                 error(x->getLine(), x->getCol(),
-                      "required pointer or array type, received '" +
-                          x->lvalue->resolvedType->toString() + "'.");
+                      "subscript needs one pointer/array operand and one integer operand, got '" +
+                          lt->toString() + "' and '" + it->toString() + "'.");
             }
 
-            x->resolvedType = finalType;
+            x->resolvedType = elemType;
             x->isLvalue = true;
         }
         else if (auto x = std::dynamic_pointer_cast<TernaryExpr>(expr))
         {
-            analyzeExpr(x->condition);
-            analyzeExpr(x->thenBranch);
-            analyzeExpr(x->elseBranch);
+            analyzeAndDecay(x->condition);
+            analyzeAndDecay(x->thenBranch);
+            analyzeAndDecay(x->elseBranch);
 
             if (!isScalar(x->condition->resolvedType))
             {
@@ -846,6 +942,11 @@ class SemanticAnalyzer
         else if (auto x = std::dynamic_pointer_cast<UnaryExpr>(expr))
         {
             analyzeExpr(x->operand);
+            // Value-context unary operators see a decayed operand; `&` wants the
+            // array itself, and `++`/`--` need a modifiable lvalue (an array is
+            // neither, so it is left to fail the lvalue/scalar checks below).
+            if (x->op != "&" && x->op != "++" && x->op != "--")
+                x->operand = decayArray(x->operand);
             if (x->op == "-" || x->op == "+" || x->op == "~")
             {
                 // '~' is integer-only; unary '-'/'+' also accept floating-point.
@@ -986,22 +1087,14 @@ class SemanticAnalyzer
             {
                 for (int i = 0; i < functionType->paramTypes.size(); i++)
                 {
-                    analyzeExpr(expr->parameters[i]);
-                    auto argType = expr->parameters[i]->resolvedType;
-                    const auto &paramType = functionType->paramTypes[i];
-                    if (canDecayTo(argType, paramType))
-                    {
-                        // array argument decaying to a pointer parameter; leave as-is
-                    }
-                    else
-                    {
-                        expr->parameters[i] = convertByAssignment(expr->parameters[i], paramType,
-                                                                  expr->getLine(), expr->getCol());
-                    }
+                    analyzeAndDecay(expr->parameters[i]);
+                    expr->parameters[i] =
+                        convertByAssignment(expr->parameters[i], functionType->paramTypes[i],
+                                            expr->getLine(), expr->getCol());
                 }
                 for (int i = functionType->paramTypes.size(); i < expr->parameters.size(); i++)
                 {
-                    analyzeExpr(expr->parameters[i]);
+                    analyzeAndDecay(expr->parameters[i]);
                 }
             }
             expr->resolvedType = functionType->returnType;
@@ -1420,6 +1513,124 @@ class SemanticAnalyzer
         var->symbol = sym;
     }
 
+    // Type-check (and, for automatic-duration objects, convert) an initializer
+    // against its target type. Brace lists recurse into array element types;
+    // multi-dimensional arrays nest. A list shorter than the array leaves the
+    // trailing elements implicitly zero. Leaf scalar initializers are already
+    // analyzed (by the analyzeExpr pass over the whole initializer), so here we
+    // only decay/convert them. Static initializers are validated but not
+    // materialized (their constants are folded separately for the data section).
+    void checkInitializer(const std::shared_ptr<Type> &targetType,
+                          std::shared_ptr<Expression> &init, bool isStatic, int line, int col)
+    {
+        if (auto initList = std::dynamic_pointer_cast<InitExpr>(init))
+        {
+            const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType);
+            if (!arr)
+            {
+                error(line, col,
+                      "compound initializer cannot initialize scalar type " +
+                          targetType->toString() + ".");
+                return;
+            }
+            if (initList->elements.size() > arr->getSize())
+            {
+                error(line, col,
+                      "too many elements in initializer for " + targetType->toString() + " (" +
+                          std::to_string(arr->getSize()) + " expected, " +
+                          std::to_string(initList->elements.size()) + " given).");
+                return;
+            }
+            for (auto &element : initList->elements)
+                checkInitializer(arr->getInner(), element, isStatic, line, col);
+            initList->resolvedType = targetType;
+            return;
+        }
+
+        // A single scalar initializer for this (sub-)object.
+        if (const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType))
+        {
+            // The only non-brace initializer an array accepts is a string literal
+            // initializing a character array.
+            const auto strLit = std::dynamic_pointer_cast<StringLiterals>(init);
+            if (strLit && isInteger(arr->getInner()))
+            {
+                const auto strArr = std::dynamic_pointer_cast<ArrayType>(init->resolvedType);
+                if (strArr && strArr->getSize() > arr->getSize())
+                    error(line, col, "string literal too long for " + targetType->toString() + ".");
+                return;
+            }
+            error(line, col,
+                  "cannot initialize array type " + targetType->toString() +
+                      " with a scalar initializer.");
+            return;
+        }
+
+        init = decayArray(init);
+        if (isStatic)
+        {
+            // Conversions aren't materialized for static initializers; the constant
+            // was folded by the caller. Just validate assignability.
+            if (!isAssignmentCompatible(targetType, init))
+                error(line, col,
+                      "cannot initialize " + targetType->toString() + " with " +
+                          init->resolvedType->toString() + ".");
+        }
+        else
+        {
+            init = convertByAssignment(init, targetType, line, col);
+        }
+    }
+
+    // Fold a constant static initializer into its flat data image. Brace lists
+    // recurse into element offsets and append a trailing Zero for any uninitialized
+    // tail; scalar leaves are converted to the (sub-)object type.
+    void buildStaticInits(const std::shared_ptr<Type> &targetType,
+                          const std::shared_ptr<Expression> &init, std::vector<StaticInit> &out)
+    {
+        if (const auto initList = std::dynamic_pointer_cast<InitExpr>(init))
+        {
+            const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType);
+            const auto elem = arr->getInner();
+            for (const auto &element : initList->elements)
+                buildStaticInits(elem, element, out);
+            const long long pad =
+                static_cast<long long>(arr->getSize() - initList->elements.size()) *
+                sizeOfTypeBytes(elem);
+            if (pad > 0)
+                out.push_back(StaticInit::zero(pad));
+            return;
+        }
+
+        if (isDouble(targetType))
+        {
+            double d;
+            long long i;
+            if (evalConstDouble(init, d))
+                out.push_back(StaticInit::dbl(d));
+            else if (evalConstInt(init, i))
+                out.push_back(
+                    StaticInit::dbl(isUnsigned(init->resolvedType)
+                                        ? static_cast<double>(static_cast<unsigned long long>(i))
+                                        : static_cast<double>(i)));
+            else
+                out.push_back(StaticInit::dbl(0.0));
+            return;
+        }
+
+        // Integer or pointer target: fold to an integer, narrowed to its width.
+        long long v = 0;
+        long long i;
+        double d;
+        if (evalConstInt(init, i))
+            v = i;
+        else if (evalConstDouble(init, d))
+            v = isUnsigned(targetType) ? static_cast<long long>(static_cast<unsigned long long>(d))
+                                       : static_cast<long long>(d);
+        v = reduceToType(v, targetType);
+        out.push_back(sizeOfTypeBytes(targetType) == 8 ? StaticInit::i64(v) : StaticInit::i32(v));
+    }
+
     void analyzeVarDecl(const std::shared_ptr<VarDecl> &variable)
     {
         const bool fileScope = variable->global;
@@ -1433,112 +1644,36 @@ class SemanticAnalyzer
 
         declareVariable(variable, fileScope, sc, hasInit);
 
+        const bool staticDuration =
+            variable->symbol && variable->symbol->duration == StorageDuration::Static;
+
         if (variable->initialization)
         {
             analyzeExpr(variable->initialization);
 
             // Static-duration variables require a constant initializer.
-            if (variable->symbol && variable->symbol->duration == StorageDuration::Static)
+            if (staticDuration && !isConstantInitializer(variable->initialization))
+                error(variable->getLine(), variable->getCol(),
+                      "initializer for '" + variable->name +
+                          "' with static storage duration must be a constant expression.");
+
+            checkInitializer(variable->type, variable->initialization, staticDuration,
+                             variable->getLine(), variable->getCol());
+
+            if (staticDuration && variable->symbol)
             {
-                const auto &init = variable->initialization;
-                if (!isConstantInitializer(init))
-                {
-                    error(variable->getLine(), variable->getCol(),
-                          "initializer for '" + variable->name +
-                              "' with static storage duration must be a constant expression.");
-                }
-                else if (isDouble(variable->type))
-                {
-                    // Fold to a double; an integer constant initializer converts to double.
-                    double val_d;
-                    long long val_i;
-                    if (evalConstDouble(init, val_d))
-                        variable->symbol->constInitDouble = val_d;
-                    else if (evalConstInt(init, val_i))
-                        variable->symbol->constInitDouble =
-                            isUnsigned(init->resolvedType)
-                                ? static_cast<double>(static_cast<unsigned long long>(val_i))
-                                : static_cast<double>(val_i);
-                }
-                else
-                {
-                    // Fold to an integer, narrowed to the declared width; a double
-                    // constant initializer truncates toward zero.
-                    long long val_i;
-                    double val_d;
-                    if (evalConstInt(init, val_i))
-                        variable->symbol->constInit = reduceToType(val_i, variable->type);
-                    else if (evalConstDouble(init, val_d))
-                        variable->symbol->constInit = reduceToType(
-                            isUnsigned(variable->type)
-                                ? static_cast<long long>(static_cast<unsigned long long>(val_d))
-                                : static_cast<long long>(val_d),
-                            variable->type);
-                }
+                // A definition's image wins over any zero image left by an earlier
+                // tentative redeclaration of the same object.
+                variable->symbol->staticInits.clear();
+                buildStaticInits(variable->type, variable->initialization,
+                                 variable->symbol->staticInits);
             }
-
-            if (auto x = std::dynamic_pointer_cast<InitExpr>(variable->initialization))
-            {
-                if (!isArray(variable->type))
-                {
-                    error(variable->getLine(), variable->getCol(),
-                          "Init expression requires array as LHS, got " +
-                              variable->type->toString());
-                    return;
-                }
-                std::shared_ptr<ArrayType> initArrayType =
-                    std::dynamic_pointer_cast<ArrayType>(variable->type);
-                auto innerType = initArrayType->getInner();
-                for (const auto &element : x->elements)
-                {
-                    if (!innerType->equals(*element->resolvedType))
-                    {
-                        error(variable->getLine(), variable->getCol(),
-                              "Mismatch in init elements, expected " + innerType->toString() +
-                                  " received, " + element->resolvedType->toString());
-                    }
-                }
-                if (initArrayType->getSize() < x->elements.size())
-                {
-                    error(variable->getLine(), variable->getCol(),
-                          "Mismatch in init elements, expected " +
-                              std::to_string(initArrayType->getSize()) + " received, " +
-                              std::to_string(x->elements.size()));
-                }
-            }
-            else
-            {
-                auto lType = variable->type;
-                auto rType = variable->initialization->resolvedType;
-
-                auto lArr = std::dynamic_pointer_cast<ArrayType>(lType);
-                auto rArr = std::dynamic_pointer_cast<ArrayType>(rType);
-                bool stringInit = lArr && rArr && isInteger(lArr->getInner()) &&
-                                  isInteger(rArr->getInner()) && rArr->getSize() <= lArr->getSize();
-
-                const bool staticDuration =
-                    variable->symbol && variable->symbol->duration == StorageDuration::Static;
-
-                if (stringInit || canDecayTo(rType, lType))
-                {
-                    // array / string-literal initialization keeps its own rules
-                }
-                else if (staticDuration)
-                {
-                    // The constant was already folded above; just validate the type.
-                    // (Conversions aren't materialized for static initializers.)
-                    if (!isAssignmentCompatible(lType, variable->initialization))
-                        error(
-                            variable->getLine(), variable->getCol(),
-                            "Left expression and right expression are not same type, left type: " +
-                                lType->toString() + ", right type: " + rType->toString() + ".");
-                }
-                else
-                {
-                    variable->initialization = convertByAssignment(
-                        variable->initialization, lType, variable->getLine(), variable->getCol());
-                }
-            }
+        }
+        else if (staticDuration && variable->symbol && variable->symbol->staticInits.empty())
+        {
+            // No initializer: the whole object is zero (.bss), unless a defining
+            // declaration of the same object already supplied an image.
+            variable->symbol->staticInits = {StaticInit::zero(sizeOfTypeBytes(variable->type))};
         }
     }
 
@@ -1569,7 +1704,7 @@ class SemanticAnalyzer
         }
         if (stmt->returnExpression != nullptr)
         {
-            analyzeExpr(stmt->returnExpression);
+            analyzeAndDecay(stmt->returnExpression);
             stmt->returnExpression =
                 convertByAssignment(stmt->returnExpression, currentReturnType,
                                     stmt->returnExpression->getLine(), stmt->returnExpression->col);
@@ -1586,7 +1721,7 @@ class SemanticAnalyzer
 
     void analyzeIfStmt(const std::shared_ptr<IfStmt> &ifStmt)
     {
-        analyzeExpr(ifStmt->condition);
+        analyzeAndDecay(ifStmt->condition);
 
         if (!isScalar(ifStmt->condition->resolvedType))
         {
@@ -1612,7 +1747,7 @@ class SemanticAnalyzer
         int prevLoopLabel = loopLabel;
         loopLabel = ++labelCounter;
         whileStmt->label = loopLabel;
-        analyzeExpr(whileStmt->condition);
+        analyzeAndDecay(whileStmt->condition);
 
         if (!isScalar(whileStmt->condition->resolvedType))
         {
@@ -1632,7 +1767,7 @@ class SemanticAnalyzer
         int prevLoopLabel = loopLabel;
         loopLabel = ++labelCounter;
         doWhileStmt->label = loopLabel;
-        analyzeExpr(doWhileStmt->condition);
+        analyzeAndDecay(doWhileStmt->condition);
 
         if (!isScalar(doWhileStmt->condition->resolvedType))
         {
@@ -1708,10 +1843,16 @@ class SemanticAnalyzer
                   "block-scope function '" + stmt->declaration->name +
                       "' cannot be declared 'static'.");
 
+        if (isArray(stmt->declaration->type))
+            error(stmt->declaration->getLine(), stmt->declaration->getCol(),
+                  "function '" + stmt->declaration->name + "' cannot return array type " +
+                      stmt->declaration->type->toString() + ".");
+
         std::vector<std::shared_ptr<Type>> paramTypes;
         paramTypes.reserve(stmt->declaration->parameters.size());
-        for (const auto &param : stmt->declaration->parameters)
+        for (auto &param : stmt->declaration->parameters)
         {
+            param.type = adjustParamType(param.type);
             paramTypes.push_back(param.type);
         }
         auto functionType = std::make_shared<FunctionType>(stmt->declaration->type, paramTypes,
@@ -1777,10 +1918,16 @@ class SemanticAnalyzer
         auto prev = currentReturnType;
         currentReturnType = node->type;
 
+        if (isArray(node->type))
+            error(node->getLine(), node->getCol(),
+                  "function '" + node->name + "' cannot return array type " +
+                      node->type->toString() + ".");
+
         std::vector<std::shared_ptr<Type>> paramTypes;
         paramTypes.reserve(node->parameters.size());
-        for (const auto &param : node->parameters)
+        for (auto &param : node->parameters)
         {
+            param.type = adjustParamType(param.type);
             paramTypes.push_back(param.type);
         }
         auto functionType = std::make_shared<FunctionType>(node->type, paramTypes, node->variadic);

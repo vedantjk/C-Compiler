@@ -1,23 +1,23 @@
 #pragma once
 
-#include "../../../tacky/instructions/val.h"
+#include "../../../types/types.h"
 #include "codegenTopLevelNode.h"
 #include <string>
-#include <variant>
+#include <vector>
 
 class codegenStaticVariable : public codegenTopLevelNode
 {
   public:
     std::string name;
     bool global;
-    // Integer payload (held as long long) or a double; `type` says which is live.
-    std::variant<long long, double> init;
-    ConstantType type; // INT -> .long, LONG -> .quad, DOUBLE -> .double
+    // Flat data image (scalars: one entry; arrays: a sequence + trailing zero).
+    std::vector<StaticInit> inits;
+    int align;
 
     codegenStaticVariable(const int line_, const int col_, std::string name_, bool global_,
-                          std::variant<long long, double> init_, ConstantType type_)
+                          std::vector<StaticInit> inits_, int align_)
         : codegenTopLevelNode(line_, col_), name(std::move(name_)), global(global_),
-          init(std::move(init_)), type(type_)
+          inits(std::move(inits_)), align(align_)
     {
     }
 };
