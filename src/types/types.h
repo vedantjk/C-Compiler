@@ -2,6 +2,25 @@
 #include <memory>
 #include <string>
 
+// Kind tag for every concrete Type subclass. ORDER matters: characters are
+// Char..UChar (contiguous), integers are Char..ULong (contiguous superset).
+enum class TypeKind
+{
+    Char,
+    SChar,
+    UChar,
+    Int,
+    UInt,
+    Long,
+    ULong,
+    Double,
+    Void,
+    Struct,
+    Pointer,
+    Array,
+    Function
+};
+
 // One entry in a static initializer's data image. A scalar is a single entry; an
 // array is a flat sequence of entries with a trailing Zero for any uninitialized
 // tail. Emitted as .long / .quad / .double / .zero.
@@ -118,14 +137,20 @@ inline std::string decodeStringLiteral(const std::string &lit)
 class Type
 {
   public:
+    const TypeKind kind;
+    TypeKind getKind() const { return kind; }
+
     [[nodiscard]] virtual std::string toString() const = 0;
     virtual ~Type() = default;
     virtual bool equals(const Type &other) const = 0;
+
+  protected:
+    explicit Type(TypeKind k) : kind(k) {}
 };
 
 class IntType : public Type
 {
-    IntType() = default;
+    IntType() : Type(TypeKind::Int) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -137,11 +162,13 @@ class IntType : public Type
     [[nodiscard]] std::string toString() const override { return "int"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Int; }
 };
 
 class LongType : public Type
 {
-    LongType() = default;
+    LongType() : Type(TypeKind::Long) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -153,11 +180,13 @@ class LongType : public Type
     [[nodiscard]] std::string toString() const override { return "long"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Long; }
 };
 
 class UnsignedIntType : public Type
 {
-    UnsignedIntType() = default;
+    UnsignedIntType() : Type(TypeKind::UInt) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -169,11 +198,13 @@ class UnsignedIntType : public Type
     [[nodiscard]] std::string toString() const override { return "unsigned int"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::UInt; }
 };
 
 class UnsignedLongType : public Type
 {
-    UnsignedLongType() = default;
+    UnsignedLongType() : Type(TypeKind::ULong) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -185,11 +216,13 @@ class UnsignedLongType : public Type
     [[nodiscard]] std::string toString() const override { return "unsigned long"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::ULong; }
 };
 
 class DoubleType : public Type
 {
-    DoubleType() = default;
+    DoubleType() : Type(TypeKind::Double) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -201,11 +234,13 @@ class DoubleType : public Type
     [[nodiscard]] std::string toString() const override { return "double"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Double; }
 };
 
 class CharType : public Type
 {
-    CharType() = default;
+    CharType() : Type(TypeKind::Char) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -217,11 +252,13 @@ class CharType : public Type
     [[nodiscard]] std::string toString() const override { return "char"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Char; }
 };
 
 class SignedCharType : public Type
 {
-    SignedCharType() = default;
+    SignedCharType() : Type(TypeKind::SChar) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -233,11 +270,13 @@ class SignedCharType : public Type
     [[nodiscard]] std::string toString() const override { return "signed char"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::SChar; }
 };
 
 class UnsignedCharType : public Type
 {
-    UnsignedCharType() = default;
+    UnsignedCharType() : Type(TypeKind::UChar) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -249,11 +288,13 @@ class UnsignedCharType : public Type
     [[nodiscard]] std::string toString() const override { return "unsigned char"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::UChar; }
 };
 
 class VoidType : public Type
 {
-    VoidType() = default;
+    VoidType() : Type(TypeKind::Void) {}
 
   public:
     static std::shared_ptr<Type> getInstance()
@@ -265,6 +306,8 @@ class VoidType : public Type
     [[nodiscard]] std::string toString() const override { return "void"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Void; }
 };
 
 class StructType : public Type
@@ -272,7 +315,7 @@ class StructType : public Type
     std::string name;
 
   public:
-    explicit StructType(std::string n) : name(std::move(n)) {}
+    explicit StructType(std::string n) : Type(TypeKind::Struct), name(std::move(n)) {}
     [[nodiscard]] std::string toString() const override { return "struct " + name; }
     [[nodiscard]] const std::string &getName() const { return name; }
     // Semantic analysis rewrites the source tag to its resolved (mangled) name so
@@ -287,6 +330,8 @@ class StructType : public Type
 
         return name == s->getName();
     }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Struct; }
 };
 
 class PointerType : public Type
@@ -294,7 +339,10 @@ class PointerType : public Type
     std::shared_ptr<Type> inner;
 
   public:
-    explicit PointerType(std::shared_ptr<Type> inner) : inner(std::move(inner)) {}
+    explicit PointerType(std::shared_ptr<Type> inner)
+        : Type(TypeKind::Pointer), inner(std::move(inner))
+    {
+    }
     [[nodiscard]] std::string toString() const override { return inner->toString() + "*"; }
     [[nodiscard]] std::shared_ptr<Type> getInner() const { return inner; }
 
@@ -306,6 +354,8 @@ class PointerType : public Type
 
         return inner->equals(*p->inner);
     }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Pointer; }
 };
 
 class ArrayType : public Type
@@ -314,7 +364,10 @@ class ArrayType : public Type
     size_t size;
 
   public:
-    ArrayType(std::shared_ptr<Type> inner, size_t size) : inner(std::move(inner)), size(size) {}
+    ArrayType(std::shared_ptr<Type> inner, size_t size)
+        : Type(TypeKind::Array), inner(std::move(inner)), size(size)
+    {
+    }
     [[nodiscard]] std::string toString() const override
     {
         return inner->toString() + "[" + std::to_string(size) + "]";
@@ -331,6 +384,8 @@ class ArrayType : public Type
         return inner->equals(*a->inner);
     }
     [[nodiscard]] size_t getSize() const { return size; }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Array; }
 };
 
 class FunctionType : public Type
@@ -341,10 +396,8 @@ class FunctionType : public Type
     bool isVariadic;
     FunctionType(std::shared_ptr<Type> returnType, std::vector<std::shared_ptr<Type>> paramTypes,
                  bool isVariadic = false)
-        :
-
-          returnType(std::move(returnType)), paramTypes(std::move(paramTypes)),
-          isVariadic(isVariadic)
+        : Type(TypeKind::Function), returnType(std::move(returnType)),
+          paramTypes(std::move(paramTypes)), isVariadic(isVariadic)
     {
     }
     [[nodiscard]] std::string toString() const override
@@ -385,6 +438,8 @@ class FunctionType : public Type
                 return false;
         return true;
     }
+
+    static bool classof(TypeKind k) { return k == TypeKind::Function; }
 };
 
 inline bool canDecayTo(std::shared_ptr<Type> &from, const std::shared_ptr<Type> &to)

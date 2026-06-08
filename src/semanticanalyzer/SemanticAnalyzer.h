@@ -40,46 +40,29 @@ inline bool isComma(const std::string &op) { return op == ","; }
 // types but are promoted to int before taking part in most expressions.
 inline bool isCharacter(const std::shared_ptr<Type> &t)
 {
-    return std::dynamic_pointer_cast<CharType>(t) != nullptr ||
-           std::dynamic_pointer_cast<SignedCharType>(t) != nullptr ||
-           std::dynamic_pointer_cast<UnsignedCharType>(t) != nullptr;
+    const TypeKind k = t->getKind();
+    return k >= TypeKind::Char && k <= TypeKind::UChar;
 }
 
 inline bool isInteger(const std::shared_ptr<Type> &t)
 {
-    return std::dynamic_pointer_cast<IntType>(t) != nullptr ||
-           std::dynamic_pointer_cast<LongType>(t) != nullptr || isCharacter(t) ||
-           std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
-           std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
+    const TypeKind k = t->getKind();
+    return k >= TypeKind::Char && k <= TypeKind::ULong;
 }
 
-inline bool isPointer(const std::shared_ptr<Type> &t)
-{
-    const auto x = std::dynamic_pointer_cast<PointerType>(t);
-    return x != nullptr;
-}
+inline bool isPointer(const std::shared_ptr<Type> &t) { return t->getKind() == TypeKind::Pointer; }
 
-inline bool isArray(const std::shared_ptr<Type> &t)
-{
-    const auto x = std::dynamic_pointer_cast<ArrayType>(t);
-    return x != nullptr;
-}
+inline bool isArray(const std::shared_ptr<Type> &t) { return t->getKind() == TypeKind::Array; }
 
-inline bool isStruct(const std::shared_ptr<Type> &t)
-{
-    return std::dynamic_pointer_cast<StructType>(t) != nullptr;
-}
+inline bool isStruct(const std::shared_ptr<Type> &t) { return t->getKind() == TypeKind::Struct; }
 
-inline bool isVoid(const std::shared_ptr<Type> &t)
-{
-    const auto x = std::dynamic_pointer_cast<VoidType>(t);
-    return x != nullptr;
-}
+inline bool isVoid(const std::shared_ptr<Type> &t) { return t->getKind() == TypeKind::Void; }
 
 inline bool isVoidPointer(const std::shared_ptr<Type> &t)
 {
-    const auto p = std::dynamic_pointer_cast<PointerType>(t);
-    return p && isVoid(p->getInner());
+    if (t->getKind() != TypeKind::Pointer)
+        return false;
+    return isVoid(static_cast<const PointerType *>(t.get())->getInner());
 }
 
 // A type is complete when an object of it has a known size. void is incomplete;
@@ -88,19 +71,17 @@ inline bool isVoidPointer(const std::shared_ptr<Type> &t)
 // recursively, void[3][4] are incomplete).
 inline bool isComplete(const std::shared_ptr<Type> &t)
 {
-    if (isVoid(t))
+    const TypeKind k = t->getKind();
+    if (k == TypeKind::Void)
         return false;
-    if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
-        return isComplete(a->getInner());
-    if (const auto s = std::dynamic_pointer_cast<StructType>(t))
-        return findStructLayout(s->getName()) != nullptr;
+    if (k == TypeKind::Array)
+        return isComplete(static_cast<const ArrayType *>(t.get())->getInner());
+    if (k == TypeKind::Struct)
+        return findStructLayout(static_cast<const StructType *>(t.get())->getName()) != nullptr;
     return true;
 }
 
-inline bool isDouble(const std::shared_ptr<Type> &t)
-{
-    return std::dynamic_pointer_cast<DoubleType>(t) != nullptr;
-}
+inline bool isDouble(const std::shared_ptr<Type> &t) { return t->getKind() == TypeKind::Double; }
 
 inline bool isScalar(const std::shared_ptr<Type> &t)
 {
@@ -109,28 +90,30 @@ inline bool isScalar(const std::shared_ptr<Type> &t)
 
 inline bool isUnsigned(const std::shared_ptr<Type> &t)
 {
-    return std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
-           std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr ||
-           std::dynamic_pointer_cast<UnsignedCharType>(t) != nullptr;
+    const TypeKind k = t->getKind();
+    return k == TypeKind::UChar || k == TypeKind::UInt || k == TypeKind::ULong;
 }
 
 // Width in bytes of a scalar type; 0 for non-scalars. Used for usual-arithmetic
 // conversions, where the wider integer type wins.
 inline int typeSize(const std::shared_ptr<Type> &t)
 {
-    if (isCharacter(t))
+    switch (t->getKind())
+    {
+    case TypeKind::Char:
+    case TypeKind::SChar:
+    case TypeKind::UChar:
         return 1;
-    if (std::dynamic_pointer_cast<IntType>(t))
+    case TypeKind::Int:
+    case TypeKind::UInt:
         return 4;
-    if (std::dynamic_pointer_cast<LongType>(t))
+    case TypeKind::Long:
+    case TypeKind::ULong:
+    case TypeKind::Pointer:
         return 8;
-    if (std::dynamic_pointer_cast<UnsignedIntType>(t))
-        return 4;
-    if (std::dynamic_pointer_cast<UnsignedLongType>(t))
-        return 8;
-    if (std::dynamic_pointer_cast<PointerType>(t))
-        return 8;
-    return 0;
+    default:
+        return 0;
+    }
 }
 
 // Common type of two arithmetic operands (callers gate on isInteger), i.e. the
@@ -170,15 +153,20 @@ inline std::shared_ptr<Type> getCommonType(const std::shared_ptr<Type> &aIn,
 // or unsigned), char its low 8, 8-byte types keep all 64.
 inline long long reduceToType(long long v, const std::shared_ptr<Type> &t)
 {
-    if (std::dynamic_pointer_cast<IntType>(t))
+    switch (t->getKind())
+    {
+    case TypeKind::Int:
         return static_cast<int>(v);
-    if (std::dynamic_pointer_cast<UnsignedIntType>(t))
+    case TypeKind::UInt:
         return static_cast<unsigned int>(v);
-    if (std::dynamic_pointer_cast<CharType>(t) || std::dynamic_pointer_cast<SignedCharType>(t))
+    case TypeKind::Char:
+    case TypeKind::SChar:
         return static_cast<signed char>(v);
-    if (std::dynamic_pointer_cast<UnsignedCharType>(t))
+    case TypeKind::UChar:
         return static_cast<unsigned char>(v);
-    return v;
+    default:
+        return v;
+    }
 }
 
 // Object size in bytes; arrays recurse (count * element size); structs come from
