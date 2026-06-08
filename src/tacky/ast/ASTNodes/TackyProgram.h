@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../types/StructLayout.h"
+#include "../../../types/TypeQueries.h"
 #include "../TopLevelNodes/TackyTopLevelNode.h"
 #include "./TackyASTNode.h"
 

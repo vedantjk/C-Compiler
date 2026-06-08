@@ -14,7 +14,7 @@
 #include "../ast/TopLevelNodes/VarDecl.h"
 #include "../support/RTTI.h"
 #include "../symboltable/SymbolTable.h"
-#include "../types/StructLayout.h"
+#include "../types/TypeQueries.h"
 #include "../utils/diagnostic.h"
 
 inline bool isArithmeticOp(const std::string &op)
@@ -167,36 +167,6 @@ inline long long reduceToType(long long v, const std::shared_ptr<Type> &t)
     default:
         return v;
     }
-}
-
-// Object size in bytes; arrays recurse (count * element size); structs come from
-// their computed layout (0 if still incomplete — callers gate on completeness).
-inline long long sizeOfTypeBytes(const std::shared_ptr<Type> &t)
-{
-    if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
-        return static_cast<long long>(a->getSize()) * sizeOfTypeBytes(a->getInner());
-    if (const auto s = std::dynamic_pointer_cast<StructType>(t))
-        return findStructLayout(s->getName()) ? findStructLayout(s->getName())->size : 0;
-    if (isCharacter(t))
-        return 1;
-    if (std::dynamic_pointer_cast<IntType>(t) || std::dynamic_pointer_cast<UnsignedIntType>(t))
-        return 4;
-    return 8; // long, unsigned long, double, pointer
-}
-
-// Natural type alignment, used to lay out struct members: an array aligns like
-// its element, a struct to its computed layout alignment. (The separate "a
-// standalone array variable >= 16 bytes gets 16-byte alignment" rule is an
-// allocation property of the variable, not of the type, so it does not apply
-// here and would over-pad members — gcc aligns `char arr[19]` inside a struct to
-// 1, giving size 19, not 32.)
-inline int alignOfTypeBytes(const std::shared_ptr<Type> &t)
-{
-    if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
-        return alignOfTypeBytes(a->getInner());
-    if (const auto s = std::dynamic_pointer_cast<StructType>(t))
-        return findStructLayout(s->getName()) ? findStructLayout(s->getName())->alignment : 1;
-    return static_cast<int>(sizeOfTypeBytes(t));
 }
 
 class SemanticAnalyzer
@@ -1477,10 +1447,10 @@ class SemanticAnalyzer
                 continue;
             }
 
-            const int a = alignOfTypeBytes(f.type);
+            const int a = typeAlignOf(f.type);
             offset = (offset + a - 1) / a * a;
             layout.members.push_back({f.name, f.type, static_cast<int>(offset)});
-            offset += sizeOfTypeBytes(f.type);
+            offset += sizeOfType(f.type);
             if (a > align)
                 align = a;
         }
@@ -2014,7 +1984,7 @@ class SemanticAnalyzer
                     buildStaticInits(elem, element.get(), out);
                 const long long pad =
                     static_cast<long long>(arr->getSize() - initList->elements.size()) *
-                    sizeOfTypeBytes(elem);
+                    sizeOfType(elem);
                 if (pad > 0)
                     out.push_back(StaticInit::zero(pad));
                 return;
@@ -2029,7 +1999,7 @@ class SemanticAnalyzer
                 if (m.offset > cur)
                     out.push_back(StaticInit::zero(m.offset - cur));
                 buildStaticInits(m.type, initList->elements[i].get(), out);
-                cur = m.offset + sizeOfTypeBytes(m.type);
+                cur = m.offset + sizeOfType(m.type);
             }
             if (layout->size > cur)
                 out.push_back(StaticInit::zero(layout->size - cur));
@@ -2090,7 +2060,7 @@ class SemanticAnalyzer
             v = isUnsigned(targetType) ? static_cast<long long>(static_cast<unsigned long long>(d))
                                        : static_cast<long long>(d);
         v = reduceToType(v, targetType);
-        const long long width = sizeOfTypeBytes(targetType);
+        const long long width = sizeOfType(targetType);
         out.push_back(width == 8   ? StaticInit::i64(v)
                       : width == 1 ? StaticInit::i8(v)
                                    : StaticInit::i32(v));
@@ -2138,7 +2108,7 @@ class SemanticAnalyzer
         {
             // No initializer: the whole object is zero (.bss), unless a defining
             // declaration of the same object already supplied an image.
-            variable.symbol->staticInits = {StaticInit::zero(sizeOfTypeBytes(variable.type))};
+            variable.symbol->staticInits = {StaticInit::zero(sizeOfType(variable.type))};
         }
     }
 

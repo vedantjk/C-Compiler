@@ -15,7 +15,7 @@
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
 #include "../tacky/instructions/instructions.h"
 #include "../tacky/instructions/val.h"
-#include "../types/StructLayout.h"
+#include "../types/TypeQueries.h"
 #include "ast/TopLevelNodes/TackyStaticVariable.h"
 
 #include <memory>
@@ -61,27 +61,6 @@ class TackyDriver
         return std::dynamic_pointer_cast<PointerType>(t) != nullptr;
     }
 
-    // Size in bytes of an object of this type. Arrays recurse (count * element
-    // size), so a pointer into a multi-dimensional array scales by the whole
-    // sub-array's footprint.
-    static long long sizeOfType(const std::shared_ptr<Type> &t)
-    {
-        if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
-            return static_cast<long long>(a->getSize()) * sizeOfType(a->getInner());
-        if (const auto s = std::dynamic_pointer_cast<StructType>(t))
-        {
-            const StructLayout *l = findStructLayout(s->getName());
-            return l ? l->size : 0;
-        }
-        if (std::dynamic_pointer_cast<CharType>(t) ||
-            std::dynamic_pointer_cast<SignedCharType>(t) ||
-            std::dynamic_pointer_cast<UnsignedCharType>(t))
-            return 1;
-        if (std::dynamic_pointer_cast<IntType>(t) || std::dynamic_pointer_cast<UnsignedIntType>(t))
-            return 4;
-        return 8; // long, unsigned long, double, pointer
-    }
-
     // Element size a pointer steps by: the size of what it points to.
     static long long pointeeSize(const std::shared_ptr<Type> &ptrType)
     {
@@ -89,29 +68,12 @@ class TackyDriver
         return p ? sizeOfType(p->getInner()) : 1;
     }
 
-    // Natural alignment of a type; an array aligns like its base element, except
-    // objects of 16 bytes or more get 16-byte alignment (SysV / book rule).
-    static int alignOfType(const std::shared_ptr<Type> &t)
-    {
-        if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
-        {
-            const int base = alignOfType(a->getInner());
-            return sizeOfType(t) >= 16 ? 16 : base;
-        }
-        if (const auto s = std::dynamic_pointer_cast<StructType>(t))
-        {
-            const StructLayout *l = findStructLayout(s->getName());
-            return l ? l->alignment : 1;
-        }
-        return static_cast<int>(sizeOfType(t));
-    }
-
     // Record an aggregate local so codegen can size its stack slot. Arrays carry
     // only size/align; structs additionally carry their System V classification.
     void recordArrayObject(const std::string &name, const std::shared_ptr<Type> &t)
     {
         if (std::dynamic_pointer_cast<ArrayType>(t))
-            arrayObjects[name] = ArrayObject{sizeOfType(t), alignOfType(t)};
+            arrayObjects[name] = ArrayObject{sizeOfType(t), objectAlignOf(t)};
         else if (const auto s = std::dynamic_pointer_cast<StructType>(t))
             structObjects[name] = classifyStruct(s->getName());
     }
@@ -1360,7 +1322,8 @@ class TackyDriver
                     si = StaticInit::ptrLabel(internBytes(si.strVal));
             nodes.push_back(std::make_unique<TackyStaticVariable>(
                 symbol->line, symbol->column, symbol->uniqueName,
-                symbol->linkage == Linkage::External, std::move(inits), alignOfType(symbol->type)));
+                symbol->linkage == Linkage::External, std::move(inits),
+                objectAlignOf(symbol->type)));
         }
         // Emit interned string literals as null-terminated static constants.
         for (const auto &sc : stringConstants)
