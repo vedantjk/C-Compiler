@@ -10,6 +10,11 @@ class Expression : public ASTNode
     std::shared_ptr<Type> resolvedType;
     bool isLvalue = false;
 
-    Expression(int line_, int col_) : ASTNode(line_, col_) {}
+    Expression(NodeKind k, int line_, int col_) : ASTNode(k, line_, col_) {}
     virtual ~Expression() = default;
+
+    static bool classof(NodeKind k)
+    {
+        return k >= NodeKind::_FirstExpr && k <= NodeKind::_LastExpr;
+    }
 };

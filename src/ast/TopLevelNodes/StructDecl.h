@@ -26,10 +26,12 @@ class StructDecl : public TopLevelNode
 
     StructDecl(std::string name, std::vector<StructField> fields, int line, int col,
                std::shared_ptr<Type> baseType, bool isComplete = true)
-        : TopLevelNode(line, col), name(std::move(name)), fields(std::move(fields)),
-          baseType(std::move(baseType)), isComplete(isComplete)
+        : TopLevelNode(NodeKind::StructDecl, line, col), name(std::move(name)),
+          fields(std::move(fields)), baseType(std::move(baseType)), isComplete(isComplete)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::StructDecl; }
 
     void print(std::ostream &out, int tab) const override
     {

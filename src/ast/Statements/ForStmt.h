@@ -18,11 +18,13 @@ class ForStmt : public Statement
     ForStmt(int line_, int col_, std::shared_ptr<Statement> initialization_,
             std::shared_ptr<Statement> condition_, std::shared_ptr<Statement> update_,
             std::shared_ptr<BlockStmt> forBlock_)
-        : Statement(line_, col_), initialization(std::move(initialization_)),
+        : Statement(NodeKind::ForStmt, line_, col_), initialization(std::move(initialization_)),
           condition(std::move(condition_)), update(std::move(update_)),
           forBlock(std::move(forBlock_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::ForStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

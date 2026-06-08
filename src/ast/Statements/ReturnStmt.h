@@ -10,9 +10,12 @@ class ReturnStmt : public Statement
     std::shared_ptr<Expression> returnExpression;
 
     ReturnStmt(int line_, int col_, std::shared_ptr<Expression> returnExpression_)
-        : Statement(line_, col_), returnExpression(std::move(returnExpression_))
+        : Statement(NodeKind::ReturnStmt, line_, col_),
+          returnExpression(std::move(returnExpression_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::ReturnStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

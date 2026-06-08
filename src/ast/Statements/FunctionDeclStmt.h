@@ -16,9 +16,11 @@ class FunctionDeclStmt : public Statement
     std::shared_ptr<Function> declaration;
 
     FunctionDeclStmt(int line_, int col_, std::shared_ptr<Function> declaration_)
-        : Statement(line_, col_), declaration(std::move(declaration_))
+        : Statement(NodeKind::FunctionDeclStmt, line_, col_), declaration(std::move(declaration_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::FunctionDeclStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

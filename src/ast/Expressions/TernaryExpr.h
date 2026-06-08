@@ -10,10 +10,12 @@ class TernaryExpr : public Expression
 
     TernaryExpr(std::shared_ptr<Expression> condition, std::shared_ptr<Expression> ifBranch,
                 std::shared_ptr<Expression> elseBranch, int line, int col)
-        : Expression(line, col), condition(std::move(condition)), thenBranch(std::move(ifBranch)),
-          elseBranch(std::move(elseBranch))
+        : Expression(NodeKind::TernaryExpr, line, col), condition(std::move(condition)),
+          thenBranch(std::move(ifBranch)), elseBranch(std::move(elseBranch))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::TernaryExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

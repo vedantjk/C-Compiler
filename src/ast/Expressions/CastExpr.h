@@ -10,7 +10,9 @@ class CastExpr : public Expression
     std::shared_ptr<Expression> operand;
 
     CastExpr(std::shared_ptr<Type> type, std::shared_ptr<Expression> operand, int line, int column)
-        : Expression(line, column), type(type), operand(operand) {};
+        : Expression(NodeKind::CastExpr, line, column), type(type), operand(operand) {};
+
+    static bool classof(NodeKind k) { return k == NodeKind::CastExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

@@ -13,9 +13,12 @@ class UnaryExpr : public Expression
 
     UnaryExpr(int line_, int col_, std::string op_, std::shared_ptr<Expression> operand_,
               bool isPostFix_ = false)
-        : Expression(line_, col_), op(op_), operand(operand_), isPostFix(isPostFix_)
+        : Expression(NodeKind::UnaryExpr, line_, col_), op(op_), operand(operand_),
+          isPostFix(isPostFix_)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::UnaryExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

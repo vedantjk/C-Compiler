@@ -21,10 +21,12 @@ class VarDecl : public TopLevelNode
     VarDecl(int line_, int col_, std::string name_, std::shared_ptr<Type> type_,
             std::shared_ptr<Expression> initialization_, bool global = false,
             std::optional<StorageClass> storageClass_ = std::nullopt)
-        : TopLevelNode(line_, col_), name(name_), type(type_),
+        : TopLevelNode(NodeKind::VarDecl, line_, col_), name(name_), type(type_),
           initialization(std::move(initialization_)), global(global), storageClass(storageClass_)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::VarDecl; }
 
     void print(std::ostream &out, int tab) const override
     {

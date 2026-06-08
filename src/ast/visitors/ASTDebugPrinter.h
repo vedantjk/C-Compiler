@@ -122,141 +122,91 @@ class ASTDebugPrinter
             return;
         }
 
-        if (auto x = std::dynamic_pointer_cast<Program>(node))
+        switch (node->getKind())
         {
-            visitProgram(x);
-            return;
+        case NodeKind::Program:
+            visitProgram(std::static_pointer_cast<Program>(node));
+            break;
+        case NodeKind::Function:
+            visitFunction(std::static_pointer_cast<Function>(node));
+            break;
+        case NodeKind::StructDecl:
+            visitStructDecl(std::static_pointer_cast<StructDecl>(node));
+            break;
+        case NodeKind::VarDecl:
+            visitVarDecl(std::static_pointer_cast<VarDecl>(node));
+            break;
+        case NodeKind::BlockStmt:
+            visitBlockStmt(std::static_pointer_cast<BlockStmt>(node));
+            break;
+        case NodeKind::DeclareStmt:
+            visitDeclareStmt(std::static_pointer_cast<DeclareStmt>(node));
+            break;
+        case NodeKind::ExprStmt:
+            visitExprStmt(std::static_pointer_cast<ExprStmt>(node));
+            break;
+        case NodeKind::IfStmt:
+            visitIfStmt(std::static_pointer_cast<IfStmt>(node));
+            break;
+        case NodeKind::WhileStmt:
+            visitWhileStmt(std::static_pointer_cast<WhileStmt>(node));
+            break;
+        case NodeKind::DoWhileStmt:
+            visitDoWhileStmt(std::static_pointer_cast<DoWhileStmt>(node));
+            break;
+        case NodeKind::ForStmt:
+            visitForStmt(std::static_pointer_cast<ForStmt>(node));
+            break;
+        case NodeKind::ReturnStmt:
+            visitReturnStmt(std::static_pointer_cast<ReturnStmt>(node));
+            break;
+        case NodeKind::FunctionDeclStmt:
+            visitFunctionDeclStmt(std::static_pointer_cast<FunctionDeclStmt>(node));
+            break;
+        case NodeKind::IntLiterals:
+            visitIntLiterals(std::static_pointer_cast<IntLiterals>(node));
+            break;
+        case NodeKind::StringLiterals:
+            visitStringLiterals(std::static_pointer_cast<StringLiterals>(node));
+            break;
+        case NodeKind::VariableExpr:
+            visitVariableExpr(std::static_pointer_cast<VariableExpr>(node));
+            break;
+        case NodeKind::BinaryExpr:
+            visitBinaryExpr(std::static_pointer_cast<BinaryExpr>(node));
+            break;
+        case NodeKind::UnaryExpr:
+            visitUnaryExpr(std::static_pointer_cast<UnaryExpr>(node));
+            break;
+        case NodeKind::AssignExpr:
+            visitAssignExpr(std::static_pointer_cast<AssignExpr>(node));
+            break;
+        case NodeKind::TernaryExpr:
+            visitTernaryExpr(std::static_pointer_cast<TernaryExpr>(node));
+            break;
+        case NodeKind::CastExpr:
+            visitCastExpr(std::static_pointer_cast<CastExpr>(node));
+            break;
+        case NodeKind::FunctionCallExpr:
+            visitFunctionCallExpr(std::static_pointer_cast<FunctionCallExpr>(node));
+            break;
+        case NodeKind::SubscriptExpr:
+            visitSubscriptExpr(std::static_pointer_cast<SubscriptExpr>(node));
+            break;
+        case NodeKind::MemberExpr:
+            visitMemberExpr(std::static_pointer_cast<MemberExpr>(node));
+            break;
+        case NodeKind::SizeOfExpr:
+            visitSizeOfExpr(std::static_pointer_cast<SizeOfExpr>(node));
+            break;
+        case NodeKind::InitExpr:
+            visitInitExpr(std::static_pointer_cast<InitExpr>(node));
+            break;
+        default:
+            writeIndent();
+            out << "<unknown ASTNode kind>\n";
+            break;
         }
-        if (auto x = std::dynamic_pointer_cast<Function>(node))
-        {
-            visitFunction(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<StructDecl>(node))
-        {
-            visitStructDecl(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<VarDecl>(node))
-        {
-            visitVarDecl(x);
-            return;
-        }
-
-        if (auto x = std::dynamic_pointer_cast<BlockStmt>(node))
-        {
-            visitBlockStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<DeclareStmt>(node))
-        {
-            visitDeclareStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<ExprStmt>(node))
-        {
-            visitExprStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<IfStmt>(node))
-        {
-            visitIfStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<WhileStmt>(node))
-        {
-            visitWhileStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<DoWhileStmt>(node))
-        {
-            visitDoWhileStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<ForStmt>(node))
-        {
-            visitForStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<ReturnStmt>(node))
-        {
-            visitReturnStmt(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<FunctionDeclStmt>(node))
-        {
-            visitFunctionDeclStmt(x);
-            return;
-        }
-
-        if (auto x = std::dynamic_pointer_cast<IntLiterals>(node))
-        {
-            visitIntLiterals(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<StringLiterals>(node))
-        {
-            visitStringLiterals(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<VariableExpr>(node))
-        {
-            visitVariableExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<BinaryExpr>(node))
-        {
-            visitBinaryExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<UnaryExpr>(node))
-        {
-            visitUnaryExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<AssignExpr>(node))
-        {
-            visitAssignExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<TernaryExpr>(node))
-        {
-            visitTernaryExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<CastExpr>(node))
-        {
-            visitCastExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<FunctionCallExpr>(node))
-        {
-            visitFunctionCallExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(node))
-        {
-            visitSubscriptExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<MemberExpr>(node))
-        {
-            visitMemberExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<SizeOfExpr>(node))
-        {
-            visitSizeOfExpr(x);
-            return;
-        }
-        if (auto x = std::dynamic_pointer_cast<InitExpr>(node))
-        {
-            visitInitExpr(x);
-            return;
-        }
-
-        writeIndent();
-        out << "<unknown ASTNode kind>\n";
     }
 
     // ---- Top-level ----

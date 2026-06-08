@@ -8,9 +8,11 @@ class InitExpr : public Expression
     std::vector<std::shared_ptr<Expression>> elements;
 
     InitExpr(std::vector<std::shared_ptr<Expression>> elements, int line, int col)
-        : Expression(line, col), elements(elements)
+        : Expression(NodeKind::InitExpr, line, col), elements(elements)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::InitExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

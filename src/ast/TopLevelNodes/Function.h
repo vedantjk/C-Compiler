@@ -36,11 +36,13 @@ class Function : public TopLevelNode
     Function(int line_, int col_, std::string name_, std::shared_ptr<Type> type_,
              std::vector<Parameter> parameters_, std::shared_ptr<BlockStmt> statements_,
              bool variadic = false, std::optional<StorageClass> storageClass_ = std::nullopt)
-        : TopLevelNode(line_, col_), name(std::move(name_)), type(std::move(type_)),
-          parameters(std::move(parameters_)), statements(std::move(statements_)),
-          variadic(variadic), storageClass(storageClass_)
+        : TopLevelNode(NodeKind::Function, line_, col_), name(std::move(name_)),
+          type(std::move(type_)), parameters(std::move(parameters_)),
+          statements(std::move(statements_)), variadic(variadic), storageClass(storageClass_)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::Function; }
 
     void print(std::ostream &out, int tab) const override
     {

@@ -15,9 +15,11 @@ class DeclareStmt : public Statement
     DeclareStmt(
         int line_, int col_,
         std::variant<std::vector<std::shared_ptr<VarDecl>>, std::shared_ptr<StructDecl>> variables_)
-        : Statement(line_, col_), variables(std::move(variables_))
+        : Statement(NodeKind::DeclareStmt, line_, col_), variables(std::move(variables_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::DeclareStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

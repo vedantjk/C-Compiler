@@ -14,7 +14,10 @@ class SubscriptExpr : public Expression
 
     SubscriptExpr(std::shared_ptr<Expression> lvalue, std::shared_ptr<Expression> index, int line,
                   int col)
-        : Expression(line, col), lvalue(std::move(lvalue)), index(std::move(index)) {};
+        : Expression(NodeKind::SubscriptExpr, line, col), lvalue(std::move(lvalue)),
+          index(std::move(index)) {};
+
+    static bool classof(NodeKind k) { return k == NodeKind::SubscriptExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

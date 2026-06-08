@@ -12,10 +12,12 @@ class BinaryExpr : public Expression
 
     BinaryExpr(int line_, int col_, std::shared_ptr<Expression> left_,
                std::shared_ptr<Expression> right_, std::string binaryOp_)
-        : Expression(line_, col_), left(std::move(left_)), right(std::move(right_)),
-          binaryOp(binaryOp_)
+        : Expression(NodeKind::BinaryExpr, line_, col_), left(std::move(left_)),
+          right(std::move(right_)), binaryOp(binaryOp_)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::BinaryExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

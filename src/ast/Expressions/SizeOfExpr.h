@@ -10,9 +10,11 @@ class SizeOfExpr : public Expression
 
     SizeOfExpr(int line, int col, std::shared_ptr<Type> type = nullptr,
                std::shared_ptr<Expression> expr = nullptr)
-        : Expression(line, col), type(std::move(type)), expr(std::move(expr))
+        : Expression(NodeKind::SizeOfExpr, line, col), type(std::move(type)), expr(std::move(expr))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::SizeOfExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

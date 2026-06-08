@@ -14,10 +14,12 @@ class IfStmt : public Statement
 
     IfStmt(int line_, int col_, std::shared_ptr<Expression> condition_,
            std::shared_ptr<BlockStmt> thenBlock_, std::shared_ptr<BlockStmt> elseBlock_)
-        : Statement(line_, col_), condition(std::move(condition_)),
+        : Statement(NodeKind::IfStmt, line_, col_), condition(std::move(condition_)),
           thenBlock(std::move(thenBlock_)), elseBlock(std::move(elseBlock_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::IfStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

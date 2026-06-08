@@ -14,7 +14,10 @@ class AssignExpr : public Expression
 
     AssignExpr(std::shared_ptr<Expression> lhs, std::shared_ptr<Expression> rhs, std::string op,
                int line, int col)
-        : Expression(line, col), lhs(std::move(lhs)), rhs(std::move(rhs)), op(op) {};
+        : Expression(NodeKind::AssignExpr, line, col), lhs(std::move(lhs)), rhs(std::move(rhs)),
+          op(op) {};
+
+    static bool classof(NodeKind k) { return k == NodeKind::AssignExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

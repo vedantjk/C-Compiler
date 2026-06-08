@@ -10,9 +10,12 @@ class ExprStmt : public Statement
     bool printSemiColon = true;
 
     ExprStmt(std::shared_ptr<Expression> expr, int line, int col, bool printSemiColon = true)
-        : Statement(line, col), expr(std::move(expr)), printSemiColon(printSemiColon)
+        : Statement(NodeKind::ExprStmt, line, col), expr(std::move(expr)),
+          printSemiColon(printSemiColon)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::ExprStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

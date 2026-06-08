@@ -14,10 +14,12 @@ class MemberExpr : public Expression
 
     MemberExpr(std::shared_ptr<Expression> object, std::string field, bool isArrow, int line,
                int col)
-        : Expression(line, col), object(std::move(object)), field(std::move(field)),
-          isArrow(isArrow)
+        : Expression(NodeKind::MemberExpr, line, col), object(std::move(object)),
+          field(std::move(field)), isArrow(isArrow)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::MemberExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

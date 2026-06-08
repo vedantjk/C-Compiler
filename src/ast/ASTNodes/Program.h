@@ -12,9 +12,11 @@ class Program : public ASTNode
     std::vector<std::shared_ptr<TopLevelNode>> nodes;
 
     explicit Program(std::vector<std::shared_ptr<TopLevelNode>> nodes)
-        : ASTNode(0, 0), nodes(std::move(nodes))
+        : ASTNode(NodeKind::Program, 0, 0), nodes(std::move(nodes))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::Program; }
 
     void print(std::ostream &out, int tab) const override
     {

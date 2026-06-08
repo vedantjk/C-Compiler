@@ -17,10 +17,12 @@ class FunctionCallExpr : public Expression
 
     FunctionCallExpr(int line_, int col_, std::shared_ptr<VariableExpr> name_,
                      std::vector<std::shared_ptr<Expression>> parameters_)
-        : Expression(line_, col_), functionName(std::move(name_)),
+        : Expression(NodeKind::FunctionCallExpr, line_, col_), functionName(std::move(name_)),
           parameters(std::move(parameters_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::FunctionCallExpr; }
 
     void print(std::ostream &out, int tab) const override
     {

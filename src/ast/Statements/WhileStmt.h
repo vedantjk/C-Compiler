@@ -15,10 +15,12 @@ class WhileStmt : public Statement
 
     WhileStmt(int line_, int col_, std::shared_ptr<Expression> condition_,
               std::shared_ptr<BlockStmt> whileBlock_)
-        : Statement(line_, col_), condition(std::move(condition_)),
+        : Statement(NodeKind::WhileStmt, line_, col_), condition(std::move(condition_)),
           whileBlock(std::move(whileBlock_))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::WhileStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

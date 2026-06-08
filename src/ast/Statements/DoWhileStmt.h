@@ -12,9 +12,12 @@ class DoWhileStmt : public Statement
 
     DoWhileStmt(std::shared_ptr<BlockStmt> block, std::shared_ptr<Expression> condition, int line,
                 int column)
-        : Statement(line, column), block(std::move(block)), condition(std::move(condition))
+        : Statement(NodeKind::DoWhileStmt, line, column), block(std::move(block)),
+          condition(std::move(condition))
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::DoWhileStmt; }
 
     void print(std::ostream &out, int tab) const override
     {

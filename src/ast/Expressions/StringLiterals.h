@@ -8,9 +8,11 @@ class StringLiterals : public Expression
     std::string literal;
 
     StringLiterals(int line_, int col_, std::string literal_)
-        : Expression(line_, col_), literal(literal_)
+        : Expression(NodeKind::StringLiterals, line_, col_), literal(literal_)
     {
     }
+
+    static bool classof(NodeKind k) { return k == NodeKind::StringLiterals; }
 
     void print(std::ostream &out, int tab) const override { out << literal; }
 };
