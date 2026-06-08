@@ -6,10 +6,10 @@
 class ExprStmt : public Statement
 {
   public:
-    std::shared_ptr<Expression> expr;
+    std::unique_ptr<Expression> expr;
     bool printSemiColon = true;
 
-    ExprStmt(std::shared_ptr<Expression> expr, int line, int col, bool printSemiColon = true)
+    ExprStmt(std::unique_ptr<Expression> expr, int line, int col, bool printSemiColon = true)
         : Statement(NodeKind::ExprStmt, line, col), expr(std::move(expr)),
           printSemiColon(printSemiColon)
     {

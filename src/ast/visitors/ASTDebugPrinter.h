@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../support/RTTI.h"
 #include "../../symboltable/SymbolTable.h"
 #include "../../types/types.h"
 #include "../ASTNodes/ASTNode.h"
@@ -98,7 +99,8 @@ class ASTDebugPrinter
             << " symbol=" << symbolStr(n.symbol) << "\n";
     }
 
-    void printChild(const std::string &label, const std::shared_ptr<ASTNode> &child)
+    // printChild with raw pointer — handles nullable edges
+    void printChild(const std::string &label, const ASTNode *child)
     {
         writeIndent();
         out << label << ":";
@@ -113,7 +115,7 @@ class ASTDebugPrinter
         --indent;
     }
 
-    void dispatch(const std::shared_ptr<ASTNode> &node)
+    void dispatch(const ASTNode *node)
     {
         if (!node)
         {
@@ -125,82 +127,82 @@ class ASTDebugPrinter
         switch (node->getKind())
         {
         case NodeKind::Program:
-            visitProgram(std::static_pointer_cast<Program>(node));
+            visitProgram(cast<Program>(node));
             break;
         case NodeKind::Function:
-            visitFunction(std::static_pointer_cast<Function>(node));
+            visitFunction(cast<Function>(node));
             break;
         case NodeKind::StructDecl:
-            visitStructDecl(std::static_pointer_cast<StructDecl>(node));
+            visitStructDecl(cast<StructDecl>(node));
             break;
         case NodeKind::VarDecl:
-            visitVarDecl(std::static_pointer_cast<VarDecl>(node));
+            visitVarDecl(cast<VarDecl>(node));
             break;
         case NodeKind::BlockStmt:
-            visitBlockStmt(std::static_pointer_cast<BlockStmt>(node));
+            visitBlockStmt(cast<BlockStmt>(node));
             break;
         case NodeKind::DeclareStmt:
-            visitDeclareStmt(std::static_pointer_cast<DeclareStmt>(node));
+            visitDeclareStmt(cast<DeclareStmt>(node));
             break;
         case NodeKind::ExprStmt:
-            visitExprStmt(std::static_pointer_cast<ExprStmt>(node));
+            visitExprStmt(cast<ExprStmt>(node));
             break;
         case NodeKind::IfStmt:
-            visitIfStmt(std::static_pointer_cast<IfStmt>(node));
+            visitIfStmt(cast<IfStmt>(node));
             break;
         case NodeKind::WhileStmt:
-            visitWhileStmt(std::static_pointer_cast<WhileStmt>(node));
+            visitWhileStmt(cast<WhileStmt>(node));
             break;
         case NodeKind::DoWhileStmt:
-            visitDoWhileStmt(std::static_pointer_cast<DoWhileStmt>(node));
+            visitDoWhileStmt(cast<DoWhileStmt>(node));
             break;
         case NodeKind::ForStmt:
-            visitForStmt(std::static_pointer_cast<ForStmt>(node));
+            visitForStmt(cast<ForStmt>(node));
             break;
         case NodeKind::ReturnStmt:
-            visitReturnStmt(std::static_pointer_cast<ReturnStmt>(node));
+            visitReturnStmt(cast<ReturnStmt>(node));
             break;
         case NodeKind::FunctionDeclStmt:
-            visitFunctionDeclStmt(std::static_pointer_cast<FunctionDeclStmt>(node));
+            visitFunctionDeclStmt(cast<FunctionDeclStmt>(node));
             break;
         case NodeKind::IntLiterals:
-            visitIntLiterals(std::static_pointer_cast<IntLiterals>(node));
+            visitIntLiterals(cast<IntLiterals>(node));
             break;
         case NodeKind::StringLiterals:
-            visitStringLiterals(std::static_pointer_cast<StringLiterals>(node));
+            visitStringLiterals(cast<StringLiterals>(node));
             break;
         case NodeKind::VariableExpr:
-            visitVariableExpr(std::static_pointer_cast<VariableExpr>(node));
+            visitVariableExpr(cast<VariableExpr>(node));
             break;
         case NodeKind::BinaryExpr:
-            visitBinaryExpr(std::static_pointer_cast<BinaryExpr>(node));
+            visitBinaryExpr(cast<BinaryExpr>(node));
             break;
         case NodeKind::UnaryExpr:
-            visitUnaryExpr(std::static_pointer_cast<UnaryExpr>(node));
+            visitUnaryExpr(cast<UnaryExpr>(node));
             break;
         case NodeKind::AssignExpr:
-            visitAssignExpr(std::static_pointer_cast<AssignExpr>(node));
+            visitAssignExpr(cast<AssignExpr>(node));
             break;
         case NodeKind::TernaryExpr:
-            visitTernaryExpr(std::static_pointer_cast<TernaryExpr>(node));
+            visitTernaryExpr(cast<TernaryExpr>(node));
             break;
         case NodeKind::CastExpr:
-            visitCastExpr(std::static_pointer_cast<CastExpr>(node));
+            visitCastExpr(cast<CastExpr>(node));
             break;
         case NodeKind::FunctionCallExpr:
-            visitFunctionCallExpr(std::static_pointer_cast<FunctionCallExpr>(node));
+            visitFunctionCallExpr(cast<FunctionCallExpr>(node));
             break;
         case NodeKind::SubscriptExpr:
-            visitSubscriptExpr(std::static_pointer_cast<SubscriptExpr>(node));
+            visitSubscriptExpr(cast<SubscriptExpr>(node));
             break;
         case NodeKind::MemberExpr:
-            visitMemberExpr(std::static_pointer_cast<MemberExpr>(node));
+            visitMemberExpr(cast<MemberExpr>(node));
             break;
         case NodeKind::SizeOfExpr:
-            visitSizeOfExpr(std::static_pointer_cast<SizeOfExpr>(node));
+            visitSizeOfExpr(cast<SizeOfExpr>(node));
             break;
         case NodeKind::InitExpr:
-            visitInitExpr(std::static_pointer_cast<InitExpr>(node));
+            visitInitExpr(cast<InitExpr>(node));
             break;
         default:
             writeIndent();
@@ -211,7 +213,7 @@ class ASTDebugPrinter
 
     // ---- Top-level ----
 
-    void visitProgram(const std::shared_ptr<Program> &n)
+    void visitProgram(const Program *n)
     {
         printHeader("Program", *n);
         ++indent;
@@ -219,12 +221,12 @@ class ASTDebugPrinter
         out << "nodes [" << n->nodes.size() << "]:\n";
         ++indent;
         for (const auto &tl : n->nodes)
-            dispatch(tl);
+            dispatch(tl.get());
         --indent;
         --indent;
     }
 
-    void visitFunction(const std::shared_ptr<Function> &n)
+    void visitFunction(const Function *n)
     {
         std::ostringstream f;
         f << "name='" << n->name << "'"
@@ -242,11 +244,11 @@ class ASTDebugPrinter
                 << " type=" << typeStr(p.type) << "\n";
         }
         --indent;
-        printChild("body", n->statements);
+        printChild("body", n->statements.get());
         --indent;
     }
 
-    void visitStructDecl(const std::shared_ptr<StructDecl> &n)
+    void visitStructDecl(const StructDecl *n)
     {
         std::ostringstream f;
         f << "name='" << n->name << "'"
@@ -267,7 +269,7 @@ class ASTDebugPrinter
         --indent;
     }
 
-    void visitVarDecl(const std::shared_ptr<VarDecl> &n)
+    void visitVarDecl(const VarDecl *n)
     {
         std::ostringstream f;
         f << "name='" << n->name << "'"
@@ -275,13 +277,13 @@ class ASTDebugPrinter
           << " specifier=" << storageClassStr(n->storageClass);
         printHeader("VarDecl", *n, f.str());
         ++indent;
-        printChild("initialization", n->initialization);
+        printChild("initialization", n->initialization.get());
         --indent;
     }
 
     // ---- Statements ----
 
-    void visitBlockStmt(const std::shared_ptr<BlockStmt> &n)
+    void visitBlockStmt(const BlockStmt *n)
     {
         printHeader("BlockStmt", *n);
         ++indent;
@@ -289,217 +291,217 @@ class ASTDebugPrinter
         out << "statements [" << n->statements.size() << "]:\n";
         ++indent;
         for (const auto &s : n->statements)
-            dispatch(s);
+            dispatch(s.get());
         --indent;
         --indent;
     }
 
-    void visitDeclareStmt(const std::shared_ptr<DeclareStmt> &n)
+    void visitDeclareStmt(const DeclareStmt *n)
     {
         printHeader("DeclareStmt", *n);
         ++indent;
-        if (std::holds_alternative<std::vector<std::shared_ptr<VarDecl>>>(n->variables))
+        if (std::holds_alternative<std::vector<std::unique_ptr<VarDecl>>>(n->variables))
         {
-            const auto &vars = std::get<std::vector<std::shared_ptr<VarDecl>>>(n->variables);
+            const auto &vars = std::get<std::vector<std::unique_ptr<VarDecl>>>(n->variables);
             writeIndent();
             out << "variables [" << vars.size() << "]:\n";
             ++indent;
             for (const auto &v : vars)
-                dispatch(v);
+                dispatch(v.get());
             --indent;
         }
         else
         {
-            const auto &sd = std::get<std::shared_ptr<StructDecl>>(n->variables);
-            printChild("struct", sd);
+            const auto &sd = std::get<std::unique_ptr<StructDecl>>(n->variables);
+            printChild("struct", sd.get());
         }
         --indent;
     }
 
-    void visitExprStmt(const std::shared_ptr<ExprStmt> &n)
+    void visitExprStmt(const ExprStmt *n)
     {
         std::ostringstream f;
         f << "printSemiColon=" << boolStr(n->printSemiColon);
         printHeader("ExprStmt", *n, f.str());
         ++indent;
-        printChild("expr", n->expr);
+        printChild("expr", n->expr.get());
         --indent;
     }
 
-    void visitIfStmt(const std::shared_ptr<IfStmt> &n)
+    void visitIfStmt(const IfStmt *n)
     {
         printHeader("IfStmt", *n);
         ++indent;
-        printChild("condition", n->condition);
-        printChild("thenBlock", n->thenBlock);
-        printChild("elseBlock", n->elseBlock);
+        printChild("condition", n->condition.get());
+        printChild("thenBlock", n->thenBlock.get());
+        printChild("elseBlock", n->elseBlock.get());
         --indent;
     }
 
-    void visitWhileStmt(const std::shared_ptr<WhileStmt> &n)
+    void visitWhileStmt(const WhileStmt *n)
     {
         printHeader("WhileStmt", *n);
         ++indent;
-        printChild("condition", n->condition);
-        printChild("whileBlock", n->whileBlock);
+        printChild("condition", n->condition.get());
+        printChild("whileBlock", n->whileBlock.get());
         --indent;
     }
 
-    void visitDoWhileStmt(const std::shared_ptr<DoWhileStmt> &n)
+    void visitDoWhileStmt(const DoWhileStmt *n)
     {
         printHeader("DoWhileStmt", *n);
         ++indent;
-        printChild("block", n->block);
-        printChild("condition", n->condition);
+        printChild("block", n->block.get());
+        printChild("condition", n->condition.get());
         --indent;
     }
 
-    void visitForStmt(const std::shared_ptr<ForStmt> &n)
+    void visitForStmt(const ForStmt *n)
     {
         printHeader("ForStmt", *n);
         ++indent;
-        printChild("initialization", n->initialization);
-        printChild("condition", n->condition);
-        printChild("update", n->update);
-        printChild("forBlock", n->forBlock);
+        printChild("initialization", n->initialization.get());
+        printChild("condition", n->condition.get());
+        printChild("update", n->update.get());
+        printChild("forBlock", n->forBlock.get());
         --indent;
     }
 
-    void visitReturnStmt(const std::shared_ptr<ReturnStmt> &n)
+    void visitReturnStmt(const ReturnStmt *n)
     {
         printHeader("ReturnStmt", *n);
         ++indent;
-        printChild("returnExpression", n->returnExpression);
+        printChild("returnExpression", n->returnExpression.get());
         --indent;
     }
 
-    void visitFunctionDeclStmt(const std::shared_ptr<FunctionDeclStmt> &n)
+    void visitFunctionDeclStmt(const FunctionDeclStmt *n)
     {
         printHeader("FunctionDeclStmt", *n);
         ++indent;
-        printChild("declaration", n->declaration);
+        printChild("declaration", n->declaration.get());
         --indent;
     }
 
     // ---- Expressions ----
 
-    void visitIntLiterals(const std::shared_ptr<IntLiterals> &n) const
+    void visitIntLiterals(const IntLiterals *n) const
     {
         std::ostringstream f;
         f << "value='" << n->value << "'";
         printExprHeader("IntLiterals", *n, f.str());
     }
 
-    void visitStringLiterals(const std::shared_ptr<StringLiterals> &n) const
+    void visitStringLiterals(const StringLiterals *n) const
     {
         std::ostringstream f;
         f << "literal='" << n->literal << "'";
         printExprHeader("StringLiterals", *n, f.str());
     }
 
-    void visitVariableExpr(const std::shared_ptr<VariableExpr> &n) const
+    void visitVariableExpr(const VariableExpr *n) const
     {
         std::ostringstream f;
         f << "name='" << n->name << "'";
         printExprHeader("VariableExpr", *n, f.str());
     }
 
-    void visitBinaryExpr(const std::shared_ptr<BinaryExpr> &n)
+    void visitBinaryExpr(const BinaryExpr *n)
     {
         std::ostringstream f;
         f << "op='" << n->binaryOp << "'";
         printExprHeader("BinaryExpr", *n, f.str());
         ++indent;
-        printChild("left", n->left);
-        printChild("right", n->right);
+        printChild("left", n->left.get());
+        printChild("right", n->right.get());
         --indent;
     }
 
-    void visitUnaryExpr(const std::shared_ptr<UnaryExpr> &n)
+    void visitUnaryExpr(const UnaryExpr *n)
     {
         std::ostringstream f;
         f << "op='" << n->op << "' isPostFix=" << boolStr(n->isPostFix);
         printExprHeader("UnaryExpr", *n, f.str());
         ++indent;
-        printChild("operand", n->operand);
+        printChild("operand", n->operand.get());
         --indent;
     }
 
-    void visitAssignExpr(const std::shared_ptr<AssignExpr> &n)
+    void visitAssignExpr(const AssignExpr *n)
     {
         std::ostringstream f;
         f << "op='" << n->op << "'";
         printExprHeader("AssignExpr", *n, f.str());
         ++indent;
-        printChild("lhs", n->lhs);
-        printChild("rhs", n->rhs);
+        printChild("lhs", n->lhs.get());
+        printChild("rhs", n->rhs.get());
         --indent;
     }
 
-    void visitTernaryExpr(const std::shared_ptr<TernaryExpr> &n)
+    void visitTernaryExpr(const TernaryExpr *n)
     {
         printExprHeader("TernaryExpr", *n);
         ++indent;
-        printChild("condition", n->condition);
-        printChild("thenBranch", n->thenBranch);
-        printChild("elseBranch", n->elseBranch);
+        printChild("condition", n->condition.get());
+        printChild("thenBranch", n->thenBranch.get());
+        printChild("elseBranch", n->elseBranch.get());
         --indent;
     }
 
-    void visitCastExpr(const std::shared_ptr<CastExpr> &n)
+    void visitCastExpr(const CastExpr *n)
     {
         std::ostringstream f;
         f << "type=" << typeStr(n->type);
         printExprHeader("CastExpr", *n, f.str());
         ++indent;
-        printChild("operand", n->operand);
+        printChild("operand", n->operand.get());
         --indent;
     }
 
-    void visitFunctionCallExpr(const std::shared_ptr<FunctionCallExpr> &n)
+    void visitFunctionCallExpr(const FunctionCallExpr *n)
     {
         printExprHeader("FunctionCallExpr", *n);
         ++indent;
-        printChild("functionName", n->functionName);
+        printChild("functionName", n->functionName.get());
         writeIndent();
         out << "parameters [" << n->parameters.size() << "]:\n";
         ++indent;
         for (const auto &p : n->parameters)
-            dispatch(p);
+            dispatch(p.get());
         --indent;
         --indent;
     }
 
-    void visitSubscriptExpr(const std::shared_ptr<SubscriptExpr> &n)
+    void visitSubscriptExpr(const SubscriptExpr *n)
     {
         printExprHeader("SubscriptExpr", *n);
         ++indent;
-        printChild("lvalue", n->lvalue);
-        printChild("index", n->index);
+        printChild("lvalue", n->lvalue.get());
+        printChild("index", n->index.get());
         --indent;
     }
 
-    void visitMemberExpr(const std::shared_ptr<MemberExpr> &n)
+    void visitMemberExpr(const MemberExpr *n)
     {
         std::ostringstream f;
         f << "field='" << n->field << "' isArrow=" << boolStr(n->isArrow);
         printExprHeader("MemberExpr", *n, f.str());
         ++indent;
-        printChild("object", n->object);
+        printChild("object", n->object.get());
         --indent;
     }
 
-    void visitSizeOfExpr(const std::shared_ptr<SizeOfExpr> &n)
+    void visitSizeOfExpr(const SizeOfExpr *n)
     {
         std::ostringstream f;
         f << "type=" << typeStr(n->type);
         printExprHeader("SizeOfExpr", *n, f.str());
         ++indent;
-        printChild("expr", n->expr);
+        printChild("expr", n->expr.get());
         --indent;
     }
 
-    void visitInitExpr(const std::shared_ptr<InitExpr> &n)
+    void visitInitExpr(const InitExpr *n)
     {
         printExprHeader("InitExpr", *n);
         ++indent;
@@ -507,7 +509,7 @@ class ASTDebugPrinter
         out << "elements [" << n->elements.size() << "]:\n";
         ++indent;
         for (const auto &e : n->elements)
-            dispatch(e);
+            dispatch(e.get());
         --indent;
         --indent;
     }
@@ -515,5 +517,6 @@ class ASTDebugPrinter
   public:
     explicit ASTDebugPrinter(std::ostream &out_) : out(out_) {}
 
-    void print(const std::shared_ptr<ASTNode> &node) { dispatch(node); }
+    void print(const Program &prog) { dispatch(&prog); }
+    void print(const ASTNode *node) { dispatch(node); }
 };

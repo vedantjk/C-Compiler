@@ -10,11 +10,11 @@
 class DeclareStmt : public Statement
 {
   public:
-    std::variant<std::vector<std::shared_ptr<VarDecl>>, std::shared_ptr<StructDecl>> variables;
+    std::variant<std::vector<std::unique_ptr<VarDecl>>, std::unique_ptr<StructDecl>> variables;
 
     DeclareStmt(
         int line_, int col_,
-        std::variant<std::vector<std::shared_ptr<VarDecl>>, std::shared_ptr<StructDecl>> variables_)
+        std::variant<std::vector<std::unique_ptr<VarDecl>>, std::unique_ptr<StructDecl>> variables_)
         : Statement(NodeKind::DeclareStmt, line_, col_), variables(std::move(variables_))
     {
     }
@@ -27,9 +27,9 @@ class DeclareStmt : public Statement
         {
             out << "  ";
         }
-        if (std::holds_alternative<std::vector<std::shared_ptr<VarDecl>>>(variables))
+        if (std::holds_alternative<std::vector<std::unique_ptr<VarDecl>>>(variables))
         {
-            auto &val = std::get<std::vector<std::shared_ptr<VarDecl>>>(variables);
+            auto &val = std::get<std::vector<std::unique_ptr<VarDecl>>>(variables);
             for (size_t i = 0; i < val.size(); i++)
             {
                 val[i]->print(out, tab + 1);
@@ -40,7 +40,7 @@ class DeclareStmt : public Statement
         }
         else
         {
-            auto &val = std::get<std::shared_ptr<StructDecl>>(variables);
+            auto &val = std::get<std::unique_ptr<StructDecl>>(variables);
             val->print(out, tab + 1);
         }
     }

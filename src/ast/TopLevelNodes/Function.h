@@ -29,12 +29,12 @@ class Function : public TopLevelNode
     std::string name;
     std::shared_ptr<Type> type;
     std::vector<Parameter> parameters;
-    std::shared_ptr<BlockStmt> statements;
+    std::unique_ptr<BlockStmt> statements;
     bool variadic;
     std::optional<StorageClass> storageClass;
 
     Function(int line_, int col_, std::string name_, std::shared_ptr<Type> type_,
-             std::vector<Parameter> parameters_, std::shared_ptr<BlockStmt> statements_,
+             std::vector<Parameter> parameters_, std::unique_ptr<BlockStmt> statements_,
              bool variadic = false, std::optional<StorageClass> storageClass_ = std::nullopt)
         : TopLevelNode(NodeKind::Function, line_, col_), name(std::move(name_)),
           type(std::move(type_)), parameters(std::move(parameters_)),

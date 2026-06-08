@@ -10,14 +10,14 @@ class ForStmt : public Statement
 {
   public:
     int label;
-    std::shared_ptr<Statement> initialization;
-    std::shared_ptr<Statement> condition;
-    std::shared_ptr<Statement> update;
-    std::shared_ptr<BlockStmt> forBlock;
+    std::unique_ptr<Statement> initialization;
+    std::unique_ptr<Statement> condition;
+    std::unique_ptr<Statement> update;
+    std::unique_ptr<BlockStmt> forBlock;
 
-    ForStmt(int line_, int col_, std::shared_ptr<Statement> initialization_,
-            std::shared_ptr<Statement> condition_, std::shared_ptr<Statement> update_,
-            std::shared_ptr<BlockStmt> forBlock_)
+    ForStmt(int line_, int col_, std::unique_ptr<Statement> initialization_,
+            std::unique_ptr<Statement> condition_, std::unique_ptr<Statement> update_,
+            std::unique_ptr<BlockStmt> forBlock_)
         : Statement(NodeKind::ForStmt, line_, col_), initialization(std::move(initialization_)),
           condition(std::move(condition_)), update(std::move(update_)),
           forBlock(std::move(forBlock_))

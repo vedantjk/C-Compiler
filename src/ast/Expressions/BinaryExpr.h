@@ -6,12 +6,12 @@
 class BinaryExpr : public Expression
 {
   public:
-    std::shared_ptr<Expression> left;
-    std::shared_ptr<Expression> right;
+    std::unique_ptr<Expression> left;
+    std::unique_ptr<Expression> right;
     std::string binaryOp;
 
-    BinaryExpr(int line_, int col_, std::shared_ptr<Expression> left_,
-               std::shared_ptr<Expression> right_, std::string binaryOp_)
+    BinaryExpr(int line_, int col_, std::unique_ptr<Expression> left_,
+               std::unique_ptr<Expression> right_, std::string binaryOp_)
         : Expression(NodeKind::BinaryExpr, line_, col_), left(std::move(left_)),
           right(std::move(right_)), binaryOp(binaryOp_)
     {

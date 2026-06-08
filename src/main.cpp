@@ -116,13 +116,13 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
     }
 
     Parser parser{tokens};
-    std::shared_ptr<Program> p = parser.ParseProgram();
+    auto p = parser.ParseProgram();
     ASTDebugPrinter dbg(std::cout);
 
     if (stage == "parse")
     {
         if (debugAST)
-            dbg.print(p);
+            dbg.print(*p);
         return 0;
     }
 
@@ -131,25 +131,25 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         Diagnostic::DiagnosticEngine preludeDiag{"<prelude>"};
         Lexer preludeLexer{PRELUDE_SOURCE, preludeDiag};
         Parser preludeParser{preludeLexer.generateTokens()};
-        std::shared_ptr<Program> preludeProgram = preludeParser.ParseProgram();
-        p->nodes.insert(p->nodes.begin(), preludeProgram->nodes.begin(),
-                        preludeProgram->nodes.end());
+        auto preludeProgram = preludeParser.ParseProgram();
+        p->nodes.insert(p->nodes.begin(), std::make_move_iterator(preludeProgram->nodes.begin()),
+                        std::make_move_iterator(preludeProgram->nodes.end()));
 
         SemanticAnalyzer semanticAnalyzer{diagnosticEngine};
-        semanticAnalyzer.validate(p);
+        semanticAnalyzer.validate(*p);
         if (diagnosticEngine.hasErrors())
         {
             diagnosticEngine.print();
             return 1;
         }
         if (debugAST)
-            dbg.print(p);
+            dbg.print(*p);
 
         if (stage == "validate")
             return 0;
 
         TackyDriver tackyDriver;
-        auto tackyProg = tackyDriver.tacky(p);
+        auto tackyProg = tackyDriver.tacky(*p);
         if (debugTacky)
             TackyDebugPrinter(std::cout).print(*tackyProg);
 

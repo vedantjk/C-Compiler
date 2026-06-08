@@ -10,6 +10,7 @@
 #include "../ast/Statements/BlockStmt.h"
 #include "../ast/Statements/ReturnStmt.h"
 #include "../ast/TopLevelNodes/Function.h"
+#include "../support/RTTI.h"
 #include "../tacky/ast/ASTNodes/TackyProgram.h"
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
 #include "../tacky/instructions/instructions.h"
@@ -156,16 +157,16 @@ class TackyDriver
         return label;
     }
 
-    TackyVal internStringLiteral(const std::shared_ptr<StringLiterals> &s)
+    TackyVal internStringLiteral(const StringLiterals *s)
     {
         return TackyVar(internBytes(decodeStringLiteral(s->literal)), ConstantType::POINTER);
     }
 
     // Element address ptrExpr +/- index*elementSize, the shared core of pointer
     // arithmetic and subscripting. Returns a POINTER-typed value.
-    TackyVal scaledPointerAdd(const std::shared_ptr<Expression> &ptrExpr,
-                              const std::shared_ptr<Expression> &idxExpr, bool subtract, int line,
-                              int col, std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    TackyVal scaledPointerAdd(const Expression *ptrExpr, const Expression *idxExpr, bool subtract,
+                              int line, int col,
+                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         auto ptr = processExpression(ptrExpr, instructions);
         auto idx = processExpression(idxExpr, instructions);
@@ -183,28 +184,28 @@ class TackyDriver
 
     // The address of a subscript a[i] == *(a + i): one operand is a pointer
     // (after decay), the other an integer, in either order.
-    TackyVal subscriptAddress(const std::shared_ptr<SubscriptExpr> &sub,
+    TackyVal subscriptAddress(const SubscriptExpr *sub,
                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         const bool lvalueIsPtr = isPtrType(sub->lvalue->resolvedType);
-        const auto &ptrExpr = lvalueIsPtr ? sub->lvalue : sub->index;
-        const auto &idxExpr = lvalueIsPtr ? sub->index : sub->lvalue;
+        const Expression *ptrExpr = lvalueIsPtr ? sub->lvalue.get() : sub->index.get();
+        const Expression *idxExpr = lvalueIsPtr ? sub->index.get() : sub->lvalue.get();
         return scaledPointerAdd(ptrExpr, idxExpr, false, sub->line, sub->col, instructions);
     }
 
-    ExpResult processLvalue(const std::shared_ptr<Expression> &e,
+    ExpResult processLvalue(const Expression *e,
                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (auto u = std::dynamic_pointer_cast<UnaryExpr>(e); u && u->op == "*")
-            return DereferencedPointer{processExpression(u->operand, instructions)};
-        if (auto sub = std::dynamic_pointer_cast<SubscriptExpr>(e))
+        if (const auto *u = dyn_cast<UnaryExpr>(e); u && u->op == "*")
+            return DereferencedPointer{processExpression(u->operand.get(), instructions)};
+        if (const auto *sub = dyn_cast<SubscriptExpr>(e))
             return DereferencedPointer{subscriptAddress(sub, instructions)};
         // A member access lvalue is the member's address (base + constant offset).
-        if (auto m = std::dynamic_pointer_cast<MemberExpr>(e))
+        if (const auto *m = dyn_cast<MemberExpr>(e))
             return DereferencedPointer{memberAddress(m, instructions)};
         // A string literal is an array object; its lvalue is the interned constant,
         // so `&"..."` becomes GetAddress of that constant's label.
-        if (auto s = std::dynamic_pointer_cast<StringLiterals>(e))
+        if (const auto *s = dyn_cast<StringLiterals>(e))
             return internStringLiteral(s);
         // plain variable (or anything else that's a simple operand)
         return processExpression(e, instructions);
@@ -218,7 +219,7 @@ class TackyDriver
     // Address (a POINTER value) of any lvalue, exactly as the unary `&` operator
     // computes it: a dereferenced lvalue yields the pointer itself, anything else
     // is taken with GetAddress.
-    TackyVal addressOf(const std::shared_ptr<Expression> &e,
+    TackyVal addressOf(const Expression *e,
                        std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         auto lv = processLvalue(e, instructions);
@@ -255,11 +256,11 @@ class TackyDriver
 
     // Address (POINTER value) of the member `e.field` / `e->field`. For `->` the
     // base is the pointer operand; for `.` it is the address of the struct lvalue.
-    TackyVal memberAddress(const std::shared_ptr<MemberExpr> &e,
+    TackyVal memberAddress(const MemberExpr *e,
                            std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        TackyVal base = e->isArrow ? processExpression(e->object, instructions)
-                                   : aggregateAddress(e->object, instructions);
+        TackyVal base = e->isArrow ? processExpression(e->object.get(), instructions)
+                                   : aggregateAddress(e->object.get(), instructions);
         const auto &ot = e->object->resolvedType;
         std::shared_ptr<StructType> st;
         if (auto p = std::dynamic_pointer_cast<PointerType>(ot))
@@ -311,10 +312,10 @@ class TackyDriver
         return name;
     }
 
-    std::string structValueObject(const std::shared_ptr<Expression> &e,
+    std::string structValueObject(const Expression *e,
                                   std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (auto v = std::dynamic_pointer_cast<VariableExpr>(e))
+        if (const auto *v = dyn_cast<VariableExpr>(e))
         {
             const std::string name = v->symbol ? v->symbol->uniqueName : v->name;
             structObjects[name] = classifyStruct(structTagOf(e->resolvedType));
@@ -332,38 +333,38 @@ class TackyDriver
     // their storage address directly; an assignment performs its copy and yields
     // the destination; a ternary selects a branch into a temporary; any other
     // rvalue (e.g. a struct-returning call) is materialized into a temporary.
-    TackyVal aggregateAddress(const std::shared_ptr<Expression> &e,
+    TackyVal aggregateAddress(const Expression *e,
                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (auto a = std::dynamic_pointer_cast<AssignExpr>(e))
+        if (const auto *a = dyn_cast<AssignExpr>(e))
         {
-            TackyVal dstAddr = addressOf(a->lhs, instructions);
-            TackyVal srcAddr = aggregateAddress(a->rhs, instructions);
+            TackyVal dstAddr = addressOf(a->lhs.get(), instructions);
+            TackyVal srcAddr = aggregateAddress(a->rhs.get(), instructions);
             emitStructCopy(dstAddr, srcAddr, sizeOfType(a->lhs->resolvedType), a->line, a->col,
                            instructions);
             return dstAddr;
         }
-        if (auto t = std::dynamic_pointer_cast<TernaryExpr>(e))
+        if (const auto *t = dyn_cast<TernaryExpr>(e))
         {
             const std::string name = freshStructTemp(e->resolvedType);
             const long long size = sizeOfType(e->resolvedType);
             const std::string elseLabel = makeTemp("ternary_false.");
             const std::string endLabel = makeTemp("end.");
-            auto cond = processExpression(t->condition, instructions);
+            auto cond = processExpression(t->condition.get(), instructions);
             instructions.push_back(
                 std::make_unique<TackyJumpIfZero>(t->line, t->col, cond, elseLabel));
             TackyVal dThen = namedObjectAddress(name, 0, t->line, t->col, instructions);
-            emitStructCopy(dThen, aggregateAddress(t->thenBranch, instructions), size, t->line,
-                           t->col, instructions);
+            emitStructCopy(dThen, aggregateAddress(t->thenBranch.get(), instructions), size,
+                           t->line, t->col, instructions);
             instructions.push_back(std::make_unique<TackyJump>(t->line, t->col, endLabel));
             instructions.push_back(std::make_unique<TackyLabel>(t->line, t->col, elseLabel));
             TackyVal dElse = namedObjectAddress(name, 0, t->line, t->col, instructions);
-            emitStructCopy(dElse, aggregateAddress(t->elseBranch, instructions), size, t->line,
-                           t->col, instructions);
+            emitStructCopy(dElse, aggregateAddress(t->elseBranch.get(), instructions), size,
+                           t->line, t->col, instructions);
             instructions.push_back(std::make_unique<TackyLabel>(t->line, t->col, endLabel));
             return namedObjectAddress(name, 0, t->line, t->col, instructions);
         }
-        if (std::dynamic_pointer_cast<FunctionCallExpr>(e))
+        if (isa<FunctionCallExpr>(e))
         {
             // The call lowers to a temporary struct object; take its address.
             TackyVal obj = processExpression(e, instructions);
@@ -375,12 +376,12 @@ class TackyDriver
         return addressOf(e, instructions);
     }
 
-    TackyVal processFloatingLiteral(const std::shared_ptr<FloatingLiterals> &floatLiteral)
+    TackyVal processFloatingLiteral(const FloatingLiterals *floatLiteral)
     {
         return TackyFloatingConstant{floatLiteral->value, returnConstantType(floatLiteral->type)};
     }
 
-    TackyVal processIntLiteral(const std::shared_ptr<IntLiterals> &intLiteral)
+    TackyVal processIntLiteral(const IntLiterals *intLiteral)
     {
         return TackyConstant{intLiteral->value, returnConstantType(intLiteral->type)};
     }
@@ -397,7 +398,7 @@ class TackyDriver
         return TackyConstant(1, ct);
     }
 
-    TackyVal processIncrementDecrement(const std::shared_ptr<UnaryExpr> &unaryExpr,
+    TackyVal processIncrementDecrement(const UnaryExpr *unaryExpr,
                                        std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         const int line = unaryExpr->line, col = unaryExpr->col;
@@ -405,7 +406,7 @@ class TackyDriver
         const BinaryOp op = unaryExpr->op == "++" ? BinaryOp::Add : BinaryOp::Subtract;
         const TackyVal delta = incrementStep(unaryExpr->resolvedType);
 
-        auto lv = processLvalue(unaryExpr->operand, instructions);
+        auto lv = processLvalue(unaryExpr->operand.get(), instructions);
 
         // Plain modifiable lvalue (a variable): update it in place.
         if (auto *v = std::get_if<TackyVal>(&lv))
@@ -428,7 +429,7 @@ class TackyDriver
         return unaryExpr->isPostFix ? TackyVal{cur} : TackyVal{updated};
     }
 
-    TackyVal processUnaryExpr(const std::shared_ptr<UnaryExpr> &unaryExpr,
+    TackyVal processUnaryExpr(const UnaryExpr *unaryExpr,
                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         UnaryOp op;
@@ -450,7 +451,7 @@ class TackyDriver
         }
         else if (unaryExpr->op == "*")
         {
-            auto ptr = processExpression(unaryExpr->operand, instructions); // the pointer
+            auto ptr = processExpression(unaryExpr->operand.get(), instructions); // the pointer
             TackyVar dst{makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType)};
             instructions.push_back(
                 std::make_unique<TackyLoad>(unaryExpr->line, unaryExpr->col, ptr, dst));
@@ -458,12 +459,12 @@ class TackyDriver
         }
         else if (unaryExpr->op == "&")
         {
-            return addressOf(unaryExpr->operand, instructions);
+            return addressOf(unaryExpr->operand.get(), instructions);
         }
         else
             throw std::runtime_error("unhandled unary op: " + unaryExpr->op);
 
-        TackyVal inner = processExpression(unaryExpr->operand, instructions);
+        TackyVal inner = processExpression(unaryExpr->operand.get(), instructions);
         TackyVar dst{makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType)};
 
         instructions.push_back(std::make_unique<TackyUnary>(unaryExpr->line, unaryExpr->col, op,
@@ -472,16 +473,16 @@ class TackyDriver
         return dst;
     }
 
-    TackyVal processLogicalAnd(const std::shared_ptr<BinaryExpr> &binaryExpr,
+    TackyVal processLogicalAnd(const BinaryExpr *binaryExpr,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         TackyVar result(makeTemp("tmp."), returnConstantType(binaryExpr->resolvedType));
         std::string false_label = makeTemp("false_label.");
         std::string end_label = makeTemp("end_label.");
-        auto lhs = processExpression(binaryExpr->left, instructions);
+        auto lhs = processExpression(binaryExpr->left.get(), instructions);
         instructions.push_back(
             std::make_unique<TackyJumpIfZero>(binaryExpr->line, binaryExpr->col, lhs, false_label));
-        auto rhs = processExpression(binaryExpr->right, instructions);
+        auto rhs = processExpression(binaryExpr->right.get(), instructions);
         instructions.push_back(
             std::make_unique<TackyJumpIfZero>(binaryExpr->line, binaryExpr->col, rhs, false_label));
         instructions.push_back(std::make_unique<TackyCopy>(
@@ -497,16 +498,16 @@ class TackyDriver
         return result;
     }
 
-    TackyVal processLogicalOr(const std::shared_ptr<BinaryExpr> &binaryExpr,
+    TackyVal processLogicalOr(const BinaryExpr *binaryExpr,
                               std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         TackyVar result(makeTemp("tmp."), returnConstantType(binaryExpr->resolvedType));
         std::string true_label = makeTemp("true_label.");
         std::string end_label = makeTemp("end_label.");
-        auto lhs = processExpression(binaryExpr->left, instructions);
+        auto lhs = processExpression(binaryExpr->left.get(), instructions);
         instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
             binaryExpr->line, binaryExpr->col, lhs, true_label));
-        auto rhs = processExpression(binaryExpr->right, instructions);
+        auto rhs = processExpression(binaryExpr->right.get(), instructions);
         instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
             binaryExpr->line, binaryExpr->col, rhs, true_label));
         instructions.push_back(std::make_unique<TackyCopy>(
@@ -547,8 +548,7 @@ class TackyDriver
         return it->second;
     }
 
-    TackyVal processPointerArithmetic(const std::shared_ptr<BinaryExpr> &binaryExpr, bool lPtr,
-                                      bool rPtr,
+    TackyVal processPointerArithmetic(const BinaryExpr *binaryExpr, bool lPtr, bool rPtr,
                                       std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         if (lPtr && rPtr)
@@ -556,8 +556,8 @@ class TackyDriver
             // ptr - ptr (the analyzer guarantees the op is '-' and the types match):
             // byte distance / element size = signed element count.
             const long long scale = pointeeSize(binaryExpr->left->resolvedType);
-            auto a = processExpression(binaryExpr->left, instructions);
-            auto b = processExpression(binaryExpr->right, instructions);
+            auto a = processExpression(binaryExpr->left.get(), instructions);
+            auto b = processExpression(binaryExpr->right.get(), instructions);
             TackyVar diff{makeTemp("tmp."), ConstantType::LONG};
             instructions.push_back(std::make_unique<TackyBinary>(binaryExpr->line, binaryExpr->col,
                                                                  BinaryOp::Subtract, a, b, diff));
@@ -569,14 +569,14 @@ class TackyDriver
         }
 
         // ptr +/- int, or int + ptr: scale the integer operand by the element size.
-        const auto &ptrExpr = lPtr ? binaryExpr->left : binaryExpr->right;
-        const auto &idxExpr = lPtr ? binaryExpr->right : binaryExpr->left;
+        const Expression *ptrExpr = lPtr ? binaryExpr->left.get() : binaryExpr->right.get();
+        const Expression *idxExpr = lPtr ? binaryExpr->right.get() : binaryExpr->left.get();
         const bool subtract = binaryExpr->binaryOp == "-";
         return scaledPointerAdd(ptrExpr, idxExpr, subtract, binaryExpr->line, binaryExpr->col,
                                 instructions);
     }
 
-    TackyVal processBinaryExpr(const std::shared_ptr<BinaryExpr> &binaryExpr,
+    TackyVal processBinaryExpr(const BinaryExpr *binaryExpr,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         if (binaryExpr->binaryOp == "&&")
@@ -591,8 +591,8 @@ class TackyDriver
 
         BinaryOp op = stringToBinaryOp(binaryExpr->binaryOp);
 
-        auto v1 = processExpression(binaryExpr->left, instructions);
-        auto v2 = processExpression(binaryExpr->right, instructions);
+        auto v1 = processExpression(binaryExpr->left.get(), instructions);
+        auto v2 = processExpression(binaryExpr->right.get(), instructions);
         TackyVar dst{makeTemp("tmp."), returnConstantType(binaryExpr->resolvedType)};
 
         instructions.push_back(std::make_unique<TackyBinary>(binaryExpr->line, binaryExpr->col, op,
@@ -601,7 +601,7 @@ class TackyDriver
         return dst;
     }
 
-    TackyVal processVariableExpr(const std::shared_ptr<VariableExpr> &variableExpr,
+    TackyVal processVariableExpr(const VariableExpr *variableExpr,
                                  std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         return TackyVar(variableExpr->symbol ? variableExpr->symbol->uniqueName
@@ -627,7 +627,7 @@ class TackyDriver
         return rhs;
     }
 
-    TackyVal processAssignExpr(const std::shared_ptr<AssignExpr> &assignExpr,
+    TackyVal processAssignExpr(const AssignExpr *assignExpr,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         const int line = assignExpr->line, col = assignExpr->col;
@@ -637,8 +637,8 @@ class TackyDriver
         if (isStructType(assignExpr->lhs->resolvedType))
             return aggregateAddress(assignExpr, instructions);
 
-        auto lhs = processLvalue(assignExpr->lhs, instructions);
-        auto rhs = processExpression(assignExpr->rhs, instructions);
+        auto lhs = processLvalue(assignExpr->lhs.get(), instructions);
+        auto rhs = processExpression(assignExpr->rhs.get(), instructions);
 
         const auto lhsType = assignExpr->lhs->resolvedType;
 
@@ -711,23 +711,23 @@ class TackyDriver
         return rhs;
     }
 
-    TackyVal processTernaryExpr(const std::shared_ptr<TernaryExpr> &ternaryExpr,
+    TackyVal processTernaryExpr(const TernaryExpr *ternaryExpr,
                                 std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         TackyVar temp = TackyVar(makeTemp("tmp."), returnConstantType(ternaryExpr->resolvedType));
         std::string false_label = makeTemp("ternary_false.");
         std::string end_label = makeTemp("end.");
-        auto condition = processExpression(ternaryExpr->condition, instructions);
+        auto condition = processExpression(ternaryExpr->condition.get(), instructions);
         instructions.push_back(std::make_unique<TackyJumpIfZero>(
             ternaryExpr->line, ternaryExpr->col, condition, false_label));
-        auto trueExpr = processExpression(ternaryExpr->thenBranch, instructions);
+        auto trueExpr = processExpression(ternaryExpr->thenBranch.get(), instructions);
         instructions.push_back(
             std::make_unique<TackyCopy>(ternaryExpr->line, ternaryExpr->col, trueExpr, temp));
         instructions.push_back(
             std::make_unique<TackyJump>(ternaryExpr->line, ternaryExpr->col, end_label));
         instructions.push_back(
             std::make_unique<TackyLabel>(ternaryExpr->line, ternaryExpr->col, false_label));
-        auto falseExpr = processExpression(ternaryExpr->elseBranch, instructions);
+        auto falseExpr = processExpression(ternaryExpr->elseBranch.get(), instructions);
         instructions.push_back(
             std::make_unique<TackyCopy>(ternaryExpr->line, ternaryExpr->col, falseExpr, temp));
         instructions.push_back(
@@ -735,7 +735,7 @@ class TackyDriver
         return temp;
     }
 
-    TackyVal processFunctionCallExpr(const std::shared_ptr<FunctionCallExpr> &functionCallExpr,
+    TackyVal processFunctionCallExpr(const FunctionCallExpr *functionCallExpr,
                                      std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         std::vector<TackyVal> args;
@@ -745,9 +745,9 @@ class TackyDriver
             // splits it into eightbytes per the calling convention).
             if (isStructType(param->resolvedType))
                 args.push_back(
-                    TackyVar(structValueObject(param, instructions), ConstantType::POINTER));
+                    TackyVar(structValueObject(param.get(), instructions), ConstantType::POINTER));
             else
-                args.push_back(processExpression(param, instructions));
+                args.push_back(processExpression(param.get(), instructions));
         }
         // A struct return materializes into a fresh struct object the caller owns.
         const bool structRet = isStructType(functionCallExpr->resolvedType);
@@ -853,10 +853,10 @@ class TackyDriver
         return dst;
     }
 
-    TackyVal processCastExpr(const std::shared_ptr<CastExpr> &castExpr,
+    TackyVal processCastExpr(const CastExpr *castExpr,
                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        auto result = processExpression(castExpr->operand, instructions);
+        auto result = processExpression(castExpr->operand.get(), instructions);
         // A cast to void only keeps the operand's side effects; the value it
         // produces is discarded, so emit no conversion.
         if (std::dynamic_pointer_cast<VoidType>(castExpr->type))
@@ -865,46 +865,46 @@ class TackyDriver
                             castExpr->col, instructions);
     }
 
-    TackyVal processExpression(const std::shared_ptr<Expression> &expression,
+    TackyVal processExpression(const Expression *expression,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (const auto &p = std::dynamic_pointer_cast<UnaryExpr>(expression))
+        if (const auto *p = dyn_cast<UnaryExpr>(expression))
         {
             return processUnaryExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<IntLiterals>(expression))
+        if (const auto *p = dyn_cast<IntLiterals>(expression))
         {
             return processIntLiteral(p);
         }
-        if (const auto &p = std::dynamic_pointer_cast<FloatingLiterals>(expression))
+        if (const auto *p = dyn_cast<FloatingLiterals>(expression))
         {
             return processFloatingLiteral(p);
         }
-        if (const auto &p = std::dynamic_pointer_cast<BinaryExpr>(expression))
+        if (const auto *p = dyn_cast<BinaryExpr>(expression))
         {
             return processBinaryExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<VariableExpr>(expression))
+        if (const auto *p = dyn_cast<VariableExpr>(expression))
         {
             return processVariableExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<AssignExpr>(expression))
+        if (const auto *p = dyn_cast<AssignExpr>(expression))
         {
             return processAssignExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<TernaryExpr>(expression))
+        if (const auto *p = dyn_cast<TernaryExpr>(expression))
         {
             return processTernaryExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<FunctionCallExpr>(expression))
+        if (const auto *p = dyn_cast<FunctionCallExpr>(expression))
         {
             return processFunctionCallExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<CastExpr>(expression))
+        if (const auto *p = dyn_cast<CastExpr>(expression))
         {
             return processCastExpr(p, instructions);
         }
-        if (const auto &p = std::dynamic_pointer_cast<SubscriptExpr>(expression))
+        if (const auto *p = dyn_cast<SubscriptExpr>(expression))
         {
             // a[i] read: compute the element address and load through it.
             auto addr = subscriptAddress(p, instructions);
@@ -912,7 +912,7 @@ class TackyDriver
             instructions.push_back(std::make_unique<TackyLoad>(p->line, p->col, addr, dst));
             return dst;
         }
-        if (const auto &p = std::dynamic_pointer_cast<StringLiterals>(expression))
+        if (const auto *p = dyn_cast<StringLiterals>(expression))
         {
             // A string used directly as a value decays to a pointer to its first
             // byte: take the address of the interned constant.
@@ -921,14 +921,14 @@ class TackyDriver
             instructions.push_back(std::make_unique<TackyGetAddress>(p->line, p->col, obj, dst));
             return dst;
         }
-        if (const auto &p = std::dynamic_pointer_cast<SizeOfExpr>(expression))
+        if (const auto *p = dyn_cast<SizeOfExpr>(expression))
         {
             // sizeof folds to a compile-time unsigned long; its operand is never
             // evaluated, so the operand subtree is not lowered.
             const auto &sizedType = p->expr ? p->expr->resolvedType : p->type;
             return TackyConstant{sizeOfType(sizedType), ConstantType::ULONG};
         }
-        if (const auto &p = std::dynamic_pointer_cast<MemberExpr>(expression))
+        if (const auto *p = dyn_cast<MemberExpr>(expression))
         {
             // A scalar member used as a value: take its address and load through it.
             // (Aggregate members are reached via array decay / aggregateAddress, so
@@ -941,11 +941,11 @@ class TackyDriver
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
 
-    TackyVal processVarDecl(const std::shared_ptr<VarDecl> &varDecl,
+    TackyVal processVarDecl(const VarDecl &varDecl,
                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        return TackyVar(varDecl->symbol ? varDecl->symbol->uniqueName : varDecl->name,
-                        returnConstantType(varDecl->type));
+        return TackyVar(varDecl.symbol ? varDecl.symbol->uniqueName : varDecl.name,
+                        returnConstantType(varDecl.type));
     }
 
     // Zero `nbytes` of object `dst` starting at `offset`, in quadword, longword,
@@ -979,12 +979,11 @@ class TackyDriver
     // Lower an automatic-duration initializer into the object `dst` at `offset`.
     // Brace lists recurse into element offsets; a list shorter than the array
     // zero-fills the trailing elements. Scalar leaves store via CopyToOffset.
-    void emitInitializer(const std::shared_ptr<Type> &targetType,
-                         const std::shared_ptr<Expression> &init, const std::string &dst,
-                         long long offset,
+    void emitInitializer(const std::shared_ptr<Type> &targetType, const Expression *init,
+                         const std::string &dst, long long offset,
                          std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (const auto initList = std::dynamic_pointer_cast<InitExpr>(init))
+        if (const auto *initList = dyn_cast<InitExpr>(init))
         {
             // Struct brace initializer: bind element i to member i, zero-filling the
             // padding gaps between members and any uninitialized trailing members.
@@ -997,7 +996,7 @@ class TackyDriver
                     if (m.offset > cur)
                         emitZeroFill(dst, offset + cur, m.offset - cur, init->getLine(),
                                      init->getCol(), instructions);
-                    emitInitializer(m.type, initList->elements[i], dst, offset + m.offset,
+                    emitInitializer(m.type, initList->elements[i].get(), dst, offset + m.offset,
                                     instructions);
                     cur = m.offset + sizeOfType(m.type);
                 }
@@ -1010,7 +1009,7 @@ class TackyDriver
             const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType);
             const long long elemSize = sizeOfType(arr->getInner());
             for (size_t i = 0; i < initList->elements.size(); ++i)
-                emitInitializer(arr->getInner(), initList->elements[i], dst,
+                emitInitializer(arr->getInner(), initList->elements[i].get(), dst,
                                 offset + static_cast<long long>(i) * elemSize, instructions);
 
             const long long written = static_cast<long long>(initList->elements.size()) * elemSize;
@@ -1035,7 +1034,7 @@ class TackyDriver
         // A string literal initializing a character array: copy each byte into the
         // object, then zero-fill the tail (which supplies the null terminator when
         // the array has room for it).
-        if (const auto s = std::dynamic_pointer_cast<StringLiterals>(init))
+        if (const auto *s = dyn_cast<StringLiterals>(init))
         {
             if (std::dynamic_pointer_cast<ArrayType>(targetType))
             {
@@ -1058,31 +1057,32 @@ class TackyDriver
             init->getLine(), init->getCol(), val, dst, static_cast<int>(offset)));
     }
 
-    void processReturnStmt(const std::shared_ptr<ReturnStmt> &returnStmt,
+    void processReturnStmt(const ReturnStmt &returnStmt,
                            std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         std::optional<TackyVal> returnVal;
-        if (returnStmt->returnExpression)
+        if (returnStmt.returnExpression)
         {
             // A struct return value is handed to codegen as its named object; codegen
             // packs it into return registers or writes it through the hidden pointer.
-            if (isStructType(returnStmt->returnExpression->resolvedType))
-                returnVal = TackyVar(structValueObject(returnStmt->returnExpression, instructions),
-                                     ConstantType::POINTER);
+            if (isStructType(returnStmt.returnExpression->resolvedType))
+                returnVal =
+                    TackyVar(structValueObject(returnStmt.returnExpression.get(), instructions),
+                             ConstantType::POINTER);
             else
-                returnVal = processExpression(returnStmt->returnExpression, instructions);
+                returnVal = processExpression(returnStmt.returnExpression.get(), instructions);
         }
         instructions.push_back(
-            std::make_unique<TackyReturn>(returnStmt->line, returnStmt->col, std::move(returnVal)));
+            std::make_unique<TackyReturn>(returnStmt.line, returnStmt.col, std::move(returnVal)));
     }
 
-    void processDeclareStmt(const std::shared_ptr<DeclareStmt> &declareStmt,
+    void processDeclareStmt(const DeclareStmt &declareStmt,
                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         if (const auto *vars =
-                std::get_if<std::vector<std::shared_ptr<VarDecl>>>(&declareStmt->variables))
+                std::get_if<std::vector<std::unique_ptr<VarDecl>>>(&declareStmt.variables))
         {
-            for (auto &vd : *vars)
+            for (const auto &vd : *vars)
             {
                 if (vd->symbol->duration == StorageDuration::Static)
                 {
@@ -1094,29 +1094,30 @@ class TackyDriver
                 }
                 else
                 {
-                    auto var = processVarDecl(vd, instructions);
+                    auto var = processVarDecl(*vd, instructions);
                     const std::string &name = vd->symbol ? vd->symbol->uniqueName : vd->name;
                     recordArrayObject(name, vd->type);
                     if (vd->initialization)
                     {
                         if (std::dynamic_pointer_cast<ArrayType>(vd->type) ||
-                            (isStructType(vd->type) &&
-                             std::dynamic_pointer_cast<InitExpr>(vd->initialization)))
-                            emitInitializer(vd->type, vd->initialization, name, 0, instructions);
+                            (isStructType(vd->type) && isa<InitExpr>(vd->initialization.get())))
+                            emitInitializer(vd->type, vd->initialization.get(), name, 0,
+                                            instructions);
                         else if (isStructType(vd->type))
                         {
                             // Copy-initialize from another struct value.
-                            TackyVal dstAddr = namedObjectAddress(name, 0, declareStmt->line,
-                                                                  declareStmt->col, instructions);
-                            TackyVal srcAddr = aggregateAddress(vd->initialization, instructions);
-                            emitStructCopy(dstAddr, srcAddr, sizeOfType(vd->type),
-                                           declareStmt->line, declareStmt->col, instructions);
+                            TackyVal dstAddr = namedObjectAddress(name, 0, declareStmt.line,
+                                                                  declareStmt.col, instructions);
+                            TackyVal srcAddr =
+                                aggregateAddress(vd->initialization.get(), instructions);
+                            emitStructCopy(dstAddr, srcAddr, sizeOfType(vd->type), declareStmt.line,
+                                           declareStmt.col, instructions);
                         }
                         else
                         {
-                            auto val = processExpression(vd->initialization, instructions);
+                            auto val = processExpression(vd->initialization.get(), instructions);
                             instructions.push_back(std::make_unique<TackyCopy>(
-                                declareStmt->line, declareStmt->col, val, var));
+                                declareStmt.line, declareStmt.col, val, var));
                         }
                     }
                 }
@@ -1128,179 +1129,178 @@ class TackyDriver
         }
     }
 
-    void processExprStmt(const std::shared_ptr<ExprStmt> &exprStmt,
+    void processExprStmt(const ExprStmt &exprStmt,
                          std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        processExpression(exprStmt->expr, instructions);
+        processExpression(exprStmt.expr.get(), instructions);
     }
 
-    void processIfStmt(const std::shared_ptr<IfStmt> &ifStmt,
+    void processIfStmt(const IfStmt &ifStmt,
                        std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         std::string end_label = makeTemp("end.");
 
-        auto condition = processExpression(ifStmt->condition, instructions);
-        if (ifStmt->elseBlock)
+        auto condition = processExpression(ifStmt.condition.get(), instructions);
+        if (ifStmt.elseBlock)
         {
             std::string else_label = makeTemp("else.");
-            instructions.push_back(std::make_unique<TackyJumpIfZero>(ifStmt->line, ifStmt->col,
-                                                                     condition, else_label));
-            processBlockStmt(ifStmt->thenBlock, instructions);
             instructions.push_back(
-                std::make_unique<TackyJump>(ifStmt->line, ifStmt->col, end_label));
+                std::make_unique<TackyJumpIfZero>(ifStmt.line, ifStmt.col, condition, else_label));
+            processBlockStmt(*ifStmt.thenBlock, instructions);
+            instructions.push_back(std::make_unique<TackyJump>(ifStmt.line, ifStmt.col, end_label));
             instructions.push_back(
-                std::make_unique<TackyLabel>(ifStmt->line, ifStmt->col, else_label));
-            processBlockStmt(ifStmt->elseBlock, instructions);
+                std::make_unique<TackyLabel>(ifStmt.line, ifStmt.col, else_label));
+            processBlockStmt(*ifStmt.elseBlock, instructions);
         }
         else
         {
             instructions.push_back(
-                std::make_unique<TackyJumpIfZero>(ifStmt->line, ifStmt->col, condition, end_label));
-            processBlockStmt(ifStmt->thenBlock, instructions);
+                std::make_unique<TackyJumpIfZero>(ifStmt.line, ifStmt.col, condition, end_label));
+            processBlockStmt(*ifStmt.thenBlock, instructions);
         }
-        instructions.push_back(std::make_unique<TackyLabel>(ifStmt->line, ifStmt->col, end_label));
+        instructions.push_back(std::make_unique<TackyLabel>(ifStmt.line, ifStmt.col, end_label));
     }
 
-    void processBreakStmt(const std::shared_ptr<BreakStmt> &breakStmt,
+    void processBreakStmt(const BreakStmt &breakStmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         instructions.push_back(std::make_unique<TackyJump>(
-            breakStmt->line, breakStmt->col, ".break_label" + std::to_string(breakStmt->label)));
+            breakStmt.line, breakStmt.col, ".break_label" + std::to_string(breakStmt.label)));
     }
 
-    void processContinueStmt(const std::shared_ptr<ContinueStmt> &continueStmt,
+    void processContinueStmt(const ContinueStmt &continueStmt,
                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         instructions.push_back(
-            std::make_unique<TackyJump>(continueStmt->line, continueStmt->col,
-                                        ".continue_label" + std::to_string(continueStmt->label)));
+            std::make_unique<TackyJump>(continueStmt.line, continueStmt.col,
+                                        ".continue_label" + std::to_string(continueStmt.label)));
     }
 
-    void processDoWhileStmt(const std::shared_ptr<DoWhileStmt> &doWhileStmt,
+    void processDoWhileStmt(const DoWhileStmt &doWhileStmt,
                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        std::string labelId = std::to_string(doWhileStmt->label);
-        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt->line, doWhileStmt->col,
+        std::string labelId = std::to_string(doWhileStmt.label);
+        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt.line, doWhileStmt.col,
                                                             ".start_label" + labelId));
-        processBlockStmt(doWhileStmt->block, instructions);
-        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt->line, doWhileStmt->col,
+        processBlockStmt(*doWhileStmt.block, instructions);
+        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt.line, doWhileStmt.col,
                                                             ".continue_label" + labelId));
-        auto result = processExpression(doWhileStmt->condition, instructions);
+        auto result = processExpression(doWhileStmt.condition.get(), instructions);
         instructions.push_back(std::make_unique<TackyJumpIfNotZero>(
-            doWhileStmt->line, doWhileStmt->col, result, ".start_label" + labelId));
-        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt->line, doWhileStmt->col,
+            doWhileStmt.line, doWhileStmt.col, result, ".start_label" + labelId));
+        instructions.push_back(std::make_unique<TackyLabel>(doWhileStmt.line, doWhileStmt.col,
                                                             ".break_label" + labelId));
     }
 
-    void processWhileStmt(const std::shared_ptr<WhileStmt> &whileStmt,
+    void processWhileStmt(const WhileStmt &whileStmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        std::string labelId = std::to_string(whileStmt->label);
-        instructions.push_back(std::make_unique<TackyLabel>(whileStmt->line, whileStmt->col,
+        std::string labelId = std::to_string(whileStmt.label);
+        instructions.push_back(std::make_unique<TackyLabel>(whileStmt.line, whileStmt.col,
                                                             ".continue_label" + labelId));
-        auto result = processExpression(whileStmt->condition, instructions);
-        instructions.push_back(std::make_unique<TackyJumpIfZero>(whileStmt->line, whileStmt->col,
+        auto result = processExpression(whileStmt.condition.get(), instructions);
+        instructions.push_back(std::make_unique<TackyJumpIfZero>(whileStmt.line, whileStmt.col,
                                                                  result, ".break_label" + labelId));
-        processBlockStmt(whileStmt->whileBlock, instructions);
-        instructions.push_back(std::make_unique<TackyJump>(whileStmt->line, whileStmt->col,
+        processBlockStmt(*whileStmt.whileBlock, instructions);
+        instructions.push_back(std::make_unique<TackyJump>(whileStmt.line, whileStmt.col,
                                                            ".continue_label" + labelId));
-        instructions.push_back(std::make_unique<TackyLabel>(whileStmt->line, whileStmt->col,
-                                                            ".break_label" + labelId));
+        instructions.push_back(
+            std::make_unique<TackyLabel>(whileStmt.line, whileStmt.col, ".break_label" + labelId));
     }
 
-    void processForStmt(const std::shared_ptr<ForStmt> &forStmt,
+    void processForStmt(const ForStmt &forStmt,
                         std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        std::string labelId = std::to_string(forStmt->label);
+        std::string labelId = std::to_string(forStmt.label);
 
-        if (forStmt->initialization)
+        if (forStmt.initialization)
         {
-            processStatement(forStmt->initialization, instructions);
+            processStatement(*forStmt.initialization, instructions);
         }
         instructions.push_back(
-            std::make_unique<TackyLabel>(forStmt->line, forStmt->col, ".start_label" + labelId));
-        if (forStmt->condition)
+            std::make_unique<TackyLabel>(forStmt.line, forStmt.col, ".start_label" + labelId));
+        if (forStmt.condition)
         {
-            auto condStmt = std::dynamic_pointer_cast<ExprStmt>(forStmt->condition);
-            auto condVal = processExpression(condStmt->expr, instructions);
+            const auto *condStmt = dyn_cast<ExprStmt>(forStmt.condition.get());
+            auto condVal = processExpression(condStmt->expr.get(), instructions);
             instructions.push_back(std::make_unique<TackyJumpIfZero>(
-                forStmt->line, forStmt->col, condVal, ".break_label" + labelId));
+                forStmt.line, forStmt.col, condVal, ".break_label" + labelId));
         }
-        if (forStmt->forBlock)
+        if (forStmt.forBlock)
         {
-            processBlockStmt(forStmt->forBlock, instructions);
+            processBlockStmt(*forStmt.forBlock, instructions);
         }
         instructions.push_back(
-            std::make_unique<TackyLabel>(forStmt->line, forStmt->col, ".continue_label" + labelId));
-        if (forStmt->update)
+            std::make_unique<TackyLabel>(forStmt.line, forStmt.col, ".continue_label" + labelId));
+        if (forStmt.update)
         {
-            processStatement(forStmt->update, instructions);
+            processStatement(*forStmt.update, instructions);
         }
         instructions.push_back(
-            std::make_unique<TackyJump>(forStmt->line, forStmt->col, ".start_label" + labelId));
+            std::make_unique<TackyJump>(forStmt.line, forStmt.col, ".start_label" + labelId));
         instructions.push_back(
-            std::make_unique<TackyLabel>(forStmt->line, forStmt->col, ".break_label" + labelId));
+            std::make_unique<TackyLabel>(forStmt.line, forStmt.col, ".break_label" + labelId));
     }
 
-    void processStatement(const std::shared_ptr<Statement> &stmt,
+    void processStatement(const Statement &stmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (const auto &p = std::dynamic_pointer_cast<ReturnStmt>(stmt))
+        if (const auto *p = dyn_cast<ReturnStmt>(&stmt))
         {
-            processReturnStmt(p, instructions);
+            processReturnStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<DeclareStmt>(stmt))
+        else if (const auto *p = dyn_cast<DeclareStmt>(&stmt))
         {
-            processDeclareStmt(p, instructions);
+            processDeclareStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<ExprStmt>(stmt))
+        else if (const auto *p = dyn_cast<ExprStmt>(&stmt))
         {
-            processExprStmt(p, instructions);
+            processExprStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<IfStmt>(stmt))
+        else if (const auto *p = dyn_cast<IfStmt>(&stmt))
         {
-            processIfStmt(p, instructions);
+            processIfStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<BlockStmt>(stmt))
+        else if (const auto *p = dyn_cast<BlockStmt>(&stmt))
         {
-            processBlockStmt(p, instructions);
+            processBlockStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<WhileStmt>(stmt))
+        else if (const auto *p = dyn_cast<WhileStmt>(&stmt))
         {
-            processWhileStmt(p, instructions);
+            processWhileStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<DoWhileStmt>(stmt))
+        else if (const auto *p = dyn_cast<DoWhileStmt>(&stmt))
         {
-            processDoWhileStmt(p, instructions);
+            processDoWhileStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<ForStmt>(stmt))
+        else if (const auto *p = dyn_cast<ForStmt>(&stmt))
         {
-            processForStmt(p, instructions);
+            processForStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<ContinueStmt>(stmt))
+        else if (const auto *p = dyn_cast<ContinueStmt>(&stmt))
         {
-            processContinueStmt(p, instructions);
+            processContinueStmt(*p, instructions);
         }
-        else if (const auto &p = std::dynamic_pointer_cast<BreakStmt>(stmt))
+        else if (const auto *p = dyn_cast<BreakStmt>(&stmt))
         {
-            processBreakStmt(p, instructions);
+            processBreakStmt(*p, instructions);
         }
     }
 
-    void processBlockStmt(const std::shared_ptr<BlockStmt> &blockStmt,
+    void processBlockStmt(const BlockStmt &blockStmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        for (const auto &stmt : blockStmt->statements)
+        for (const auto &stmt : blockStmt.statements)
         {
-            processStatement(stmt, instructions);
+            processStatement(*stmt, instructions);
         }
     }
 
-    std::unique_ptr<TackyFunction> processFunction(const std::shared_ptr<Function> &functionNode)
+    std::unique_ptr<TackyFunction> processFunction(const Function &functionNode)
     {
         std::vector<std::unique_ptr<TackyInstruction>> instructions;
         std::vector<std::pair<std::string, ConstantType>> params;
-        for (const auto &param : functionNode->parameters)
+        for (const auto &param : functionNode.parameters)
         {
             // A by-value struct parameter needs a sized slot and a classification so
             // codegen can reassemble it from its incoming registers/stack bytes.
@@ -1308,39 +1308,39 @@ class TackyDriver
                 structObjects[param.name] = classifyStruct(structTagOf(param.type));
             params.push_back({param.name, returnConstantType(param.type)});
         }
-        processBlockStmt(functionNode->statements, instructions);
+        processBlockStmt(*functionNode.statements, instructions);
         // Every function gets an implicit `return 0` appended. If control reaches
         // it, no earlier return fired (e.g. the body falls off the end); if an
         // earlier return already fired, this is dead code after a ret. Either way
         // it guarantees the function ends in a return so codegen emits a final ret.
-        instructions.push_back(std::make_unique<TackyReturn>(functionNode->line, functionNode->col,
+        instructions.push_back(std::make_unique<TackyReturn>(functionNode.line, functionNode.col,
                                                              TackyConstant(0, ConstantType::INT)));
-        bool global = functionNode->symbol && functionNode->symbol->linkage == Linkage::External;
-        auto fn = std::make_unique<TackyFunction>(functionNode->line, functionNode->col,
-                                                  functionNode->name, global,
-                                                  std::move(instructions), params);
+        bool global = functionNode.symbol && functionNode.symbol->linkage == Linkage::External;
+        auto fn =
+            std::make_unique<TackyFunction>(functionNode.line, functionNode.col, functionNode.name,
+                                            global, std::move(instructions), params);
         // Function::type is the return type; a struct return drives the hidden-pointer
         // (MEMORY) or register packing convention in codegen.
-        if (isStructType(functionNode->type))
+        if (isStructType(functionNode.type))
         {
             fn->returnsStruct = true;
-            fn->returnABI = classifyStruct(structTagOf(functionNode->type));
+            fn->returnABI = classifyStruct(structTagOf(functionNode.type));
         }
         return fn;
     }
 
-    std::unique_ptr<TackyProgram> tacky(const std::shared_ptr<Program> &prog)
+    std::unique_ptr<TackyProgram> tacky(Program &prog)
     {
         std::vector<std::unique_ptr<TackyTopLevelNode>> nodes;
-        for (const auto &node : prog->nodes)
+        for (const auto &node : prog.nodes)
         {
-            if (auto p = std::dynamic_pointer_cast<Function>(node))
+            if (const auto *p = dyn_cast<Function>(node.get()))
             {
                 if (!p->statements)
                     continue;
-                nodes.push_back(processFunction(p));
+                nodes.push_back(processFunction(*p));
             }
-            else if (auto p = std::dynamic_pointer_cast<VarDecl>(node))
+            else if (const auto *p = dyn_cast<VarDecl>(node.get()))
             {
                 seenVarDecls.insert(p->symbol.get());
             }
@@ -1366,12 +1366,12 @@ class TackyDriver
         for (const auto &sc : stringConstants)
         {
             std::vector<StaticInit> inits{StaticInit::str(sc.bytes, /*nullTerminated=*/true)};
-            nodes.push_back(std::make_unique<TackyStaticVariable>(prog->line, prog->col, sc.label,
+            nodes.push_back(std::make_unique<TackyStaticVariable>(prog.line, prog.col, sc.label,
                                                                   /*global=*/false,
                                                                   std::move(inits), sc.align));
         }
 
-        auto program = std::make_unique<TackyProgram>(prog->line, prog->col, std::move(nodes));
+        auto program = std::make_unique<TackyProgram>(prog.line, prog.col, std::move(nodes));
         // Record every static-storage name (incl. extern-only declarations) so
         // codegen resolves their references to RIP-relative data, not stack slots.
         for (const auto &symbol : seenVarDecls)

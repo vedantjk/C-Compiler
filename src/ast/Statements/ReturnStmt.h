@@ -7,9 +7,9 @@
 class ReturnStmt : public Statement
 {
   public:
-    std::shared_ptr<Expression> returnExpression;
+    std::unique_ptr<Expression> returnExpression;
 
-    ReturnStmt(int line_, int col_, std::shared_ptr<Expression> returnExpression_)
+    ReturnStmt(int line_, int col_, std::unique_ptr<Expression> returnExpression_)
         : Statement(NodeKind::ReturnStmt, line_, col_),
           returnExpression(std::move(returnExpression_))
     {

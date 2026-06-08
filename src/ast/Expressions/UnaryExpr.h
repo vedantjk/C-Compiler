@@ -8,12 +8,12 @@ class UnaryExpr : public Expression
 {
   public:
     std::string op;
-    std::shared_ptr<Expression> operand;
+    std::unique_ptr<Expression> operand;
     bool isPostFix;
 
-    UnaryExpr(int line_, int col_, std::string op_, std::shared_ptr<Expression> operand_,
+    UnaryExpr(int line_, int col_, std::string op_, std::unique_ptr<Expression> operand_,
               bool isPostFix_ = false)
-        : Expression(NodeKind::UnaryExpr, line_, col_), op(op_), operand(operand_),
+        : Expression(NodeKind::UnaryExpr, line_, col_), op(op_), operand(std::move(operand_)),
           isPostFix(isPostFix_)
     {
     }

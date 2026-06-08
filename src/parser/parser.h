@@ -39,6 +39,7 @@
 #include "../ast/TopLevelNodes/Function.h"
 #include "../ast/TopLevelNodes/StructDecl.h"
 #include "../lexer/token.h"
+#include "../support/RTTI.h"
 
 // The result of resolving a declarator against a base type: the declared name,
 // the fully-derived type, and (for function declarators) the parameter list.
@@ -575,69 +576,73 @@ class Parser
     // Expression parsing — top-down (entry first, leaves last)
     // ============================================================
 
-    std::shared_ptr<Expression> parseExpression()
+    std::unique_ptr<Expression> parseExpression()
     {
-        std::shared_ptr<Expression> left = parseAssignment();
+        std::unique_ptr<Expression> left = parseAssignment();
         while (peek() == COMMA)
         {
             Token op = consume();
-            std::shared_ptr<Expression> right = parseAssignment();
-            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right,
+            int line = left->getLine(), col = left->getCol();
+            std::unique_ptr<Expression> right = parseAssignment();
+            left = std::make_unique<BinaryExpr>(line, col, std::move(left), std::move(right),
                                                 op.lexeme);
         }
         return left;
     }
 
-    std::shared_ptr<Expression> parseAssignment()
+    std::unique_ptr<Expression> parseAssignment()
     {
-        std::shared_ptr<Expression> left = parseTernaryExpression();
+        std::unique_ptr<Expression> left = parseTernaryExpression();
         while (isAssignmentOp(peek()))
         {
             Token op = consume();
-            std::shared_ptr<Expression> right = parseAssignment();
-            left = std::make_shared<AssignExpr>(left, right, op.lexeme, left->getLine(),
-                                                left->getCol());
+            int line = left->getLine(), col = left->getCol();
+            std::unique_ptr<Expression> right = parseAssignment();
+            left = std::make_unique<AssignExpr>(std::move(left), std::move(right), op.lexeme, line,
+                                                col);
         }
         return left;
     }
 
-    std::shared_ptr<Expression> parseTernaryExpression()
+    std::unique_ptr<Expression> parseTernaryExpression()
     {
-        std::shared_ptr<Expression> condition = parseBinaryExpression();
+        std::unique_ptr<Expression> condition = parseBinaryExpression();
         if (peek() == QUESTION_MARK)
         {
             consume();
-            std::shared_ptr<Expression> thenBranch = parseExpression();
+            int line = condition->getLine(), col = condition->getCol();
+            std::unique_ptr<Expression> thenBranch = parseExpression();
             expect(COLON);
-            std::shared_ptr<Expression> elseBranch = parseTernaryExpression();
-            return std::make_shared<TernaryExpr>(condition, thenBranch, elseBranch,
-                                                 condition->getLine(), condition->getCol());
+            std::unique_ptr<Expression> elseBranch = parseTernaryExpression();
+            return std::make_unique<TernaryExpr>(std::move(condition), std::move(thenBranch),
+                                                 std::move(elseBranch), line, col);
         }
         return condition;
     }
 
-    std::shared_ptr<Expression> parseBinaryExpression(int minPrecedence = 0)
+    std::unique_ptr<Expression> parseBinaryExpression(int minPrecedence = 0)
     {
 
-        std::shared_ptr<Expression> left = parseUnary();
+        std::unique_ptr<Expression> left = parseUnary();
         while (isBinaryOp(peek()) && precedenceLevel.at(peek()) >= minPrecedence)
         {
             Token op = consume();
-            std::shared_ptr<Expression> right =
+            int line = left->getLine(), col = left->getCol();
+            std::unique_ptr<Expression> right =
                 parseBinaryExpression(precedenceLevel.at(op.type) + 1);
-            left = std::make_shared<BinaryExpr>(left->getLine(), left->getCol(), left, right,
+            left = std::make_unique<BinaryExpr>(line, col, std::move(left), std::move(right),
                                                 op.lexeme);
         }
         return left;
     }
 
-    std::shared_ptr<Expression> parseUnary()
+    std::unique_ptr<Expression> parseUnary()
     {
         if (isUnaryOp(peek()))
         {
             Token op = consume();
-            std::shared_ptr<Expression> operand = parseUnary();
-            return std::make_shared<UnaryExpr>(op.line, op.col, op.lexeme, operand);
+            std::unique_ptr<Expression> operand = parseUnary();
+            return std::make_unique<UnaryExpr>(op.line, op.col, op.lexeme, std::move(operand));
         }
         if (peek() == SIZEOF)
         {
@@ -648,10 +653,11 @@ class Parser
                 auto [base, _, __] = parseBaseType();
                 base = parseAbstractDeclarator(base);
                 expect(RIGHT_PAREN);
-                return std::make_shared<SizeOfExpr>(t.line, t.col, base, nullptr);
+                return std::make_unique<SizeOfExpr>(t.line, t.col, base, nullptr);
             }
-            std::shared_ptr<Expression> expr = parseUnary();
-            return std::make_shared<SizeOfExpr>(expr->getLine(), expr->getCol(), nullptr, expr);
+            std::unique_ptr<Expression> expr = parseUnary();
+            return std::make_unique<SizeOfExpr>(expr->getLine(), expr->getCol(), nullptr,
+                                                std::move(expr));
         }
         if (peek() == LEFT_PAREN && isTypeStart(peekNext()))
         {
@@ -660,21 +666,21 @@ class Parser
             base = parseAbstractDeclarator(base);
             expect(RIGHT_PAREN);
             auto operand = parseUnary();
-            return std::make_shared<CastExpr>(base, operand, line, col);
+            return std::make_unique<CastExpr>(base, std::move(operand), line, col);
         }
-        std::shared_ptr<Expression> operand = parseFactor();
+        std::unique_ptr<Expression> operand = parseFactor();
         return operand;
     }
 
-    std::shared_ptr<Expression> parseFactor()
+    std::unique_ptr<Expression> parseFactor()
     {
-        std::shared_ptr<Expression> node;
+        std::unique_ptr<Expression> node;
         if (peek() == CONSTANT && isCharConstantLexeme(curToken().lexeme))
         {
             // A character constant has type int and its value is the decoded byte.
             Token constant = consume();
             const int value = decodeCharConstant(constant.lexeme);
-            node = std::make_shared<IntLiterals>(
+            node = std::make_unique<IntLiterals>(
                 constant.line, constant.col,
                 static_cast<unsigned long long>(static_cast<long long>(value)),
                 IntType::getInstance());
@@ -707,7 +713,7 @@ class Parser
                 constantType = LongType::getInstance();
             else
                 constantType = value > INT_MAX ? LongType::getInstance() : IntType::getInstance();
-            node = std::make_shared<IntLiterals>(constant.line, constant.col, value, constantType);
+            node = std::make_unique<IntLiterals>(constant.line, constant.col, value, constantType);
         }
         else if (peek() == FLOATING_CONSTANT)
         {
@@ -715,20 +721,20 @@ class Parser
             const std::string &lex = constant.lexeme;
             double value = strtod(lex.c_str(), nullptr);
             std::shared_ptr<Type> constantType = DoubleType::getInstance();
-            node = std::make_shared<FloatingLiterals>(constant.line, constant.col, value,
+            node = std::make_unique<FloatingLiterals>(constant.line, constant.col, value,
                                                       constantType);
         }
         else if (peek() == LEFT_PAREN)
         {
             consume();
-            std::shared_ptr<Expression> parseResult = parseExpression();
+            std::unique_ptr<Expression> parseResult = parseExpression();
             expect(RIGHT_PAREN);
-            node = parseResult;
+            node = std::move(parseResult);
         }
         else if (peek() == IDENTIFIER)
         {
             Token name = consume();
-            node = std::make_shared<VariableExpr>(name.line, name.col, name.lexeme);
+            node = std::make_unique<VariableExpr>(name.line, name.col, name.lexeme);
         }
         else if (peek() == STRING_LITERAL)
         {
@@ -742,7 +748,7 @@ class Parser
                 combined += r.lexeme.substr(1, newLen - 2);
             }
             combined = '"' + combined + '"';
-            node = std::make_shared<StringLiterals>(s.line, s.col, combined);
+            node = std::make_unique<StringLiterals>(s.line, s.col, combined);
         }
         else
             error("expected an expression, got " + std::string(tokenTypeToString(peek())));
@@ -751,31 +757,37 @@ class Parser
         {
             if (peek() == LEFT_PAREN)
             {
-                auto var = std::dynamic_pointer_cast<VariableExpr>(node);
-                if (!var)
+                // Validate the callee is a VariableExpr. Check the kind on the raw pointer,
+                // then release ownership into a unique_ptr<VariableExpr>.
+                if (!isa<VariableExpr>(node.get()))
                     error("callee must be an identifier");
-                node = parseFunctionCallExpr(var);
+                // Transfer: release raw pointer, static_cast to VariableExpr*, take ownership.
+                VariableExpr *raw = static_cast<VariableExpr *>(node.release());
+                std::unique_ptr<VariableExpr> var(raw);
+                node = parseFunctionCallExpr(std::move(var));
             }
             else if (peek() == INC_OP || peek() == DEC_OP)
             {
                 Token op = consume();
-                node = std::make_shared<UnaryExpr>(node->getLine(), node->getCol(), op.lexeme, node,
-                                                   true);
+                int line = node->getLine(), col = node->getCol();
+                node = std::make_unique<UnaryExpr>(line, col, op.lexeme, std::move(node), true);
             }
             else if (peek() == LEFT_BRACKET)
             {
                 consume();
-                std::shared_ptr<Expression> index = parseExpression();
+                int line = node->getLine(), col = node->getCol();
+                std::unique_ptr<Expression> index = parseExpression();
                 expect(RIGHT_BRACKET);
                 node =
-                    std::make_shared<SubscriptExpr>(node, index, node->getLine(), node->getCol());
+                    std::make_unique<SubscriptExpr>(std::move(node), std::move(index), line, col);
             }
             else if (peek() == DOT || peek() == PTR_OP)
             {
                 Token op = consume();
                 Token field = expect(IDENTIFIER);
-                node = std::make_shared<MemberExpr>(node, field.lexeme, op.type == PTR_OP,
-                                                    node->getLine(), node->getCol());
+                int line = node->getLine(), col = node->getCol();
+                node = std::make_unique<MemberExpr>(std::move(node), field.lexeme,
+                                                    op.type == PTR_OP, line, col);
             }
             else
                 break;
@@ -784,11 +796,11 @@ class Parser
         return node;
     }
 
-    std::shared_ptr<FunctionCallExpr>
-    parseFunctionCallExpr(std::shared_ptr<VariableExpr> functionName)
+    std::unique_ptr<FunctionCallExpr>
+    parseFunctionCallExpr(std::unique_ptr<VariableExpr> functionName)
     {
         expect(LEFT_PAREN);
-        std::vector<std::shared_ptr<Expression>> parameters;
+        std::vector<std::unique_ptr<Expression>> parameters;
         if (peek() != RIGHT_PAREN)
         {
             parameters.emplace_back(parseAssignment());
@@ -799,18 +811,19 @@ class Parser
             }
         }
         expect(RIGHT_PAREN);
-        return std::make_shared<FunctionCallExpr>(functionName->getLine(), functionName->getCol(),
-                                                  functionName, parameters);
+        int line = functionName->getLine(), col = functionName->getCol();
+        return std::make_unique<FunctionCallExpr>(line, col, std::move(functionName),
+                                                  std::move(parameters));
     }
 
-    std::shared_ptr<Expression> parseInitializers()
+    std::unique_ptr<Expression> parseInitializers()
     {
         if (peek() == LEFT_BRACE)
         {
             Token brace = consume();
             if (peek() == RIGHT_BRACE)
                 error("empty initializer lists are not allowed");
-            std::vector<std::shared_ptr<Expression>> initializations;
+            std::vector<std::unique_ptr<Expression>> initializations;
             if (peek() != RIGHT_BRACE)
             {
                 initializations.emplace_back(parseInitializers());
@@ -823,7 +836,7 @@ class Parser
                 }
             }
             expect(RIGHT_BRACE);
-            return std::make_shared<InitExpr>(initializations, brace.line, brace.col);
+            return std::make_unique<InitExpr>(std::move(initializations), brace.line, brace.col);
         }
 
         return parseAssignment();
@@ -833,12 +846,13 @@ class Parser
     // Statement parsing — declarations, control flow, and blocks
     // ============================================================
 
-    std::shared_ptr<ExprStmt> parseExprStatement(bool semiColon = true)
+    std::unique_ptr<ExprStmt> parseExprStatement(bool semiColon = true)
     {
-        std::shared_ptr<Expression> expr = parseExpression();
+        std::unique_ptr<Expression> expr = parseExpression();
         if (semiColon)
             expect(SEMI_COLON);
-        return std::make_shared<ExprStmt>(expr, expr->getLine(), expr->getCol(), semiColon);
+        int line = expr->getLine(), col = expr->getCol();
+        return std::make_unique<ExprStmt>(std::move(expr), line, col, semiColon);
     }
 
     // A run of comma-separated declarators sharing one base type, resolving to
@@ -846,8 +860,8 @@ class Parser
     struct DeclList
     {
         bool isFunction = false;
-        std::shared_ptr<Function> function;
-        std::vector<std::shared_ptr<VarDecl>> variables;
+        std::unique_ptr<Function> function;
+        std::vector<std::unique_ptr<VarDecl>> variables;
     };
 
     DeclList parseDeclarationList(const std::shared_ptr<Type> &baseType, bool global,
@@ -857,28 +871,28 @@ class Parser
 
         if (auto fnType = std::dynamic_pointer_cast<FunctionType>(first.type))
         {
-            std::shared_ptr<BlockStmt> body;
+            std::unique_ptr<BlockStmt> body;
             if (peek() == LEFT_BRACE)
                 body = parseBlockStmt();
             else
                 expect(SEMI_COLON);
             auto fn =
-                std::make_shared<Function>(line, col, first.name, fnType->returnType, first.params,
-                                           body, fnType->isVariadic, storageClass);
-            return DeclList{true, fn, {}};
+                std::make_unique<Function>(line, col, first.name, fnType->returnType, first.params,
+                                           std::move(body), fnType->isVariadic, storageClass);
+            return DeclList{true, std::move(fn), {}};
         }
 
-        std::vector<std::shared_ptr<VarDecl>> variables;
+        std::vector<std::unique_ptr<VarDecl>> variables;
         const auto addVar = [&](const Declarator &d)
         {
-            std::shared_ptr<Expression> initialization;
+            std::unique_ptr<Expression> initialization;
             if (peek() == ASSIGN)
             {
                 consume();
                 initialization = parseInitializers();
             }
-            variables.emplace_back(std::make_shared<VarDecl>(d.line, d.col, d.name, d.type,
-                                                             initialization, global, storageClass));
+            variables.emplace_back(std::make_unique<VarDecl>(
+                d.line, d.col, d.name, d.type, std::move(initialization), global, storageClass));
         };
         addVar(first);
         while (peek() == COMMA)
@@ -893,52 +907,53 @@ class Parser
         return DeclList{false, nullptr, std::move(variables)};
     }
 
-    std::shared_ptr<DeclareStmt>
+    std::unique_ptr<DeclareStmt>
     parseDeclareStmt(std::shared_ptr<Type> &type, int line, int col,
                      std::optional<StorageClass> storageClass = std::nullopt)
     {
         if (peek() == LEFT_BRACE)
         {
             auto structVar = parseStructDecl(type, line, col);
-            return std::make_shared<DeclareStmt>(line, col, structVar);
+            return std::make_unique<DeclareStmt>(line, col, std::move(structVar));
         }
         if (atStructForwardDecl(type))
-            return std::make_shared<DeclareStmt>(line, col,
+            return std::make_unique<DeclareStmt>(line, col,
                                                  parseStructForwardDecl(type, line, col));
         DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
         if (dl.isFunction)
             error(line, col, "function declaration not allowed here");
-        return std::make_shared<DeclareStmt>(line, col, dl.variables);
+        return std::make_unique<DeclareStmt>(line, col, std::move(dl.variables));
     }
 
     // Control-flow bodies in this language are always brace-delimited blocks; the
     // brace-less single-statement forms are intentionally unsupported.
-    std::shared_ptr<BlockStmt> parseRequiredBlock(const char *context)
+    std::unique_ptr<BlockStmt> parseRequiredBlock(const char *context)
     {
         if (peek() != LEFT_BRACE)
             error(std::string(context) + " expects a brace-delimited block");
         return parseBlockStmt();
     }
 
-    std::shared_ptr<ReturnStmt> parseReturnStmt()
+    std::unique_ptr<ReturnStmt> parseReturnStmt()
     {
         Token returnStart = expect(RETURN); // should not throw
-        std::shared_ptr<Expression> returnExpression;
+        std::unique_ptr<Expression> returnExpression;
         if (peek() != SEMI_COLON)
             returnExpression = parseExpression();
         expect(SEMI_COLON);
-        return std::make_shared<ReturnStmt>(returnStart.line, returnStart.col, returnExpression);
+        return std::make_unique<ReturnStmt>(returnStart.line, returnStart.col,
+                                            std::move(returnExpression));
     }
 
-    std::shared_ptr<IfStmt> parseIfStmt()
+    std::unique_ptr<IfStmt> parseIfStmt()
     {
         Token ifToken = expect(IF); // should never throw;
         expect(LEFT_PAREN);
-        std::shared_ptr<Expression> condition = parseExpression();
+        std::unique_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
-        std::shared_ptr<BlockStmt> thenBlock = parseRequiredBlock("if statement");
+        std::unique_ptr<BlockStmt> thenBlock = parseRequiredBlock("if statement");
 
-        std::shared_ptr<BlockStmt> elseBlock;
+        std::unique_ptr<BlockStmt> elseBlock;
         if (peek() == ELSE)
         {
             consume();
@@ -946,45 +961,49 @@ class Parser
             {
                 // `else if ...` is parsed as `else { if ... }`: parse the nested if
                 // and wrap it in a synthetic block so it fits elseBlock's type.
-                std::vector<std::shared_ptr<Statement>> body = {parseIfStmt()};
-                elseBlock = std::make_shared<BlockStmt>(ifToken.line, ifToken.col, std::move(body));
+                std::vector<std::unique_ptr<Statement>> body;
+                body.emplace_back(parseIfStmt());
+                elseBlock = std::make_unique<BlockStmt>(ifToken.line, ifToken.col, std::move(body));
             }
             else
             {
                 elseBlock = parseRequiredBlock("else statement");
             }
         }
-        return std::make_shared<IfStmt>(ifToken.line, ifToken.col, condition, thenBlock, elseBlock);
+        return std::make_unique<IfStmt>(ifToken.line, ifToken.col, std::move(condition),
+                                        std::move(thenBlock), std::move(elseBlock));
     }
 
-    std::shared_ptr<WhileStmt> parseWhileStmt()
+    std::unique_ptr<WhileStmt> parseWhileStmt()
     {
         Token whileToken = expect(WHILE);
         expect(LEFT_PAREN);
-        std::shared_ptr<Expression> condition = parseExpression();
+        std::unique_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
-        std::shared_ptr<BlockStmt> whileBlock = parseRequiredBlock("while statement");
+        std::unique_ptr<BlockStmt> whileBlock = parseRequiredBlock("while statement");
 
-        return std::make_shared<WhileStmt>(whileToken.line, whileToken.col, condition, whileBlock);
+        return std::make_unique<WhileStmt>(whileToken.line, whileToken.col, std::move(condition),
+                                           std::move(whileBlock));
     }
 
-    std::shared_ptr<DoWhileStmt> parseDoWhileStmt()
+    std::unique_ptr<DoWhileStmt> parseDoWhileStmt()
     {
         Token doStart = expect(DO); // should not throw
-        std::shared_ptr<BlockStmt> doBlock = parseRequiredBlock("do-while statement");
+        std::unique_ptr<BlockStmt> doBlock = parseRequiredBlock("do-while statement");
         expect(WHILE);
         expect(LEFT_PAREN);
-        std::shared_ptr<Expression> condition = parseExpression();
+        std::unique_ptr<Expression> condition = parseExpression();
         expect(RIGHT_PAREN);
         expect(SEMI_COLON);
-        return std::make_shared<DoWhileStmt>(doBlock, condition, doStart.line, doStart.col);
+        return std::make_unique<DoWhileStmt>(std::move(doBlock), std::move(condition), doStart.line,
+                                             doStart.col);
     }
 
-    std::shared_ptr<ForStmt> parseForStmt()
+    std::unique_ptr<ForStmt> parseForStmt()
     {
         Token forStart = expect(FOR);
         expect(LEFT_PAREN);
-        std::shared_ptr<Statement> initialization;
+        std::unique_ptr<Statement> initialization;
         if (peek() == SEMI_COLON)
             consume();
         else if (isDeclSpecifierStart(peek()))
@@ -999,38 +1018,39 @@ class Parser
         }
         else
             initialization = parseExprStatement(true);
-        std::shared_ptr<Statement> condition;
+        std::unique_ptr<Statement> condition;
         if (peek() == SEMI_COLON)
             consume();
         else
             condition = parseExprStatement(true);
-        std::shared_ptr<Statement> update;
+        std::unique_ptr<Statement> update;
         if (peek() != RIGHT_PAREN)
             update = parseExprStatement(false);
         expect(RIGHT_PAREN);
-        std::shared_ptr<BlockStmt> forBlock = parseRequiredBlock("for statement");
-        return std::make_shared<ForStmt>(forStart.line, forStart.col, initialization, condition,
-                                         update, forBlock);
+        std::unique_ptr<BlockStmt> forBlock = parseRequiredBlock("for statement");
+        return std::make_unique<ForStmt>(forStart.line, forStart.col, std::move(initialization),
+                                         std::move(condition), std::move(update),
+                                         std::move(forBlock));
     }
 
-    std::shared_ptr<BreakStmt> parseBreakStmt()
+    std::unique_ptr<BreakStmt> parseBreakStmt()
     {
         Token breakToken = expect(BREAK);
         expect(SEMI_COLON);
-        return std::make_shared<BreakStmt>(breakToken.line, breakToken.col);
+        return std::make_unique<BreakStmt>(breakToken.line, breakToken.col);
     }
 
-    std::shared_ptr<ContinueStmt> parseContinueStmt()
+    std::unique_ptr<ContinueStmt> parseContinueStmt()
     {
         Token continueToken = expect(CONTINUE);
         expect(SEMI_COLON);
-        return std::make_shared<ContinueStmt>(continueToken.line, continueToken.col);
+        return std::make_unique<ContinueStmt>(continueToken.line, continueToken.col);
     }
 
-    std::shared_ptr<BlockStmt> parseBlockStmt()
+    std::unique_ptr<BlockStmt> parseBlockStmt()
     {
         Token blockStart = expect(LEFT_BRACE); // should never throw
-        std::vector<std::shared_ptr<Statement>> statements;
+        std::vector<std::unique_ptr<Statement>> statements;
         while (peek() != RIGHT_BRACE)
         {
             if (isDeclSpecifierStart(peek()))
@@ -1039,12 +1059,13 @@ class Parser
                 if (peek() == LEFT_BRACE)
                 {
                     auto structVar = parseStructDecl(type, line, col);
-                    statements.emplace_back(std::make_shared<DeclareStmt>(line, col, structVar));
+                    statements.emplace_back(
+                        std::make_unique<DeclareStmt>(line, col, std::move(structVar)));
                     continue;
                 }
                 if (atStructForwardDecl(type))
                 {
-                    statements.emplace_back(std::make_shared<DeclareStmt>(
+                    statements.emplace_back(std::make_unique<DeclareStmt>(
                         line, col, parseStructForwardDecl(type, line, col)));
                     continue;
                 }
@@ -1057,11 +1078,12 @@ class Parser
                     if (dl.function->statements)
                         error(line, col, "function definition not allowed in block scope");
                     statements.emplace_back(
-                        std::make_shared<FunctionDeclStmt>(line, col, dl.function));
+                        std::make_unique<FunctionDeclStmt>(line, col, std::move(dl.function)));
                 }
                 else
                 {
-                    statements.emplace_back(std::make_shared<DeclareStmt>(line, col, dl.variables));
+                    statements.emplace_back(
+                        std::make_unique<DeclareStmt>(line, col, std::move(dl.variables)));
                 }
                 continue;
             }
@@ -1109,7 +1131,7 @@ class Parser
                 statements.emplace_back(parseExprStatement());
         }
         consume(); // consume the right brace
-        return std::make_shared<BlockStmt>(blockStart.line, blockStart.col, statements);
+        return std::make_unique<BlockStmt>(blockStart.line, blockStart.col, std::move(statements));
     }
 
     // ============================================================
@@ -1118,12 +1140,12 @@ class Parser
 
     // A forward declaration `struct s;` introduces an incomplete tag with no body.
     // Only valid for a struct specifier; `int;` and friends stay declarator errors.
-    std::shared_ptr<StructDecl> parseStructForwardDecl(const std::shared_ptr<Type> &structType,
+    std::unique_ptr<StructDecl> parseStructForwardDecl(const std::shared_ptr<Type> &structType,
                                                        int line, int col)
     {
         expect(SEMI_COLON);
         auto st = std::dynamic_pointer_cast<StructType>(structType);
-        return std::make_shared<StructDecl>(st->getName(), std::vector<StructField>{}, line, col,
+        return std::make_unique<StructDecl>(st->getName(), std::vector<StructField>{}, line, col,
                                             structType, false);
     }
 
@@ -1134,7 +1156,7 @@ class Parser
         return std::dynamic_pointer_cast<StructType>(type) && peek() == SEMI_COLON;
     }
 
-    std::shared_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type> &structType, int line,
+    std::unique_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type> &structType, int line,
                                                 int col)
     {
         expect(LEFT_BRACE);
@@ -1161,13 +1183,13 @@ class Parser
         expect(RIGHT_BRACE);
         expect(SEMI_COLON);
         auto actualStructType = std::dynamic_pointer_cast<StructType>(structType);
-        return std::make_shared<StructDecl>(actualStructType->getName(), fields, line, col,
+        return std::make_unique<StructDecl>(actualStructType->getName(), fields, line, col,
                                             structType);
     }
 
-    std::shared_ptr<Program> ParseProgram()
+    std::unique_ptr<Program> ParseProgram()
     {
-        std::vector<std::shared_ptr<TopLevelNode>> nodes;
+        std::vector<std::unique_ptr<TopLevelNode>> nodes;
         while (peek() != EOF_TOKEN)
         {
 
@@ -1187,12 +1209,12 @@ class Parser
                 DeclList dl = parseDeclarationList(type, true, storageClass, line, col);
                 if (dl.isFunction)
                 {
-                    nodes.emplace_back(dl.function);
+                    nodes.emplace_back(std::move(dl.function));
                 }
                 else
                 {
-                    for (const auto &var : dl.variables)
-                        nodes.emplace_back(var);
+                    for (auto &var : dl.variables)
+                        nodes.emplace_back(std::move(var));
                 }
             }
             else
@@ -1200,6 +1222,6 @@ class Parser
                 error("unexpected token at file scope: " + std::string(tokenTypeToString(peek())));
             }
         }
-        return std::make_shared<Program>(nodes);
+        return std::make_unique<Program>(std::move(nodes));
     }
 };

@@ -7,10 +7,10 @@ class DoWhileStmt : public Statement
 {
   public:
     int label;
-    std::shared_ptr<BlockStmt> block;
-    std::shared_ptr<Expression> condition;
+    std::unique_ptr<BlockStmt> block;
+    std::unique_ptr<Expression> condition;
 
-    DoWhileStmt(std::shared_ptr<BlockStmt> block, std::shared_ptr<Expression> condition, int line,
+    DoWhileStmt(std::unique_ptr<BlockStmt> block, std::unique_ptr<Expression> condition, int line,
                 int column)
         : Statement(NodeKind::DoWhileStmt, line, column), block(std::move(block)),
           condition(std::move(condition))

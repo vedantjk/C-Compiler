@@ -8,11 +8,11 @@
 class MemberExpr : public Expression
 {
   public:
-    std::shared_ptr<Expression> object;
+    std::unique_ptr<Expression> object;
     std::string field;
     bool isArrow;
 
-    MemberExpr(std::shared_ptr<Expression> object, std::string field, bool isArrow, int line,
+    MemberExpr(std::unique_ptr<Expression> object, std::string field, bool isArrow, int line,
                int col)
         : Expression(NodeKind::MemberExpr, line, col), object(std::move(object)),
           field(std::move(field)), isArrow(isArrow)

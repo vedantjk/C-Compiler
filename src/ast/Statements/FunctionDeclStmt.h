@@ -13,9 +13,9 @@
 class FunctionDeclStmt : public Statement
 {
   public:
-    std::shared_ptr<Function> declaration;
+    std::unique_ptr<Function> declaration;
 
-    FunctionDeclStmt(int line_, int col_, std::shared_ptr<Function> declaration_)
+    FunctionDeclStmt(int line_, int col_, std::unique_ptr<Function> declaration_)
         : Statement(NodeKind::FunctionDeclStmt, line_, col_), declaration(std::move(declaration_))
     {
     }

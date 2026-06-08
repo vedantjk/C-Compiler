@@ -9,9 +9,9 @@
 class Program : public ASTNode
 {
   public:
-    std::vector<std::shared_ptr<TopLevelNode>> nodes;
+    std::vector<std::unique_ptr<TopLevelNode>> nodes;
 
-    explicit Program(std::vector<std::shared_ptr<TopLevelNode>> nodes)
+    explicit Program(std::vector<std::unique_ptr<TopLevelNode>> nodes)
         : ASTNode(NodeKind::Program, 0, 0), nodes(std::move(nodes))
     {
     }

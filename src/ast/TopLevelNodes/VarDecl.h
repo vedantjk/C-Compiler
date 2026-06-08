@@ -14,12 +14,12 @@ class VarDecl : public TopLevelNode
   public:
     std::string name;
     std::shared_ptr<Type> type;
-    std::shared_ptr<Expression> initialization;
+    std::unique_ptr<Expression> initialization;
     bool global;
     std::optional<StorageClass> storageClass;
 
     VarDecl(int line_, int col_, std::string name_, std::shared_ptr<Type> type_,
-            std::shared_ptr<Expression> initialization_, bool global = false,
+            std::unique_ptr<Expression> initialization_, bool global = false,
             std::optional<StorageClass> storageClass_ = std::nullopt)
         : TopLevelNode(NodeKind::VarDecl, line_, col_), name(name_), type(type_),
           initialization(std::move(initialization_)), global(global), storageClass(storageClass_)

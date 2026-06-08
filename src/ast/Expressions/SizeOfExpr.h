@@ -6,10 +6,10 @@ class SizeOfExpr : public Expression
 {
   public:
     std::shared_ptr<Type> type;
-    std::shared_ptr<Expression> expr;
+    std::unique_ptr<Expression> expr;
 
     SizeOfExpr(int line, int col, std::shared_ptr<Type> type = nullptr,
-               std::shared_ptr<Expression> expr = nullptr)
+               std::unique_ptr<Expression> expr = nullptr)
         : Expression(NodeKind::SizeOfExpr, line, col), type(std::move(type)), expr(std::move(expr))
     {
     }

@@ -4,12 +4,12 @@
 class TernaryExpr : public Expression
 {
   public:
-    std::shared_ptr<Expression> condition;
-    std::shared_ptr<Expression> thenBranch;
-    std::shared_ptr<Expression> elseBranch;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> thenBranch;
+    std::unique_ptr<Expression> elseBranch;
 
-    TernaryExpr(std::shared_ptr<Expression> condition, std::shared_ptr<Expression> ifBranch,
-                std::shared_ptr<Expression> elseBranch, int line, int col)
+    TernaryExpr(std::unique_ptr<Expression> condition, std::unique_ptr<Expression> ifBranch,
+                std::unique_ptr<Expression> elseBranch, int line, int col)
         : Expression(NodeKind::TernaryExpr, line, col), condition(std::move(condition)),
           thenBranch(std::move(ifBranch)), elseBranch(std::move(elseBranch))
     {

@@ -8,12 +8,12 @@
 class IfStmt : public Statement
 {
   public:
-    std::shared_ptr<Expression> condition;
-    std::shared_ptr<BlockStmt> thenBlock;
-    std::shared_ptr<BlockStmt> elseBlock;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<BlockStmt> thenBlock;
+    std::unique_ptr<BlockStmt> elseBlock;
 
-    IfStmt(int line_, int col_, std::shared_ptr<Expression> condition_,
-           std::shared_ptr<BlockStmt> thenBlock_, std::shared_ptr<BlockStmt> elseBlock_)
+    IfStmt(int line_, int col_, std::unique_ptr<Expression> condition_,
+           std::unique_ptr<BlockStmt> thenBlock_, std::unique_ptr<BlockStmt> elseBlock_)
         : Statement(NodeKind::IfStmt, line_, col_), condition(std::move(condition_)),
           thenBlock(std::move(thenBlock_)), elseBlock(std::move(elseBlock_))
     {

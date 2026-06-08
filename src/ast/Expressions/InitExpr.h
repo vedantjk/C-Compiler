@@ -5,10 +5,10 @@
 class InitExpr : public Expression
 {
   public:
-    std::vector<std::shared_ptr<Expression>> elements;
+    std::vector<std::unique_ptr<Expression>> elements;
 
-    InitExpr(std::vector<std::shared_ptr<Expression>> elements, int line, int col)
-        : Expression(NodeKind::InitExpr, line, col), elements(elements)
+    InitExpr(std::vector<std::unique_ptr<Expression>> elements, int line, int col)
+        : Expression(NodeKind::InitExpr, line, col), elements(std::move(elements))
     {
     }
 

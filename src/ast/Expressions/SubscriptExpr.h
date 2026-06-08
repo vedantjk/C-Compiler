@@ -9,10 +9,10 @@
 class SubscriptExpr : public Expression
 {
   public:
-    std::shared_ptr<Expression> lvalue;
-    std::shared_ptr<Expression> index;
+    std::unique_ptr<Expression> lvalue;
+    std::unique_ptr<Expression> index;
 
-    SubscriptExpr(std::shared_ptr<Expression> lvalue, std::shared_ptr<Expression> index, int line,
+    SubscriptExpr(std::unique_ptr<Expression> lvalue, std::unique_ptr<Expression> index, int line,
                   int col)
         : Expression(NodeKind::SubscriptExpr, line, col), lvalue(std::move(lvalue)),
           index(std::move(index)) {};
