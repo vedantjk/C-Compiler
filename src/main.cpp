@@ -5,6 +5,7 @@
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "semanticanalyzer/SemanticAnalyzer.h"
+#include "tacky/Pass.h"
 #include "tacky/ast/visitors/TackyDebugPrinter.h"
 #include "tacky/tacky.h"
 #include <cstdio>
@@ -159,6 +160,10 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
         auto tackyProg = tackyDriver.tacky(*p);
         if (debugTacky)
             TackyDebugPrinter(std::cout).print(*tackyProg);
+
+        verify(*tackyProg);
+        PassManager pm; // no passes registered yet — the optimization phase will add them
+        pm.run(*tackyProg);
 
         if (stage == "tacky")
             return 0;
