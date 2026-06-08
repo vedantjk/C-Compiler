@@ -69,6 +69,24 @@ inline bool isVoid(const std::shared_ptr<Type> &t)
     return x != nullptr;
 }
 
+inline bool isVoidPointer(const std::shared_ptr<Type> &t)
+{
+    const auto p = std::dynamic_pointer_cast<PointerType>(t);
+    return p && isVoid(p->getInner());
+}
+
+// A type is complete when an object of it has a known size. void is the only
+// incomplete type in this chapter; an array is complete iff its element is
+// (so void[3] and, recursively, void[3][4] are incomplete).
+inline bool isComplete(const std::shared_ptr<Type> &t)
+{
+    if (isVoid(t))
+        return false;
+    if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
+        return isComplete(a->getInner());
+    return true;
+}
+
 inline bool isDouble(const std::shared_ptr<Type> &t)
 {
     return std::dynamic_pointer_cast<DoubleType>(t) != nullptr;
@@ -335,6 +353,10 @@ class SemanticAnalyzer
             return true;
         if (isPointer(target) && isNullPointerConstant(rhs))
             return true;
+        // void * converts to/from any other object pointer type, either direction
+        // (but never to/from a non-pointer such as an integer).
+        if (isPointer(target) && isPointer(src) && (isVoidPointer(target) || isVoidPointer(src)))
+            return true;
         return false;
     }
 
@@ -386,6 +408,43 @@ class SemanticAnalyzer
         if (const auto arr = std::dynamic_pointer_cast<ArrayType>(t))
             return std::make_shared<PointerType>(arr->getInner());
         return t;
+    }
+
+    // Reject array types whose element is incomplete, anywhere in a declared type.
+    // The element of an array must have a known size, so void[3] is illegal — and
+    // so are the nested forms void[3][4] and void(*)[3] reached through pointers,
+    // arrays, and function parameter/return types.
+    void validateType(const std::shared_ptr<Type> &t, int line, int col)
+    {
+        if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
+        {
+            if (!isComplete(a->getInner()))
+                error(line, col,
+                      "array element type must be complete, got " + a->getInner()->toString() +
+                          ".");
+            validateType(a->getInner(), line, col);
+        }
+        else if (const auto p = std::dynamic_pointer_cast<PointerType>(t))
+        {
+            validateType(p->getInner(), line, col);
+        }
+        else if (const auto f = std::dynamic_pointer_cast<FunctionType>(t))
+        {
+            for (const auto &pt : f->paramTypes)
+                validateType(pt, line, col);
+            validateType(f->returnType, line, col);
+        }
+    }
+
+    // A parameter is validated against its declared type, before array-to-pointer
+    // adjustment: a void parameter is meaningless, and an array parameter's
+    // element type must be complete (void foo[3] adjusts to void * but is still
+    // illegal because the pre-adjustment element type is incomplete).
+    void validateParam(const Parameter &param)
+    {
+        if (isVoid(param.type))
+            error(param.line, param.col, "parameter '" + param.name + "' has type void.");
+        validateType(param.type, param.line, param.col);
     }
 
     size_t decodedLength(const std::string &s)
@@ -571,6 +630,20 @@ class SemanticAnalyzer
                     bool leftIsPointer = isPointer(lType);
                     bool rightIsPointer = isPointer(rType);
 
+                    // Pointer arithmetic scales by the pointed-to type's size, so it
+                    // needs a complete element type: no arithmetic on a void * (or
+                    // any pointer to an incomplete type).
+                    auto innerOf = [](const std::shared_ptr<Type> &t)
+                    { return std::dynamic_pointer_cast<PointerType>(t)->getInner(); };
+                    if (leftIsPointer && !isComplete(innerOf(lType)))
+                        error(x->left->getLine(), x->left->getCol(),
+                              "pointer arithmetic requires a complete pointee type, got " +
+                                  lType->toString() + ".");
+                    if (rightIsPointer && !isComplete(innerOf(rType)))
+                        error(x->right->getLine(), x->right->getCol(),
+                              "pointer arithmetic requires a complete pointee type, got " +
+                                  rType->toString() + ".");
+
                     if (!leftIsPointer && !rightIsPointer)
                     {
                         const bool bothArith = (isInteger(lType) || isDouble(lType)) &&
@@ -693,9 +766,15 @@ class SemanticAnalyzer
 
                     if (bothPtr && !lType->equals(*rType))
                     {
-                        error(x->right->getLine(), x->right->getCol(),
-                              "Comparison operator needs matching pointer types, left: " +
-                                  lType->toString() + ", right: " + rType->toString() + ".");
+                        // == and != also accept a void * against any object pointer
+                        // (the common type is void *); the relational operators
+                        // still require identical pointer types.
+                        const bool voidOk =
+                            isEquality && (isVoidPointer(lType) || isVoidPointer(rType));
+                        if (!voidOk)
+                            error(x->right->getLine(), x->right->getCol(),
+                                  "Comparison operator needs matching pointer types, left: " +
+                                      lType->toString() + ", right: " + rType->toString() + ".");
                     }
                     else if (!bothArith && !bothPtr)
                     {
@@ -785,12 +864,18 @@ class SemanticAnalyzer
         else if (auto x = std::dynamic_pointer_cast<CastExpr>(expr))
         {
             analyzeAndDecay(x->operand);
+            validateType(x->type, x->getLine(), x->getCol());
 
             const auto &srcType = x->operand->resolvedType;
-            if (!isScalar(srcType) || (!isScalar(x->type) && !isVoid(x->type)))
+            // A cast to void discards the operand's value and accepts any operand
+            // type (including a void operand). Every other cast is between scalars.
+            if (isVoid(x->type))
+            {
+            }
+            else if (!isScalar(srcType) || !isScalar(x->type))
             {
                 error(x->getLine(), x->getCol(),
-                      "Cannot cast to or from struct, got " + srcType->toString() + " and " +
+                      "can only cast between scalar types, got " + srcType->toString() + " and " +
                           x->type->toString() + ".");
             }
             // A pointer and a double share no representation, so neither converts to
@@ -892,19 +977,34 @@ class SemanticAnalyzer
         }
         else if (auto x = std::dynamic_pointer_cast<SizeOfExpr>(expr))
         {
+            // The operand is analyzed for its type only: it is not decayed (sizeof
+            // of an array is the whole array, not a pointer) and, since the result
+            // folds to a constant, it is never evaluated. sizeof(type) uses the
+            // type directly.
+            std::shared_ptr<Type> operandType;
             if (x->expr)
-                analyzeExpr(x->expr);
-
-            if (auto st = std::dynamic_pointer_cast<StructType>(x->type))
             {
-                if (!symbolTable.find(st->getName(), Kind::STRUCT_TAG))
-                {
-                    error(x->getLine(), x->getCol(),
-                          "sizeof references undeclared struct '" + st->getName() + "'.");
-                }
+                analyzeExpr(x->expr);
+                operandType = x->expr->resolvedType;
+            }
+            else
+            {
+                operandType = x->type;
             }
 
-            x->resolvedType = IntType::getInstance();
+            if (auto st = std::dynamic_pointer_cast<StructType>(operandType))
+            {
+                if (!symbolTable.find(st->getName(), Kind::STRUCT_TAG))
+                    error(x->getLine(), x->getCol(),
+                          "sizeof references undeclared struct '" + st->getName() + "'.");
+            }
+            // sizeof needs a complete object type; void, incomplete arrays, and
+            // function designators have no size.
+            if (std::dynamic_pointer_cast<FunctionType>(operandType) || !isComplete(operandType))
+                error(x->getLine(), x->getCol(),
+                      "cannot apply sizeof to type " + operandType->toString() + ".");
+
+            x->resolvedType = UnsignedLongType::getInstance();
             x->isLvalue = false;
         }
         else if (auto x = std::dynamic_pointer_cast<SubscriptExpr>(expr))
@@ -936,6 +1036,12 @@ class SemanticAnalyzer
                           lt->toString() + "' and '" + it->toString() + "'.");
             }
 
+            // a[i] dereferences a + i, so the element type must be complete: a
+            // void * (pointer to incomplete) cannot be subscripted.
+            if (!isComplete(elemType))
+                error(x->getLine(), x->getCol(),
+                      "cannot subscript a pointer to an incomplete type.");
+
             x->resolvedType = elemType;
             x->isLvalue = true;
         }
@@ -966,6 +1072,16 @@ class SemanticAnalyzer
             else if (isPointer(eType) && isNullPointerConstant(x->thenBranch))
             {
                 x->resolvedType = eType;
+            }
+            else if (isPointer(tType) && isPointer(eType) &&
+                     (isVoidPointer(tType) || isVoidPointer(eType)))
+            {
+                // The common type of void * and any object pointer is void *; both
+                // branches convert to it.
+                auto voidPtr = std::make_shared<PointerType>(VoidType::getInstance());
+                x->thenBranch = convertTo(x->thenBranch, voidPtr);
+                x->elseBranch = convertTo(x->elseBranch, voidPtr);
+                x->resolvedType = voidPtr;
             }
             else if ((isInteger(tType) || isDouble(tType)) && (isInteger(eType) || isDouble(eType)))
             {
@@ -1036,6 +1152,8 @@ class SemanticAnalyzer
                 }
                 if (const auto pointerType = std::dynamic_pointer_cast<PointerType>(resolvedType))
                 {
+                    if (isVoid(pointerType->getInner()))
+                        error(x->getLine(), x->getCol(), "cannot dereference a pointer to void.");
                     x->resolvedType = pointerType->getInner();
                     x->isLvalue = true;
                 }
@@ -1463,6 +1581,13 @@ class SemanticAnalyzer
                          std::optional<StorageClass> sc, bool hasInit)
     {
         const std::string &name = var->name;
+        // A declared object must have a complete type: no void variables and no
+        // arrays of incomplete element type (including nested under pointers).
+        if (isVoid(var->type))
+            error(var->getLine(), var->getCol(),
+                  "variable '" + name + "' declared with type void.");
+        validateType(var->type, var->getLine(), var->getCol());
+
         auto prior = symbolTable.find(name, Kind::VARIABLE);
         const Linkage linkage = computeLinkage(sc, fileScope, prior);
         // File-scope vars, block statics, and any `extern` (which refers to a
@@ -1787,11 +1912,10 @@ class SemanticAnalyzer
         }
         else
         {
-            if (auto x = std::dynamic_pointer_cast<VoidType>(currentReturnType))
-            {
-                error(stmt->line, stmt->col,
-                      "Function with void return type has non-void return type");
-            }
+            // A bare `return;` is only valid in a void function; a value-returning
+            // function must return a value.
+            if (!isVoid(currentReturnType))
+                error(stmt->line, stmt->col, "non-void function must return a value.");
         }
     }
 
@@ -1924,10 +2048,14 @@ class SemanticAnalyzer
                   "function '" + stmt->declaration->name + "' cannot return array type " +
                       stmt->declaration->type->toString() + ".");
 
+        validateType(stmt->declaration->type, stmt->declaration->getLine(),
+                     stmt->declaration->getCol());
+
         std::vector<std::shared_ptr<Type>> paramTypes;
         paramTypes.reserve(stmt->declaration->parameters.size());
         for (auto &param : stmt->declaration->parameters)
         {
+            validateParam(param);
             param.type = adjustParamType(param.type);
             paramTypes.push_back(param.type);
         }
@@ -1999,10 +2127,13 @@ class SemanticAnalyzer
                   "function '" + node->name + "' cannot return array type " +
                       node->type->toString() + ".");
 
+        validateType(node->type, node->getLine(), node->getCol());
+
         std::vector<std::shared_ptr<Type>> paramTypes;
         paramTypes.reserve(node->parameters.size());
         for (auto &param : node->parameters)
         {
+            validateParam(param);
             param.type = adjustParamType(param.type);
             paramTypes.push_back(param.type);
         }

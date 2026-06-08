@@ -2,6 +2,7 @@
 #include "../ast/ASTNodes/Program.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/IntLiterals.h"
+#include "../ast/Expressions/SizeOfExpr.h"
 #include "../ast/Expressions/StringLiterals.h"
 #include "../ast/Expressions/SubscriptExpr.h"
 #include "../ast/Expressions/UnaryExpr.h"
@@ -656,6 +657,10 @@ class TackyDriver
                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         auto result = processExpression(castExpr->operand, instructions);
+        // A cast to void only keeps the operand's side effects; the value it
+        // produces is discarded, so emit no conversion.
+        if (std::dynamic_pointer_cast<VoidType>(castExpr->type))
+            return result;
         return convertValue(result, castExpr->operand->resolvedType, castExpr->type, castExpr->line,
                             castExpr->col, instructions);
     }
@@ -715,6 +720,13 @@ class TackyDriver
             TackyVar dst{makeTemp("tmp."), ConstantType::POINTER};
             instructions.push_back(std::make_unique<TackyGetAddress>(p->line, p->col, obj, dst));
             return dst;
+        }
+        if (const auto &p = std::dynamic_pointer_cast<SizeOfExpr>(expression))
+        {
+            // sizeof folds to a compile-time unsigned long; its operand is never
+            // evaluated, so the operand subtree is not lowered.
+            const auto &sizedType = p->expr ? p->expr->resolvedType : p->type;
+            return TackyConstant{sizeOfType(sizedType), ConstantType::ULONG};
         }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }

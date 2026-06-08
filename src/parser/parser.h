@@ -460,11 +460,15 @@ class Parser
 
     // simple-declarator = identifier | "(" declarator ")"
     // A "(" only opens a grouping when what follows can start a declarator (*, (,
-    // or a name); otherwise it belongs to a function param list handled above.
+    // or a name); otherwise it belongs to a function param list handled above. In
+    // an abstract declarator the grouped declarator may itself start with "[" (an
+    // abstract array, e.g. the "([3][4])" in "double (*([3][4]))[2]"), which no
+    // parameter list can, so "[" also opens a grouping there.
     std::shared_ptr<DeclaratorNode> parseSimpleDeclarator(bool allowAbstract)
     {
         if (peek() == LEFT_PAREN &&
-            (peekNext() == ASTERISK || peekNext() == LEFT_PAREN || peekNext() == IDENTIFIER))
+            (peekNext() == ASTERISK || peekNext() == LEFT_PAREN || peekNext() == IDENTIFIER ||
+             (allowAbstract && peekNext() == LEFT_BRACKET)))
         {
             consume();
             auto inner = parseDeclarator(allowAbstract);

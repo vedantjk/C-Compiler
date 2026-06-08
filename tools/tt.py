@@ -46,7 +46,7 @@ CATEGORIES = ("parse_valid", "parse_invalid", "validate_invalid")
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump as chapters
 # land. This is the single source of truth for the implemented gate.
-IMPLEMENTED_CHAPTERS = set(range(1, 17))  # chapters 1..16
+IMPLEMENTED_CHAPTERS = set(range(1, 18))  # chapters 1..17
 
 STAGES = ("lex", "parse", "validate", "tacky", "codegen", "run")
 _CHAP_RE = re.compile(r"chapter_(\d+)")

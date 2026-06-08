@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-static const std::string PRELUDE_SOURCE = "void *malloc(int size);\n"
+static const std::string PRELUDE_SOURCE = "void *malloc(unsigned long size);\n"
                                           "void free(void *p);\n"
                                           "int printf(char *fmt, ...);\n"
                                           "int scanf(char *fmt, ...);\n";
