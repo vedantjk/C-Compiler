@@ -830,77 +830,67 @@ class TackyDriver
     TackyVal processExpression(const Expression *expression,
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (const auto *p = dyn_cast<UnaryExpr>(expression))
+        switch (expression->getKind())
         {
-            return processUnaryExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<IntLiterals>(expression))
-        {
-            return processIntLiteral(p);
-        }
-        if (const auto *p = dyn_cast<FloatingLiterals>(expression))
-        {
-            return processFloatingLiteral(p);
-        }
-        if (const auto *p = dyn_cast<BinaryExpr>(expression))
-        {
-            return processBinaryExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<VariableExpr>(expression))
-        {
-            return processVariableExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<AssignExpr>(expression))
-        {
-            return processAssignExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<TernaryExpr>(expression))
-        {
-            return processTernaryExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<FunctionCallExpr>(expression))
-        {
-            return processFunctionCallExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<CastExpr>(expression))
-        {
-            return processCastExpr(p, instructions);
-        }
-        if (const auto *p = dyn_cast<SubscriptExpr>(expression))
+        case NodeKind::UnaryExpr:
+            return processUnaryExpr(cast<UnaryExpr>(expression), instructions);
+        case NodeKind::IntLiterals:
+            return processIntLiteral(cast<IntLiterals>(expression));
+        case NodeKind::FloatingLiterals:
+            return processFloatingLiteral(cast<FloatingLiterals>(expression));
+        case NodeKind::BinaryExpr:
+            return processBinaryExpr(cast<BinaryExpr>(expression), instructions);
+        case NodeKind::VariableExpr:
+            return processVariableExpr(cast<VariableExpr>(expression), instructions);
+        case NodeKind::AssignExpr:
+            return processAssignExpr(cast<AssignExpr>(expression), instructions);
+        case NodeKind::TernaryExpr:
+            return processTernaryExpr(cast<TernaryExpr>(expression), instructions);
+        case NodeKind::FunctionCallExpr:
+            return processFunctionCallExpr(cast<FunctionCallExpr>(expression), instructions);
+        case NodeKind::CastExpr:
+            return processCastExpr(cast<CastExpr>(expression), instructions);
+        case NodeKind::SubscriptExpr:
         {
             // a[i] read: compute the element address and load through it.
+            const auto *p = cast<SubscriptExpr>(expression);
             auto addr = subscriptAddress(p, instructions);
             TackyVar dst{makeTemp("tmp."), returnConstantType(p->resolvedType)};
             instructions.push_back(std::make_unique<TackyLoad>(p->line, p->col, addr, dst));
             return dst;
         }
-        if (const auto *p = dyn_cast<StringLiterals>(expression))
+        case NodeKind::StringLiterals:
         {
             // A string used directly as a value decays to a pointer to its first
             // byte: take the address of the interned constant.
+            const auto *p = cast<StringLiterals>(expression);
             auto obj = internStringLiteral(p);
             TackyVar dst{makeTemp("tmp."), ConstantType::POINTER};
             instructions.push_back(std::make_unique<TackyGetAddress>(p->line, p->col, obj, dst));
             return dst;
         }
-        if (const auto *p = dyn_cast<SizeOfExpr>(expression))
+        case NodeKind::SizeOfExpr:
         {
             // sizeof folds to a compile-time unsigned long; its operand is never
             // evaluated, so the operand subtree is not lowered.
+            const auto *p = cast<SizeOfExpr>(expression);
             const auto &sizedType = p->expr ? p->expr->resolvedType : p->type;
             return TackyConstant{sizeOfType(sizedType), ConstantType::ULONG};
         }
-        if (const auto *p = dyn_cast<MemberExpr>(expression))
+        case NodeKind::MemberExpr:
         {
             // A scalar member used as a value: take its address and load through it.
             // (Aggregate members are reached via array decay / aggregateAddress, so
             // a struct-typed member never arrives here.)
+            const auto *p = cast<MemberExpr>(expression);
             auto addr = memberAddress(p, instructions);
             TackyVar dst{makeTemp("tmp."), returnConstantType(p->resolvedType)};
             instructions.push_back(std::make_unique<TackyLoad>(p->line, p->col, addr, dst));
             return dst;
         }
-        throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
+        default:
+            throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
+        }
     }
 
     TackyVal processVarDecl(const VarDecl &varDecl,
@@ -1207,45 +1197,40 @@ class TackyDriver
     void processStatement(const Statement &stmt,
                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        if (const auto *p = dyn_cast<ReturnStmt>(&stmt))
+        switch (stmt.getKind())
         {
-            processReturnStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<DeclareStmt>(&stmt))
-        {
-            processDeclareStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<ExprStmt>(&stmt))
-        {
-            processExprStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<IfStmt>(&stmt))
-        {
-            processIfStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<BlockStmt>(&stmt))
-        {
-            processBlockStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<WhileStmt>(&stmt))
-        {
-            processWhileStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<DoWhileStmt>(&stmt))
-        {
-            processDoWhileStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<ForStmt>(&stmt))
-        {
-            processForStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<ContinueStmt>(&stmt))
-        {
-            processContinueStmt(*p, instructions);
-        }
-        else if (const auto *p = dyn_cast<BreakStmt>(&stmt))
-        {
-            processBreakStmt(*p, instructions);
+        case NodeKind::ReturnStmt:
+            processReturnStmt(*cast<ReturnStmt>(&stmt), instructions);
+            break;
+        case NodeKind::DeclareStmt:
+            processDeclareStmt(*cast<DeclareStmt>(&stmt), instructions);
+            break;
+        case NodeKind::ExprStmt:
+            processExprStmt(*cast<ExprStmt>(&stmt), instructions);
+            break;
+        case NodeKind::IfStmt:
+            processIfStmt(*cast<IfStmt>(&stmt), instructions);
+            break;
+        case NodeKind::BlockStmt:
+            processBlockStmt(*cast<BlockStmt>(&stmt), instructions);
+            break;
+        case NodeKind::WhileStmt:
+            processWhileStmt(*cast<WhileStmt>(&stmt), instructions);
+            break;
+        case NodeKind::DoWhileStmt:
+            processDoWhileStmt(*cast<DoWhileStmt>(&stmt), instructions);
+            break;
+        case NodeKind::ForStmt:
+            processForStmt(*cast<ForStmt>(&stmt), instructions);
+            break;
+        case NodeKind::ContinueStmt:
+            processContinueStmt(*cast<ContinueStmt>(&stmt), instructions);
+            break;
+        case NodeKind::BreakStmt:
+            processBreakStmt(*cast<BreakStmt>(&stmt), instructions);
+            break;
+        default:
+            break;
         }
     }
 
