@@ -52,7 +52,8 @@ struct Symbol
     std::shared_ptr<Type> type;
     Kind kind;
     int line, column;
-    std::weak_ptr<ASTNode> node;
+    ASTNode *node = nullptr; // non-owning back-edge; Program owns every node for the whole compile,
+                             // so it never dangles
 
     // Filled in by semantic analysis for storage-class handling / codegen.
     Linkage linkage = Linkage::None;

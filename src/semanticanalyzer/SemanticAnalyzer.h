@@ -240,7 +240,7 @@ class SemanticAnalyzer
             return;
         }
         node->symbol = symbol;
-        symbol->node = node;
+        symbol->node = node.get();
     }
 
     void declareFunction(const std::shared_ptr<Function> &node,
@@ -264,7 +264,7 @@ class SemanticAnalyzer
             sym->defined = (node->statements != nullptr);
             symbolTable.insertLinked(node->name, sym);
             node->symbol = sym;
-            sym->node = node;
+            sym->node = node.get();
         }
         else if (g->kind != Kind::FUNCTION)
         {
@@ -291,7 +291,7 @@ class SemanticAnalyzer
             }
             if (node->statements)
             {
-                auto prevNode = std::dynamic_pointer_cast<Function>(g->node.lock());
+                auto prevNode = dynamic_cast<Function *>(g->node);
                 if (prevNode && prevNode->statements)
                 {
                     error(node->getLine(), node->getCol(),
@@ -299,7 +299,7 @@ class SemanticAnalyzer
                               std::to_string(g->line) + ").");
                     return;
                 }
-                g->node = node; // this body is now the canonical decl
+                g->node = node.get(); // this body is now the canonical decl
                 g->defined = true;
             }
             node->symbol = g; // share the existing Symbol
@@ -1388,7 +1388,7 @@ class SemanticAnalyzer
                                              structDecl->getCol(), Kind::STRUCT_TAG);
                 symbolTable.insert(source, existing, Kind::STRUCT_TAG);
                 existing->uniqueName = mangle();
-                existing->node = structDecl;
+                existing->node = structDecl.get();
             }
             setResolvedName(existing->uniqueName);
             return;
@@ -1412,7 +1412,7 @@ class SemanticAnalyzer
                                            structDecl->getCol(), Kind::STRUCT_TAG);
             symbolTable.insert(source, sym, Kind::STRUCT_TAG);
             sym->uniqueName = mangle();
-            sym->node = structDecl;
+            sym->node = structDecl.get();
         }
         const std::string unique = sym->uniqueName;
         setResolvedName(unique);
@@ -1809,7 +1809,7 @@ class SemanticAnalyzer
                                   std::to_string(g->line) + ").");
                     g->defined = true;
                     g->tentative = false;
-                    g->node = var;
+                    g->node = var.get();
                 }
                 else if (sc != StorageClass::Extern && !g->defined)
                 {
@@ -1828,7 +1828,7 @@ class SemanticAnalyzer
                 else if (sc != StorageClass::Extern)
                     sym->tentative = true;
                 symbolTable.insertLinked(name, sym);
-                sym->node = var;
+                sym->node = var.get();
                 var->symbol = sym;
             }
 
@@ -1863,7 +1863,7 @@ class SemanticAnalyzer
                       ".");
             return;
         }
-        sym->node = var;
+        sym->node = var.get();
         var->symbol = sym;
     }
 
