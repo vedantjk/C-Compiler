@@ -6,6 +6,8 @@
 namespace Diagnostic
 {
 
+inline constexpr int TAB_WIDTH = 4;
+
 enum class DiagLevel
 {
     LEXER,
@@ -44,10 +46,17 @@ class DiagnosticEngine
 {
     std::vector<Diagnostic> errors;
     std::string filename;
+    std::string source;
+
+    std::string getLine(int n) const;
 
   public:
     DiagnosticEngine() = default;
     explicit DiagnosticEngine(std::string filename) : filename(std::move(filename)) {}
+    DiagnosticEngine(std::string filename, std::string source)
+        : filename(std::move(filename)), source(std::move(source))
+    {
+    }
     DiagnosticEngine(const DiagnosticEngine &) = delete;
     DiagnosticEngine &operator=(const DiagnosticEngine &) = delete;
     void report(DiagLevel level, Location loc, std::string msg);

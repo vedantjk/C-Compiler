@@ -98,7 +98,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
     std::ostringstream preprocessed;
     spliceIncludes(buffer.str(), dirOf(inputSourcePath), preprocessed, 0);
 
-    Diagnostic::DiagnosticEngine diagnosticEngine{inputSourcePath};
+    Diagnostic::DiagnosticEngine diagnosticEngine{inputSourcePath, preprocessed.str()};
     Lexer lexer{preprocessed.str(), diagnosticEngine};
     auto tokens = lexer.generateTokens();
 

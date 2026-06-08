@@ -52,7 +52,7 @@ class Lexer
         }
         else if (c == '\t')
         {
-            col += 4;
+            col += Diagnostic::TAB_WIDTH;
         }
         else
             col++;
