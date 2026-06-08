@@ -13,6 +13,7 @@
 #include "../ast/TopLevelNodes/StructDecl.h"
 #include "../ast/TopLevelNodes/VarDecl.h"
 #include "../symboltable/SymbolTable.h"
+#include "../types/StructLayout.h"
 #include "../utils/diagnostic.h"
 
 inline bool isArithmeticOp(const std::string &op)
@@ -63,6 +64,11 @@ inline bool isArray(const std::shared_ptr<Type> &t)
     return x != nullptr;
 }
 
+inline bool isStruct(const std::shared_ptr<Type> &t)
+{
+    return std::dynamic_pointer_cast<StructType>(t) != nullptr;
+}
+
 inline bool isVoid(const std::shared_ptr<Type> &t)
 {
     const auto x = std::dynamic_pointer_cast<VoidType>(t);
@@ -75,15 +81,18 @@ inline bool isVoidPointer(const std::shared_ptr<Type> &t)
     return p && isVoid(p->getInner());
 }
 
-// A type is complete when an object of it has a known size. void is the only
-// incomplete type in this chapter; an array is complete iff its element is
-// (so void[3] and, recursively, void[3][4] are incomplete).
+// A type is complete when an object of it has a known size. void is incomplete;
+// a struct is complete once its definition has been processed (a layout exists
+// for its resolved tag); an array is complete iff its element is (so void[3] and,
+// recursively, void[3][4] are incomplete).
 inline bool isComplete(const std::shared_ptr<Type> &t)
 {
     if (isVoid(t))
         return false;
     if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
         return isComplete(a->getInner());
+    if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        return findStructLayout(s->getName()) != nullptr;
     return true;
 }
 
@@ -171,11 +180,14 @@ inline long long reduceToType(long long v, const std::shared_ptr<Type> &t)
     return v;
 }
 
-// Object size in bytes; arrays recurse (count * element size).
+// Object size in bytes; arrays recurse (count * element size); structs come from
+// their computed layout (0 if still incomplete — callers gate on completeness).
 inline long long sizeOfTypeBytes(const std::shared_ptr<Type> &t)
 {
     if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
         return static_cast<long long>(a->getSize()) * sizeOfTypeBytes(a->getInner());
+    if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        return findStructLayout(s->getName()) ? findStructLayout(s->getName())->size : 0;
     if (isCharacter(t))
         return 1;
     if (std::dynamic_pointer_cast<IntType>(t) || std::dynamic_pointer_cast<UnsignedIntType>(t))
@@ -183,12 +195,18 @@ inline long long sizeOfTypeBytes(const std::shared_ptr<Type> &t)
     return 8; // long, unsigned long, double, pointer
 }
 
-// Natural alignment; arrays align like their element, but objects >= 16 bytes get
-// 16-byte alignment (SysV / book rule).
+// Natural type alignment, used to lay out struct members: an array aligns like
+// its element, a struct to its computed layout alignment. (The separate "a
+// standalone array variable >= 16 bytes gets 16-byte alignment" rule is an
+// allocation property of the variable, not of the type, so it does not apply
+// here and would over-pad members — gcc aligns `char arr[19]` inside a struct to
+// 1, giving size 19, not 32.)
 inline int alignOfTypeBytes(const std::shared_ptr<Type> &t)
 {
     if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
-        return sizeOfTypeBytes(t) >= 16 ? 16 : alignOfTypeBytes(a->getInner());
+        return alignOfTypeBytes(a->getInner());
+    if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        return findStructLayout(s->getName()) ? findStructLayout(s->getName())->alignment : 1;
     return static_cast<int>(sizeOfTypeBytes(t));
 }
 
@@ -199,6 +217,7 @@ class SemanticAnalyzer
     std::shared_ptr<Type> currentReturnType;
     int loopLabel = 0;
     int labelCounter = 0;
+    int structCounter = 0;
 
   public:
     explicit SemanticAnalyzer(Diagnostic::DiagnosticEngine &diag) : diag(diag) {}
@@ -447,6 +466,37 @@ class SemanticAnalyzer
         validateType(param.type, param.line, param.col);
     }
 
+    // Rewrite every struct tag occurring in a used type to its resolved (mangled)
+    // name, so that shadowed same-named structs stay distinct in the layout table
+    // and downstream. A source tag (one with no '.') must already be in scope;
+    // an unresolvable reference is a use of an undeclared struct type. The '.' in
+    // a mangled name marks an already-resolved tag, making this idempotent.
+    void resolveTags(const std::shared_ptr<Type> &t, int line, int col)
+    {
+        if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        {
+            if (s->getName().find('.') != std::string::npos)
+                return; // already resolved
+            const auto sym = symbolTable.find(s->getName(), Kind::STRUCT_TAG);
+            if (!sym)
+            {
+                error(line, col, "use of undeclared struct type '" + s->getName() + "'.");
+                return;
+            }
+            s->setName(sym->uniqueName);
+        }
+        else if (const auto p = std::dynamic_pointer_cast<PointerType>(t))
+            resolveTags(p->getInner(), line, col);
+        else if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
+            resolveTags(a->getInner(), line, col);
+        else if (const auto f = std::dynamic_pointer_cast<FunctionType>(t))
+        {
+            for (const auto &pt : f->paramTypes)
+                resolveTags(pt, line, col);
+            resolveTags(f->returnType, line, col);
+        }
+    }
+
     size_t decodedLength(const std::string &s)
     {
         // s is "..." (with outer quotes)
@@ -506,6 +556,10 @@ class SemanticAnalyzer
 
             if (x->op == "=")
             {
+                // Copying a whole struct needs a complete type on both sides.
+                if (!isComplete(lType))
+                    error(x->lhs->getLine(), x->lhs->getCol(),
+                          "cannot assign to incomplete type " + lType->toString() + ".");
                 x->rhs = convertByAssignment(x->rhs, lType, x->lhs->getLine(), x->lhs->getCol());
             }
             else if (x->op == "+=" || x->op == "-=")
@@ -864,13 +918,18 @@ class SemanticAnalyzer
         else if (auto x = std::dynamic_pointer_cast<CastExpr>(expr))
         {
             analyzeAndDecay(x->operand);
+            resolveTags(x->type, x->getLine(), x->getCol());
             validateType(x->type, x->getLine(), x->getCol());
 
             const auto &srcType = x->operand->resolvedType;
             // A cast to void discards the operand's value and accepts any operand
-            // type (including a void operand). Every other cast is between scalars.
+            // type, except one whose value can't be formed (an incomplete struct).
+            // A void operand is fine. Every other cast is between scalars.
             if (isVoid(x->type))
             {
+                if (!isVoid(srcType) && !isComplete(srcType))
+                    error(x->getLine(), x->getCol(),
+                          "cannot cast incomplete type " + srcType->toString() + " to void.");
             }
             else if (!isScalar(srcType) || !isScalar(x->type))
             {
@@ -906,7 +965,9 @@ class SemanticAnalyzer
         }
         else if (auto x = std::dynamic_pointer_cast<MemberExpr>(expr))
         {
-            analyzeExpr(x->object);
+            // `p->m` may apply to an array that decays to a pointer (e.g. an array
+            // struct member: `s->arr->m`); a struct operand of `.` never decays.
+            analyzeAndDecay(x->object);
             const auto &objType = x->object->resolvedType;
             const int objLine = x->object->getLine();
             const int objCol = x->object->getCol();
@@ -941,39 +1002,31 @@ class SemanticAnalyzer
                 return;
             }
 
-            auto baseSymbol = symbolTable.find(baseType->getName(), Kind::STRUCT_TAG);
-            if (!baseSymbol)
-            {
-                error(objLine, objCol, "struct not defined: " + baseType->getName() + ".");
-                recoverAsInt();
-                return;
-            }
-
-            auto structNode = std::dynamic_pointer_cast<StructDecl>(baseSymbol->node.lock());
-            // should never fire.
-            if (!structNode)
+            // The struct must be complete to reach into it (this also rejects
+            // `p->m` where p points to an incomplete struct).
+            const StructLayout *layout = findStructLayout(baseType->getName());
+            if (!layout)
             {
                 error(objLine, objCol,
-                      "internal: struct '" + baseType->getName() +
-                          "' has no associated declaration.");
+                      "member access on incomplete struct type " + baseType->toString() + ".");
                 recoverAsInt();
                 return;
             }
 
-            auto it = std::find_if(structNode->fields.begin(), structNode->fields.end(),
-                                   [&](const StructField &f) { return f.name == x->field; });
-
-            if (it == structNode->fields.end())
+            auto it = std::find_if(layout->members.begin(), layout->members.end(),
+                                   [&](const MemberEntry &m) { return m.name == x->field; });
+            if (it == layout->members.end())
             {
                 error(x->getLine(), x->getCol(),
-                      "member '" + x->field + "' not defined in struct '" + structNode->name +
-                          "'.");
+                      "no member '" + x->field + "' in " + baseType->toString() + ".");
                 recoverAsInt();
                 return;
             }
 
             x->resolvedType = it->type;
-            x->isLvalue = true;
+            // `p->m` is always an lvalue; `s.m` is an lvalue only when s is (so the
+            // member of a struct returned by value is a non-lvalue, like the value).
+            x->isLvalue = x->isArrow ? true : x->object->isLvalue;
         }
         else if (auto x = std::dynamic_pointer_cast<SizeOfExpr>(expr))
         {
@@ -989,17 +1042,12 @@ class SemanticAnalyzer
             }
             else
             {
+                resolveTags(x->type, x->getLine(), x->getCol());
                 operandType = x->type;
             }
 
-            if (auto st = std::dynamic_pointer_cast<StructType>(operandType))
-            {
-                if (!symbolTable.find(st->getName(), Kind::STRUCT_TAG))
-                    error(x->getLine(), x->getCol(),
-                          "sizeof references undeclared struct '" + st->getName() + "'.");
-            }
-            // sizeof needs a complete object type; void, incomplete arrays, and
-            // function designators have no size.
+            // sizeof needs a complete object type; void, incomplete structs,
+            // incomplete arrays, and function designators have no size.
             if (std::dynamic_pointer_cast<FunctionType>(operandType) || !isComplete(operandType))
                 error(x->getLine(), x->getCol(),
                       "cannot apply sizeof to type " + operandType->toString() + ".");
@@ -1063,6 +1111,11 @@ class SemanticAnalyzer
 
             if (tType->equals(*eType))
             {
+                // A struct-typed conditional must have a complete type so its value
+                // can be materialized.
+                if (isStruct(tType) && !isComplete(tType))
+                    error(x->getLine(), x->getCol(),
+                          "conditional has incomplete struct type " + tType->toString() + ".");
                 x->resolvedType = tType;
             }
             else if (isPointer(tType) && isNullPointerConstant(x->elseBranch))
@@ -1102,6 +1155,34 @@ class SemanticAnalyzer
         }
         else if (auto x = std::dynamic_pointer_cast<UnaryExpr>(expr))
         {
+            // `&*p` cancels: the dereference is never actually performed, so p may
+            // point to an incomplete type. Type it as p's own type and skip the
+            // deref's completeness check (which would wrongly reject `&*p`).
+            if (x->op == "&")
+            {
+                if (auto inner = std::dynamic_pointer_cast<UnaryExpr>(x->operand);
+                    inner && inner->op == "*")
+                {
+                    analyzeAndDecay(inner->operand);
+                    const auto innerPtr =
+                        std::dynamic_pointer_cast<PointerType>(inner->operand->resolvedType);
+                    if (!innerPtr)
+                    {
+                        error(x->getLine(), x->getCol(),
+                              "required pointer operand, received '" +
+                                  inner->operand->resolvedType->toString() + "'.");
+                        x->resolvedType = IntType::getInstance();
+                        x->isLvalue = false;
+                        return;
+                    }
+                    inner->resolvedType = innerPtr->getInner();
+                    inner->isLvalue = true;
+                    x->resolvedType = inner->operand->resolvedType;
+                    x->isLvalue = false;
+                    return;
+                }
+            }
+
             analyzeExpr(x->operand);
             // Value-context unary operators see a decayed operand; `&` wants the
             // array itself, and `++`/`--` need a modifiable lvalue (an array is
@@ -1152,8 +1233,10 @@ class SemanticAnalyzer
                 }
                 if (const auto pointerType = std::dynamic_pointer_cast<PointerType>(resolvedType))
                 {
-                    if (isVoid(pointerType->getInner()))
-                        error(x->getLine(), x->getCol(), "cannot dereference a pointer to void.");
+                    if (!isComplete(pointerType->getInner()))
+                        error(x->getLine(), x->getCol(),
+                              "cannot dereference a pointer to incomplete type " +
+                                  pointerType->getInner()->toString() + ".");
                     x->resolvedType = pointerType->getInner();
                     x->isLvalue = true;
                 }
@@ -1253,6 +1336,11 @@ class SemanticAnalyzer
                 for (int i = 0; i < functionType->paramTypes.size(); i++)
                 {
                     analyzeAndDecay(expr->parameters[i]);
+                    // Passing a struct by value needs a complete parameter type.
+                    if (!isComplete(functionType->paramTypes[i]))
+                        error(expr->getLine(), expr->getCol(),
+                              "argument " + std::to_string(i + 1) + " has incomplete type " +
+                                  functionType->paramTypes[i]->toString() + ".");
                     expr->parameters[i] =
                         convertByAssignment(expr->parameters[i], functionType->paramTypes[i],
                                             expr->getLine(), expr->getCol());
@@ -1262,6 +1350,12 @@ class SemanticAnalyzer
                     analyzeAndDecay(expr->parameters[i]);
                 }
             }
+            // Calling a function whose return type is an incomplete struct can't
+            // produce a usable value (a void return is fine — there's no value).
+            if (!isVoid(functionType->returnType) && !isComplete(functionType->returnType))
+                error(expr->getLine(), expr->getCol(),
+                      "call to function returning incomplete type " +
+                          functionType->returnType->toString() + ".");
             expr->resolvedType = functionType->returnType;
         }
         expr->isLvalue = false;
@@ -1271,27 +1365,110 @@ class SemanticAnalyzer
 
     void analyzeStructDecl(const std::shared_ptr<StructDecl> &structDecl)
     {
-        const auto structSymbol =
-            std::make_shared<Symbol>(structDecl->name, structDecl->baseType, structDecl->getLine(),
-                                     structDecl->getCol(), Kind::STRUCT_TAG);
-        check(structDecl->name, structSymbol, Kind::STRUCT_TAG, structDecl->getLine(),
-              structDecl->getCol(), structDecl);
+        const std::string source = structDecl->name;
+        auto existing = symbolTable.findSameScope(source, Kind::STRUCT_TAG);
 
-        std::unordered_map<std::string, int> seen;
-        for (const auto &f : structDecl->fields)
+        const auto mangle = [&]() { return source + "." + std::to_string(++structCounter); };
+        const auto setResolvedName = [&](const std::string &unique)
         {
-            auto it = seen.find(f.name);
-            if (it != seen.end())
+            structDecl->name = unique;
+            if (auto st = std::dynamic_pointer_cast<StructType>(structDecl->baseType))
+                st->setName(unique);
+        };
+
+        // Forward declaration `struct s;`: introduce an incomplete tag in this
+        // scope if none is present; otherwise it is a no-op (a tag already in this
+        // scope, complete or not, keeps its meaning).
+        if (!structDecl->isComplete)
+        {
+            if (!existing)
+            {
+                existing =
+                    std::make_shared<Symbol>(source, structDecl->baseType, structDecl->getLine(),
+                                             structDecl->getCol(), Kind::STRUCT_TAG);
+                symbolTable.insert(source, existing, Kind::STRUCT_TAG);
+                existing->uniqueName = mangle();
+                existing->node = structDecl;
+            }
+            setResolvedName(existing->uniqueName);
+            return;
+        }
+
+        // Definition `struct s { ... };`.
+        std::shared_ptr<Symbol> sym;
+        if (existing)
+        {
+            if (findStructLayout(existing->uniqueName))
+            {
+                error(structDecl->getLine(), structDecl->getCol(),
+                      "redefinition of struct '" + source + "'.");
+                return;
+            }
+            sym = existing; // completing a previously forward-declared tag
+        }
+        else
+        {
+            sym = std::make_shared<Symbol>(source, structDecl->baseType, structDecl->getLine(),
+                                           structDecl->getCol(), Kind::STRUCT_TAG);
+            symbolTable.insert(source, sym, Kind::STRUCT_TAG);
+            sym->uniqueName = mangle();
+            sym->node = structDecl;
+        }
+        const std::string unique = sym->uniqueName;
+        setResolvedName(unique);
+
+        // The tag is now in scope (still incomplete), so a member that names this
+        // very struct by value resolves to it and is caught below as an incomplete
+        // member, while `struct s *` self-pointers resolve correctly.
+        std::unordered_map<std::string, int> seen;
+        StructLayout layout;
+        long long offset = 0;
+        int align = 1;
+        bool ok = true;
+        for (auto &f : structDecl->fields)
+        {
+            if (auto it = seen.find(f.name); it != seen.end())
             {
                 error(f.line, f.column,
                       "redeclaration of struct field '" + f.name +
                           "'. Previous declaration at line " + std::to_string(it->second) + ".");
+                ok = false;
+                continue;
             }
-            else
+            seen.emplace(f.name, f.line);
+
+            resolveTags(f.type, f.line, f.column);
+            if (std::dynamic_pointer_cast<FunctionType>(f.type))
             {
-                seen.emplace(f.name, f.line);
+                error(f.line, f.column,
+                      "struct member '" + f.name + "' cannot have function type.");
+                ok = false;
+                continue;
             }
+            validateType(f.type, f.line, f.column);
+            if (!isComplete(f.type))
+            {
+                error(f.line, f.column,
+                      "struct member '" + f.name + "' has incomplete type " + f.type->toString() +
+                          ".");
+                ok = false;
+                continue;
+            }
+
+            const int a = alignOfTypeBytes(f.type);
+            offset = (offset + a - 1) / a * a;
+            layout.members.push_back({f.name, f.type, static_cast<int>(offset)});
+            offset += sizeOfTypeBytes(f.type);
+            if (a > align)
+                align = a;
         }
+
+        if (!ok)
+            return; // don't register a half-built layout (which would read complete)
+
+        layout.alignment = align;
+        layout.size = static_cast<int>((offset + align - 1) / align * align);
+        structLayoutTable()[unique] = layout;
     }
 
     bool returnsAlways(const std::shared_ptr<Statement> &stmt)
@@ -1581,11 +1758,16 @@ class SemanticAnalyzer
                          std::optional<StorageClass> sc, bool hasInit)
     {
         const std::string &name = var->name;
-        // A declared object must have a complete type: no void variables and no
-        // arrays of incomplete element type (including nested under pointers).
+        resolveTags(var->type, var->getLine(), var->getCol());
+        // A defined object must have a complete type: no void variables, no
+        // incomplete structs, and no arrays of incomplete element type (including
+        // nested under pointers). A pure `extern` declaration may be incomplete.
         if (isVoid(var->type))
             error(var->getLine(), var->getCol(),
                   "variable '" + name + "' declared with type void.");
+        else if (sc != StorageClass::Extern && !isComplete(var->type))
+            error(var->getLine(), var->getCol(),
+                  "variable '" + name + "' has incomplete type " + var->type->toString() + ".");
         validateType(var->type, var->getLine(), var->getCol());
 
         auto prior = symbolTable.find(name, Kind::VARIABLE);
@@ -1697,25 +1879,42 @@ class SemanticAnalyzer
     {
         if (auto initList = std::dynamic_pointer_cast<InitExpr>(init))
         {
-            const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType);
-            if (!arr)
+            if (const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType))
             {
-                error(line, col,
-                      "compound initializer cannot initialize scalar type " +
-                          targetType->toString() + ".");
+                if (initList->elements.size() > arr->getSize())
+                {
+                    error(line, col,
+                          "too many elements in initializer for " + targetType->toString() + " (" +
+                              std::to_string(arr->getSize()) + " expected, " +
+                              std::to_string(initList->elements.size()) + " given).");
+                    return;
+                }
+                for (auto &element : initList->elements)
+                    checkInitializer(arr->getInner(), element, isStatic, line, col);
+                initList->resolvedType = targetType;
                 return;
             }
-            if (initList->elements.size() > arr->getSize())
+            if (const auto layout = structLayoutOf(targetType))
             {
-                error(line, col,
-                      "too many elements in initializer for " + targetType->toString() + " (" +
-                          std::to_string(arr->getSize()) + " expected, " +
-                          std::to_string(initList->elements.size()) + " given).");
+                // Bind each initializer to the corresponding member; a short list
+                // leaves the trailing members zero-initialized.
+                if (initList->elements.size() > layout->members.size())
+                {
+                    error(line, col,
+                          "too many elements in initializer for " + targetType->toString() + " (" +
+                              std::to_string(layout->members.size()) + " expected, " +
+                              std::to_string(initList->elements.size()) + " given).");
+                    return;
+                }
+                for (size_t i = 0; i < initList->elements.size(); ++i)
+                    checkInitializer(layout->members[i].type, initList->elements[i], isStatic, line,
+                                     col);
+                initList->resolvedType = targetType;
                 return;
             }
-            for (auto &element : initList->elements)
-                checkInitializer(arr->getInner(), element, isStatic, line, col);
-            initList->resolvedType = targetType;
+            error(line, col,
+                  "compound initializer cannot initialize scalar type " + targetType->toString() +
+                      ".");
             return;
         }
 
@@ -1772,15 +1971,32 @@ class SemanticAnalyzer
     {
         if (const auto initList = std::dynamic_pointer_cast<InitExpr>(init))
         {
-            const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType);
-            const auto elem = arr->getInner();
-            for (const auto &element : initList->elements)
-                buildStaticInits(elem, element, out);
-            const long long pad =
-                static_cast<long long>(arr->getSize() - initList->elements.size()) *
-                sizeOfTypeBytes(elem);
-            if (pad > 0)
-                out.push_back(StaticInit::zero(pad));
+            if (const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType))
+            {
+                const auto elem = arr->getInner();
+                for (const auto &element : initList->elements)
+                    buildStaticInits(elem, element, out);
+                const long long pad =
+                    static_cast<long long>(arr->getSize() - initList->elements.size()) *
+                    sizeOfTypeBytes(elem);
+                if (pad > 0)
+                    out.push_back(StaticInit::zero(pad));
+                return;
+            }
+            const auto layout = structLayoutOf(targetType);
+            // Walk members in offset order, emitting zero padding for the gaps
+            // between members and for any uninitialized trailing members.
+            long long cur = 0;
+            for (size_t i = 0; i < initList->elements.size(); ++i)
+            {
+                const auto &m = layout->members[i];
+                if (m.offset > cur)
+                    out.push_back(StaticInit::zero(m.offset - cur));
+                buildStaticInits(m.type, initList->elements[i], out);
+                cur = m.offset + sizeOfTypeBytes(m.type);
+            }
+            if (layout->size > cur)
+                out.push_back(StaticInit::zero(layout->size - cur));
             return;
         }
 
@@ -1796,6 +2012,18 @@ class SemanticAnalyzer
                     static_cast<long long>(arr->getSize()) - static_cast<long long>(bytes.size());
                 if (pad > 0)
                     out.push_back(StaticInit::zero(pad));
+                return;
+            }
+        }
+        // A string literal initializing a `char *` is decayed to `&"..."` by the
+        // analyzer; store a pointer to the interned string (TACKY assigns the label
+        // and emits the backing bytes).
+        if (const auto u = std::dynamic_pointer_cast<UnaryExpr>(init);
+            u && u->op == "&" && std::dynamic_pointer_cast<PointerType>(targetType))
+        {
+            if (const auto s = std::dynamic_pointer_cast<StringLiterals>(u->operand))
+            {
+                out.push_back(StaticInit::ptrString(decodeStringLiteral(s->literal)));
                 return;
             }
         }
@@ -2048,6 +2276,8 @@ class SemanticAnalyzer
                   "function '" + stmt->declaration->name + "' cannot return array type " +
                       stmt->declaration->type->toString() + ".");
 
+        resolveTags(stmt->declaration->type, stmt->declaration->getLine(),
+                    stmt->declaration->getCol());
         validateType(stmt->declaration->type, stmt->declaration->getLine(),
                      stmt->declaration->getCol());
 
@@ -2055,6 +2285,7 @@ class SemanticAnalyzer
         paramTypes.reserve(stmt->declaration->parameters.size());
         for (auto &param : stmt->declaration->parameters)
         {
+            resolveTags(param.type, param.line, param.col);
             validateParam(param);
             param.type = adjustParamType(param.type);
             paramTypes.push_back(param.type);
@@ -2127,16 +2358,35 @@ class SemanticAnalyzer
                   "function '" + node->name + "' cannot return array type " +
                       node->type->toString() + ".");
 
+        resolveTags(node->type, node->getLine(), node->getCol());
         validateType(node->type, node->getLine(), node->getCol());
 
         std::vector<std::shared_ptr<Type>> paramTypes;
         paramTypes.reserve(node->parameters.size());
         for (auto &param : node->parameters)
         {
+            resolveTags(param.type, param.line, param.col);
             validateParam(param);
             param.type = adjustParamType(param.type);
             paramTypes.push_back(param.type);
         }
+
+        // Declaring with an incomplete struct param/return is fine, but defining
+        // (or, elsewhere, calling) the function requires complete types so it can
+        // actually pass and return those objects.
+        if (node->statements)
+        {
+            if (!isVoid(node->type) && !isComplete(node->type))
+                error(node->getLine(), node->getCol(),
+                      "definition of '" + node->name + "' returns incomplete type " +
+                          node->type->toString() + ".");
+            for (const auto &param : node->parameters)
+                if (!isComplete(param.type))
+                    error(param.line, param.col,
+                          "parameter '" + param.name + "' has incomplete type " +
+                              param.type->toString() + ".");
+        }
+
         auto functionType = std::make_shared<FunctionType>(node->type, paramTypes, node->variadic);
         declareFunction(node, functionType);
         symbolTable.enterScope();
@@ -2148,6 +2398,10 @@ class SemanticAnalyzer
             {
                 error(param.line, param.col, "duplicate parameter '" + param.name + "'");
             }
+            // Use the mangled name downstream so a parameter never aliases a
+            // file-scope object of the same spelling (TACKY emits the prologue move
+            // into this name; the body resolves uses to the same symbol).
+            param.name = paramSymbol->uniqueName;
         }
 
         if (node->name == "main")

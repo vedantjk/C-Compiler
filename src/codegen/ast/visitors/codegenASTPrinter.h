@@ -104,6 +104,12 @@ class codegenASTPrinter
                 out << (si.strNull ? "    .asciz \"" : "    .ascii \"") << gasStringBody(si.strVal)
                     << "\"\n";
                 break;
+            case StaticInit::Kind::PointerString:
+                // Should have been rewritten to PointerLabel in TACKY.
+                throw std::runtime_error("unresolved PointerString static initializer");
+            case StaticInit::Kind::PointerLabel:
+                out << "    .quad " << si.strVal << "\n";
+                break;
             }
         }
     }
@@ -492,7 +498,13 @@ class codegenASTPrinter
         out << ")";
     }
 
-    void visit(const Data &node) const { out << node.identifier << "(%rip)"; }
+    void visit(const Data &node) const
+    {
+        out << node.identifier;
+        if (node.offset != 0)
+            out << "+" << node.offset;
+        out << "(%rip)";
+    }
 
     void visit(const Immediate &node) const { out << "$" << node.value; }
 

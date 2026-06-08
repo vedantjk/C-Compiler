@@ -7,6 +7,7 @@
 #include "instructions/instructions.h"
 #include "tacky/ast/TopLevelNodes/TackyStaticVariable.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -24,6 +25,8 @@ class codegenDriver
     std::unordered_set<std::string> staticNames;
     // Array objects (by name) that need a sized, aligned stack slot; supplied by TACKY.
     std::unordered_map<std::string, ArrayObject> arrayObjects;
+    // Struct objects (by name): sized/aligned slot plus System V classification.
+    std::unordered_map<std::string, StructABI> structObjects;
 
     int constCounter = 0;
     std::map<std::pair<uint64_t, int>, std::string> constLabels;
@@ -156,6 +159,59 @@ class codegenDriver
     void processTackyReturn(const TackyReturn &tackyReturn,
                             std::vector<std::unique_ptr<Instruction>> &instructions)
     {
+        const TackyVar *structVal =
+            tackyReturn.val ? std::get_if<TackyVar>(&*tackyReturn.val) : nullptr;
+        if (structVal && structObjects.count(structVal->name))
+        {
+            const StructABI &abi = structObjects[structVal->name];
+            const std::string &name = structVal->name;
+            if (abi.inMemory)
+            {
+                // Copy the struct into the caller's space (the saved hidden pointer),
+                // then return that pointer in RAX. The copy uses 8/4/1-byte chunks so
+                // it never writes past the caller-provided object.
+                instructions.push_back(std::make_unique<MoveInstruction>(
+                    std::make_unique<PseudoRegister>(curRetPtrName, AssemblyType::QUADWORD),
+                    std::make_unique<Register>(RegisterName::AX, 8), AssemblyType::QUADWORD));
+                long long off = 0, size = abi.size;
+                auto chunk = [&](long long w, AssemblyType t)
+                {
+                    while (size - off >= w)
+                    {
+                        instructions.push_back(std::make_unique<MoveInstruction>(
+                            std::make_unique<PseudoMem>(name, static_cast<int>(off), t),
+                            std::make_unique<Register>(RegisterName::R10, bytesOf(t)), t));
+                        instructions.push_back(std::make_unique<MoveInstruction>(
+                            std::make_unique<Register>(RegisterName::R10, bytesOf(t)),
+                            std::make_unique<Memory>(RegisterName::AX, static_cast<int>(off)), t));
+                        off += w;
+                    }
+                };
+                chunk(8, AssemblyType::QUADWORD);
+                chunk(4, AssemblyType::LONGWORD);
+                chunk(1, AssemblyType::BYTE);
+                instructions.push_back(std::make_unique<MoveInstruction>(
+                    std::make_unique<PseudoRegister>(curRetPtrName, AssemblyType::QUADWORD),
+                    std::make_unique<Register>(RegisterName::AX, 8), AssemblyType::QUADWORD));
+            }
+            else
+            {
+                int gpi = 0, ssei = 0;
+                const RegisterName gpRegs[2] = {RegisterName::AX, RegisterName::DX};
+                const RegisterName sseRegs[2] = {RegisterName::XMM0, RegisterName::XMM1};
+                for (int i = 0; i < static_cast<int>(abi.classes.size()); i++)
+                {
+                    const int bc = static_cast<int>(std::min<long long>(8, abi.size - 8 * i));
+                    if (abi.classes[i] == Eightbyte::SSE)
+                        emitLoadEightbyte(name, 8 * i, 8, true, sseRegs[ssei++], instructions);
+                    else
+                        emitLoadEightbyte(name, 8 * i, bc, false, gpRegs[gpi++], instructions);
+                }
+            }
+            instructions.push_back(std::make_unique<ReturnInstruction>());
+            return;
+        }
+
         if (tackyReturn.val)
         {
             const AssemblyType t = assemblyTypeOf(*tackyReturn.val);
@@ -371,128 +427,317 @@ class codegenDriver
         instructions.push_back(std::make_unique<Label>(tackyLabel.identifier));
     }
 
+    // --- System V struct argument/return classification ------------------- //
+
+    // Per-function return state, set in processFunction and read by TackyReturn.
+    bool curReturnsStruct = false;
+    StructABI curReturnABI;
+    std::string curRetPtrName; // slot holding the hidden destination pointer
+
+    // One 8-byte transfer unit of an argument/parameter.
+    struct Slot
+    {
+        enum Where
+        {
+            GP_REG,
+            SSE_REG,
+            STACK
+        } where;
+        RegisterName reg; // for GP_REG / SSE_REG
+        int width;        // bytes to move (scalars 1..8; struct eightbytes always 8)
+        int objOff;       // byte offset within a struct argument (0 for scalars)
+        int stackIndex;   // for STACK: index among stack slots
+        bool scalar;      // scalar argument (source/dest is `val`, not a struct slot)
+        TackyVal val{TackyConstant(0, ConstantType::INT)};
+    };
+
+    struct Arg
+    {
+        bool isStruct = false;
+        std::string name;                                  // struct object name
+        StructABI abi;                                     // struct classification
+        TackyVal val{TackyConstant(0, ConstantType::INT)}; // scalar value
+        AssemblyType stype = AssemblyType::LONGWORD;       // scalar width
+        bool sdouble = false;
+    };
+
+    Arg makeArg(const TackyVal &v)
+    {
+        Arg a;
+        if (auto *var = std::get_if<TackyVar>(&v); var && structObjects.count(var->name))
+        {
+            a.isStruct = true;
+            a.name = var->name;
+            a.abi = structObjects[var->name];
+            return a;
+        }
+        a.val = v;
+        a.stype = assemblyTypeOf(v);
+        a.sdouble = typeOf(v) == ConstantType::DOUBLE;
+        return a;
+    }
+
+    // Assign each argument to registers and/or the stack per the System V rules:
+    // an integer/SSE scalar takes one register of its bank (else the stack); a
+    // <=16-byte struct takes one register per eightbyte if both fit (all-or-nothing,
+    // else the whole struct goes on the stack); a >16-byte struct goes on the stack.
+    // `returnsMemory` reserves RDI for the hidden return pointer.
+    std::vector<std::vector<Slot>> computeSlots(const std::vector<Arg> &args, bool returnsMemory,
+                                                int &stackCount)
+    {
+        int gp = returnsMemory ? 1 : 0, sse = 0, stk = 0;
+        std::vector<std::vector<Slot>> out;
+        for (const auto &a : args)
+        {
+            std::vector<Slot> slots;
+            if (!a.isStruct)
+            {
+                if (a.sdouble)
+                {
+                    if (sse < 8)
+                        slots.push_back({Slot::SSE_REG, xmmRegisters[sse++], 8, 0, 0, true, a.val});
+                    else
+                        slots.push_back({Slot::STACK, RegisterName::AX, 8, 0, stk++, true, a.val});
+                }
+                else if (gp < 6)
+                    slots.push_back(
+                        {Slot::GP_REG, argRegisters[gp++], bytesOf(a.stype), 0, 0, true, a.val});
+                else
+                    slots.push_back(
+                        {Slot::STACK, RegisterName::AX, bytesOf(a.stype), 0, stk++, true, a.val});
+                out.push_back(std::move(slots));
+                continue;
+            }
+
+            const int ebCount = static_cast<int>((a.abi.size + 7) / 8);
+            auto ebWidth = [&](int i)
+            { return static_cast<int>(std::min<long long>(8, a.abi.size - 8 * i)); };
+            auto onStack = [&]()
+            {
+                for (int i = 0; i < ebCount; i++)
+                    slots.push_back(
+                        {Slot::STACK, RegisterName::AX, ebWidth(i), 8 * i, stk++, false});
+            };
+            if (a.abi.inMemory)
+            {
+                onStack();
+            }
+            else
+            {
+                int needGP = 0, needSSE = 0;
+                for (auto c : a.abi.classes)
+                    (c == Eightbyte::Integer ? needGP : needSSE)++;
+                if (gp + needGP <= 6 && sse + needSSE <= 8)
+                {
+                    for (int i = 0; i < static_cast<int>(a.abi.classes.size()); i++)
+                    {
+                        if (a.abi.classes[i] == Eightbyte::SSE)
+                            slots.push_back(
+                                {Slot::SSE_REG, xmmRegisters[sse++], 8, 8 * i, 0, false});
+                        else
+                            slots.push_back(
+                                {Slot::GP_REG, argRegisters[gp++], ebWidth(i), 8 * i, 0, false});
+                    }
+                }
+                else
+                    onStack();
+            }
+            out.push_back(std::move(slots));
+        }
+        stackCount = stk;
+        return out;
+    }
+
+    // The memory operand for a slot's struct eightbyte (scalars use tackyValToOperand).
+    std::unique_ptr<Operand> slotMem(const Arg &a, const Slot &s)
+    {
+        return std::make_unique<PseudoMem>(a.name, s.objOff,
+                                           s.where == Slot::SSE_REG ? AssemblyType::DOUBLE
+                                                                    : AssemblyType::QUADWORD);
+    }
+
+    // Load one eightbyte of struct object `name` (at byte `off`) into register
+    // `reg`. A full 8-byte eightbyte (or any SSE eightbyte) is a single mov; a
+    // partial tail (<8 bytes) is assembled byte by byte so we never read past the
+    // object — required when it sits at the end of a mapped page.
+    void emitLoadEightbyte(const std::string &name, int off, int byteCount, bool sse,
+                           RegisterName reg,
+                           std::vector<std::unique_ptr<Instruction>> &instructions)
+    {
+        if (sse || byteCount >= 8)
+        {
+            const AssemblyType t = sse ? AssemblyType::DOUBLE : AssemblyType::QUADWORD;
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<PseudoMem>(name, off, t), std::make_unique<Register>(reg, 8), t));
+            return;
+        }
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::make_unique<Immediate>(0), std::make_unique<Register>(reg, 4),
+            AssemblyType::LONGWORD)); // zero the whole register
+        for (int k = byteCount - 1; k >= 0; --k)
+        {
+            instructions.push_back(std::make_unique<BinaryInstruction>(
+                std::make_unique<Immediate>(8), std::make_unique<Register>(reg, 8),
+                BinaryOp::LeftShift, AssemblyType::QUADWORD));
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<PseudoMem>(name, off + k, AssemblyType::BYTE),
+                std::make_unique<Register>(reg, 1), AssemblyType::BYTE));
+        }
+    }
+
     void processTackyFunctionCall(const TackyFunctionCall &tackyFunctionCall,
                                   std::vector<std::unique_ptr<Instruction>> &instructions)
     {
+        // Is this a struct return, and if so does it travel via a hidden pointer?
+        const auto *dstVar = std::get_if<TackyVar>(&tackyFunctionCall.dst);
+        const bool structRet = dstVar && structObjects.count(dstVar->name);
+        const StructABI dstABI = structRet ? structObjects[dstVar->name] : StructABI{};
+        const bool returnsMemory = structRet && dstABI.inMemory;
 
-        std::vector<TackyVal> gpArgs, xmmArgs, stackArgs;
+        std::vector<Arg> args;
+        args.reserve(tackyFunctionCall.args.size());
+        for (const auto &a : tackyFunctionCall.args)
+            args.push_back(makeArg(a));
 
-        int gpIndex = 0, xmmIndex = 0;
-        for (const auto &arg : tackyFunctionCall.args)
-        {
-            if (typeOf(arg) == ConstantType::DOUBLE)
-            {
-                if (xmmIndex < 8)
-                {
-                    xmmArgs.push_back(arg);
-                    xmmIndex++;
-                }
-                else
-                    stackArgs.push_back(arg);
-            }
-            else if (gpIndex < 6)
-            {
-                gpArgs.push_back(arg);
-                gpIndex++;
-            }
-            else
-                stackArgs.push_back(arg);
-        }
+        int stackCount = 0;
+        auto placement = computeSlots(args, returnsMemory, stackCount);
 
-        int stackPadding = 0;
-        if (static_cast<int>(stackArgs.size()) % 2)
-        {
-            stackPadding = 8;
-        }
+        int xmmUsed = 0;
+        for (const auto &slots : placement)
+            for (const auto &s : slots)
+                if (s.where == Slot::SSE_REG)
+                    xmmUsed++;
 
-        if (stackPadding != 0)
-        {
+        const int stackPadding = (stackCount % 2) ? 8 : 0;
+        if (stackPadding)
             instructions.push_back(
                 std::make_unique<BinaryInstruction>(std::make_unique<Immediate>(stackPadding),
                                                     std::make_unique<Register>(RegisterName::SP, 8),
                                                     BinaryOp::Subtract, AssemblyType::QUADWORD));
-        }
 
-        int regIndex = 0;
-        for (auto &tackyArg : gpArgs)
+        // Push stack arguments in reverse object order (so the first ends up lowest).
+        std::vector<std::pair<const Arg *, Slot>> stackSlots;
+        for (size_t i = 0; i < args.size(); i++)
+            for (const auto &s : placement[i])
+                if (s.where == Slot::STACK)
+                    stackSlots.push_back({&args[i], s});
+        for (auto it = stackSlots.rbegin(); it != stackSlots.rend(); ++it)
         {
-            const AssemblyType t = assemblyTypeOf(tackyArg);
-            std::unique_ptr<Operand> r =
-                std::make_unique<Register>(argRegisters[regIndex], bytesOf(t));
-            auto assemblyArg = tackyValToOperand(tackyArg);
-            instructions.push_back(
-                std::make_unique<MoveInstruction>(std::move(assemblyArg), std::move(r), t));
-            regIndex++;
-        }
-
-        regIndex = 0;
-        for (auto &tackyArg : xmmArgs)
-        {
-            const AssemblyType t = assemblyTypeOf(tackyArg);
-            std::unique_ptr<Operand> r =
-                std::make_unique<Register>(xmmRegisters[regIndex], bytesOf(t));
-            auto assemblyArg = tackyValToOperand(tackyArg);
-            instructions.push_back(
-                std::make_unique<MoveInstruction>(std::move(assemblyArg), std::move(r), t));
-            regIndex++;
-        }
-
-        for (auto it = stackArgs.rbegin(); it != stackArgs.rend(); ++it)
-        {
-            auto &tackyArg = *it;
-            auto assemblyArg = tackyValToOperand(tackyArg);
-            // Immediates and quadwords can be pushed directly (pushq is 8-byte).
-            // A longword in memory must go via %eax so we push a full 8-byte slot.
-            if (isImmediate(*assemblyArg) || assemblyTypeOf(tackyArg) == AssemblyType::QUADWORD ||
-                assemblyTypeOf(tackyArg) == AssemblyType::DOUBLE)
+            const Arg &a = *it->first;
+            const Slot &s = it->second;
+            if (!s.scalar)
             {
-                instructions.push_back(std::make_unique<PushInstruction>(std::move(assemblyArg)));
+                // A full eightbyte can be pushed straight from memory; a partial tail
+                // is assembled into RAX first so we never read past the object.
+                if (s.width >= 8)
+                    instructions.push_back(std::make_unique<PushInstruction>(slotMem(a, s)));
+                else
+                {
+                    emitLoadEightbyte(a.name, s.objOff, s.width, false, RegisterName::AX,
+                                      instructions);
+                    instructions.push_back(std::make_unique<PushInstruction>(
+                        std::make_unique<Register>(RegisterName::AX, 8)));
+                }
+                continue;
             }
+            auto op = tackyValToOperand(s.val);
+            if (isImmediate(*op) || s.width == 8)
+                instructions.push_back(std::make_unique<PushInstruction>(std::move(op)));
             else
             {
-                // A sub-quadword arg (longword/byte): move it into AX at its own
-                // width, then push the full 8-byte slot.
-                const AssemblyType at = assemblyTypeOf(tackyArg);
                 instructions.push_back(std::make_unique<MoveInstruction>(
-                    std::move(assemblyArg),
-                    std::make_unique<Register>(RegisterName::AX, bytesOf(at)), at));
+                    std::move(op), std::make_unique<Register>(RegisterName::AX, s.width),
+                    assemblyTypeOf(s.val)));
                 instructions.push_back(std::make_unique<PushInstruction>(
                     std::make_unique<Register>(RegisterName::AX, 8)));
             }
         }
 
-        if (tackyFunctionCall.variadic)
+        // Load register arguments.
+        for (size_t i = 0; i < args.size(); i++)
         {
-            // SysV: a variadic callee expects %al = number of vector (XMM) registers
-            // used to pass args. movl into %eax sets %al; the upper bits don't matter.
-            instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Immediate>(static_cast<long long>(xmmArgs.size())),
-                std::make_unique<Register>(RegisterName::AX, 4), AssemblyType::LONGWORD));
+            const Arg &a = args[i];
+            for (const auto &s : placement[i])
+            {
+                if (s.where == Slot::STACK)
+                    continue;
+                if (s.where == Slot::SSE_REG)
+                {
+                    auto src = s.scalar ? tackyValToOperand(s.val) : slotMem(a, s);
+                    instructions.push_back(std::make_unique<MoveInstruction>(
+                        std::move(src), std::make_unique<Register>(s.reg, 8),
+                        AssemblyType::DOUBLE));
+                }
+                else if (s.scalar)
+                {
+                    const AssemblyType t = assemblyTypeOf(s.val);
+                    instructions.push_back(std::make_unique<MoveInstruction>(
+                        tackyValToOperand(s.val), std::make_unique<Register>(s.reg, bytesOf(t)),
+                        t));
+                }
+                else
+                {
+                    // Struct eightbyte: a full eightbyte is one mov, a partial tail is
+                    // assembled byte by byte (no read past the object).
+                    emitLoadEightbyte(a.name, s.objOff, s.width, false, s.reg, instructions);
+                }
+            }
         }
+
+        // Hidden return pointer for a MEMORY-class struct return goes in RDI.
+        if (returnsMemory)
+            instructions.push_back(std::make_unique<LeaInstruction>(
+                std::make_unique<PseudoMem>(dstVar->name, 0, AssemblyType::QUADWORD),
+                std::make_unique<Register>(RegisterName::DI, 8)));
+
+        if (tackyFunctionCall.variadic)
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Immediate>(xmmUsed),
+                std::make_unique<Register>(RegisterName::AX, 4), AssemblyType::LONGWORD));
+
         instructions.push_back(std::make_unique<CallInstruction>(tackyFunctionCall.funcName));
 
-        if (int bytesToRemove = 8 * static_cast<int>(stackArgs.size()) + stackPadding)
-        {
+        if (int bytesToRemove = 8 * stackCount + stackPadding)
             instructions.push_back(
                 std::make_unique<BinaryInstruction>(std::make_unique<Immediate>(bytesToRemove),
                                                     std::make_unique<Register>(RegisterName::SP, 8),
                                                     BinaryOp::Add, AssemblyType::QUADWORD));
+
+        // Retrieve the return value.
+        if (structRet)
+        {
+            // A MEMORY return was written through the hidden pointer (into dst);
+            // a register return is unpacked from RAX/RDX (INTEGER) and XMM0/XMM1 (SSE).
+            if (!returnsMemory)
+            {
+                int gpi = 0, ssei = 0;
+                const RegisterName gpRegs[2] = {RegisterName::AX, RegisterName::DX};
+                const RegisterName sseRegs[2] = {RegisterName::XMM0, RegisterName::XMM1};
+                for (int i = 0; i < static_cast<int>(dstABI.classes.size()); i++)
+                {
+                    if (dstABI.classes[i] == Eightbyte::SSE)
+                        instructions.push_back(std::make_unique<MoveInstruction>(
+                            std::make_unique<Register>(sseRegs[ssei++], 8),
+                            std::make_unique<PseudoMem>(dstVar->name, 8 * i, AssemblyType::DOUBLE),
+                            AssemblyType::DOUBLE));
+                    else
+                        instructions.push_back(std::make_unique<MoveInstruction>(
+                            std::make_unique<Register>(gpRegs[gpi++], 8),
+                            std::make_unique<PseudoMem>(dstVar->name, 8 * i,
+                                                        AssemblyType::QUADWORD),
+                            AssemblyType::QUADWORD));
+                }
+            }
+            return;
         }
 
         const AssemblyType retType = assemblyTypeOf(tackyFunctionCall.dst);
         auto assemblyDst = tackyValToOperand(tackyFunctionCall.dst);
-        if (retType == AssemblyType::DOUBLE)
-        {
-            instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Register>(RegisterName::XMM0, bytesOf(retType)),
-                std::move(assemblyDst), retType));
-        }
-        else
-        {
-            instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Register>(RegisterName::AX, bytesOf(retType)),
-                std::move(assemblyDst), retType));
-        }
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::make_unique<Register>(retType == AssemblyType::DOUBLE ? RegisterName::XMM0
+                                                                       : RegisterName::AX,
+                                       bytesOf(retType)),
+            std::move(assemblyDst), retType));
     }
 
     void processTackySignExtend(const TackySignExtend &tackySignExtend,
@@ -808,39 +1053,79 @@ class codegenDriver
     {
         std::vector<std::unique_ptr<Instruction>> instructions;
 
-        // SysV: integer params arrive in RDI.. (6 slots), double params in XMM0..
-        // (8 slots), each bank counted independently. Params that overflow their
-        // bank were pushed by the caller and sit at 16(%rbp), 24(%rbp), ... in the
-        // order they appear.
-        int gpIndex = 0, xmmIndex = 0, stackOffset = 16;
+        curReturnsStruct = functionNode.returnsStruct;
+        curReturnABI = functionNode.returnABI;
+        const bool returnsMemory = functionNode.returnsStruct && functionNode.returnABI.inMemory;
+        curRetPtrName = ".retptr." + functionNode.name;
+        // A MEMORY-class struct return arrives as a hidden destination pointer in
+        // RDI; stash it for the return statement, then real params start at RSI.
+        if (returnsMemory)
+            instructions.push_back(std::make_unique<MoveInstruction>(
+                std::make_unique<Register>(RegisterName::DI, 8),
+                std::make_unique<PseudoRegister>(curRetPtrName, AssemblyType::QUADWORD),
+                AssemblyType::QUADWORD));
+
+        std::vector<Arg> params;
+        params.reserve(functionNode.params.size());
         for (const auto &[pname, pct] : functionNode.params)
         {
-            const AssemblyType pt = toAssemblyType(pct);
-            if (isDouble(pct))
+            if (structObjects.count(pname))
             {
-                if (xmmIndex < 8)
+                Arg a;
+                a.isStruct = true;
+                a.name = pname;
+                a.abi = structObjects[pname];
+                params.push_back(std::move(a));
+            }
+            else
+            {
+                Arg a;
+                a.name = pname; // the param's pseudo-register, used as the slot dest
+                a.val = TackyVar(pname, pct);
+                a.stype = toAssemblyType(pct);
+                a.sdouble = isDouble(pct);
+                params.push_back(std::move(a));
+            }
+        }
+
+        int stackCount = 0;
+        auto placement = computeSlots(params, returnsMemory, stackCount);
+        int stackIdx = 0;
+        for (size_t i = 0; i < params.size(); i++)
+        {
+            const Arg &a = params[i];
+            for (const auto &s : placement[i])
+            {
+                // Destination: a scalar param's pseudo-register, or a struct param's
+                // slot eightbyte.
+                auto dest = [&]() -> std::unique_ptr<Operand>
+                {
+                    if (a.isStruct)
+                        return std::make_unique<PseudoMem>(a.name, s.objOff,
+                                                           s.where == Slot::SSE_REG
+                                                               ? AssemblyType::DOUBLE
+                                                               : AssemblyType::QUADWORD);
+                    return std::make_unique<PseudoRegister>(a.name, a.stype);
+                };
+                if (s.where == Slot::STACK)
+                {
+                    const AssemblyType t = a.isStruct ? AssemblyType::QUADWORD : a.stype;
+                    instructions.push_back(std::make_unique<MoveInstruction>(
+                        std::make_unique<Memory>(RegisterName::BP, 16 + 8 * stackIdx++), dest(),
+                        t));
+                }
+                else if (s.where == Slot::SSE_REG)
                 {
                     instructions.push_back(std::make_unique<MoveInstruction>(
-                        std::make_unique<Register>(xmmRegisters[xmmIndex], 8),
-                        std::make_unique<PseudoRegister>(pname, pt), AssemblyType::DOUBLE));
-                    xmmIndex++;
-                    continue;
+                        std::make_unique<Register>(s.reg, 8), dest(), AssemblyType::DOUBLE));
+                }
+                else
+                {
+                    const AssemblyType t = a.isStruct ? AssemblyType::QUADWORD : a.stype;
+                    instructions.push_back(std::make_unique<MoveInstruction>(
+                        std::make_unique<Register>(s.reg, bytesOf(t)), dest(), t));
                 }
             }
-            else if (gpIndex < 6)
-            {
-                instructions.push_back(std::make_unique<MoveInstruction>(
-                    std::make_unique<Register>(argRegisters[gpIndex], bytesOf(pt)),
-                    std::make_unique<PseudoRegister>(pname, pt), pt));
-                gpIndex++;
-                continue;
-            }
-
-            // Overflowed its register bank: read from the caller's stack frame.
-            instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<Memory>(RegisterName::BP, stackOffset),
-                std::make_unique<PseudoRegister>(pname, pt), pt));
-            stackOffset += 8;
         }
 
         processTackyInstructions(functionNode.instructions, instructions);
@@ -874,7 +1159,7 @@ class codegenDriver
 
         if (staticNames.count(name))
         {
-            slot = std::make_unique<Data>(name);
+            slot = std::make_unique<Data>(name, extra);
             return;
         }
 
@@ -887,6 +1172,16 @@ class codegenDriver
                 // object's alignment.
                 used += static_cast<int>(ai->second.size);
                 used += (ai->second.align - used % ai->second.align) % ai->second.align;
+            }
+            else if (auto si = structObjects.find(name); si != structObjects.end())
+            {
+                // A struct slot is sized/aligned like an array object, but its size
+                // is rounded up to a multiple of 8 so whole-eightbyte loads/stores
+                // (used by the calling convention) never spill past the slot.
+                const int sz = (static_cast<int>(si->second.size) + 7) / 8 * 8;
+                used += sz;
+                const int al = si->second.align < 8 ? 8 : si->second.align;
+                used += (al - used % al) % al;
             }
             else if (type == AssemblyType::QUADWORD || type == AssemblyType::DOUBLE)
             {
@@ -1337,6 +1632,7 @@ class codegenDriver
     {
         staticNames = prog.staticNames;
         arrayObjects = prog.arrayObjects;
+        structObjects = prog.structObjects;
         std::vector<std::unique_ptr<codegenTopLevelNode>> nodes;
         for (const auto &node : prog.nodes)
         {

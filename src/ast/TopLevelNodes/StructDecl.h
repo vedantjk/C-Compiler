@@ -20,16 +20,24 @@ class StructDecl : public TopLevelNode
     std::string name;
     std::vector<StructField> fields;
     std::shared_ptr<Type> baseType;
+    // A definition `struct s { ... };` is complete; a forward declaration
+    // `struct s;` only introduces the tag and is incomplete (empty fields).
+    bool isComplete;
 
     StructDecl(std::string name, std::vector<StructField> fields, int line, int col,
-               std::shared_ptr<Type> baseType)
+               std::shared_ptr<Type> baseType, bool isComplete = true)
         : TopLevelNode(line, col), name(std::move(name)), fields(std::move(fields)),
-          baseType(std::move(baseType))
+          baseType(std::move(baseType)), isComplete(isComplete)
     {
     }
 
     void print(std::ostream &out, int tab) const override
     {
+        if (!isComplete)
+        {
+            out << "struct " << name << ";";
+            return;
+        }
         out << "struct " << name << " {\n";
         for (auto field : fields)
         {

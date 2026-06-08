@@ -117,10 +117,11 @@ class SymbolTable
     {
         if (!scopes[scopes.size() - 1].insert(name, symbol, kind))
             return false;
-        // Only no-linkage variables (block-scope locals, including block `static`)
-        // get a freshly mangled name; anything with linkage — file-scope vars and
+        // No-linkage locals (block-scope variables, including block `static`) and
+        // parameters get a freshly mangled name so they never alias a file-scope
+        // object of the same spelling; anything with linkage — file-scope vars and
         // `extern` — keeps its source name so the linker can resolve it.
-        if (kind == Kind::VARIABLE && symbol->linkage == Linkage::None)
+        if (kind == Kind::PARAMETER || (kind == Kind::VARIABLE && symbol->linkage == Linkage::None))
             symbol->uniqueName = name + "." + std::to_string(++count[name]);
         else
             symbol->uniqueName = name;

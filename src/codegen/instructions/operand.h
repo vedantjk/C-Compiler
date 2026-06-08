@@ -111,7 +111,11 @@ class Data : public Operand
 {
   public:
     std::string identifier;
-    explicit Data(std::string identifier_) : identifier(std::move(identifier_)) {}
+    int offset; // byte offset into the object, for member/eightbyte access
+    explicit Data(std::string identifier_, int offset_ = 0)
+        : identifier(std::move(identifier_)), offset(offset_)
+    {
+    }
 };
 
 class Memory : public Operand

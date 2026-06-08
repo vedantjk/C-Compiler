@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../types/StructLayout.h"
 #include "../../instructions/instructions.h"
 #include "../../instructions/val.h"
 #include "./TackyTopLevelNode.h"
@@ -15,6 +16,11 @@ class TackyFunction : public TackyTopLevelNode
     // each parameter carries its name and width, so codegen sizes the prologue move
     std::vector<std::pair<std::string, ConstantType>> params;
     bool global;
+    // System V return classification for a struct-returning function: a MEMORY
+    // return takes a hidden destination pointer in RDI; a register return packs
+    // its eightbytes into RAX/RDX/XMM0/XMM1.
+    bool returnsStruct = false;
+    StructABI returnABI;
     TackyFunction(const int line_, const int column_, std::string name_, bool global_,
                   std::vector<std::unique_ptr<TackyInstruction>> instructions_,
                   std::vector<std::pair<std::string, ConstantType>> params_)

@@ -2,6 +2,7 @@
 #include "../ast/ASTNodes/Program.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/IntLiterals.h"
+#include "../ast/Expressions/MemberExpr.h"
 #include "../ast/Expressions/SizeOfExpr.h"
 #include "../ast/Expressions/StringLiterals.h"
 #include "../ast/Expressions/SubscriptExpr.h"
@@ -13,6 +14,7 @@
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
 #include "../tacky/instructions/instructions.h"
 #include "../tacky/instructions/val.h"
+#include "../types/StructLayout.h"
 #include "ast/TopLevelNodes/TackyStaticVariable.h"
 
 #include <memory>
@@ -65,6 +67,11 @@ class TackyDriver
     {
         if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
             return static_cast<long long>(a->getSize()) * sizeOfType(a->getInner());
+        if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        {
+            const StructLayout *l = findStructLayout(s->getName());
+            return l ? l->size : 0;
+        }
         if (std::dynamic_pointer_cast<CharType>(t) ||
             std::dynamic_pointer_cast<SignedCharType>(t) ||
             std::dynamic_pointer_cast<UnsignedCharType>(t))
@@ -90,19 +97,34 @@ class TackyDriver
             const int base = alignOfType(a->getInner());
             return sizeOfType(t) >= 16 ? 16 : base;
         }
+        if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+        {
+            const StructLayout *l = findStructLayout(s->getName());
+            return l ? l->alignment : 1;
+        }
         return static_cast<int>(sizeOfType(t));
     }
 
+    // Record an aggregate local so codegen can size its stack slot. Arrays carry
+    // only size/align; structs additionally carry their System V classification.
     void recordArrayObject(const std::string &name, const std::shared_ptr<Type> &t)
     {
         if (std::dynamic_pointer_cast<ArrayType>(t))
             arrayObjects[name] = ArrayObject{sizeOfType(t), alignOfType(t)};
+        else if (const auto s = std::dynamic_pointer_cast<StructType>(t))
+            structObjects[name] = classifyStruct(s->getName());
+    }
+
+    static bool isStructType(const std::shared_ptr<Type> &t)
+    {
+        return std::dynamic_pointer_cast<StructType>(t) != nullptr;
     }
 
   public:
     std::unordered_map<std::string, int> tempCounters;
     std::set<Symbol *> seenVarDecls;
     std::unordered_map<std::string, ArrayObject> arrayObjects;
+    std::unordered_map<std::string, StructABI> structObjects;
 
     // Anonymous read-only constants for string literals used as values. Each gets a
     // label, its decoded bytes, and an alignment; emitted as null-terminated data.
@@ -123,14 +145,20 @@ class TackyDriver
 
     // Intern a string literal as a static constant and return a value referring to
     // that object (by label). Taking its address (`&`/decay) yields a char*.
-    TackyVal internStringLiteral(const std::shared_ptr<StringLiterals> &s)
+    // Intern raw bytes as an anonymous null-terminated string constant and return
+    // its label. Shared by string-literal values and static `char *` initializers.
+    std::string internBytes(const std::string &bytes)
     {
-        const std::string bytes = decodeStringLiteral(s->literal);
         const std::string label = makeTemp("Lstr.");
         const long long n = static_cast<long long>(bytes.size()) + 1; // + null terminator
         const int align = n >= 16 ? 16 : 1;
         stringConstants.push_back({label, bytes, align});
-        return TackyVar(label, ConstantType::POINTER);
+        return label;
+    }
+
+    TackyVal internStringLiteral(const std::shared_ptr<StringLiterals> &s)
+    {
+        return TackyVar(internBytes(decodeStringLiteral(s->literal)), ConstantType::POINTER);
     }
 
     // Element address ptrExpr +/- index*elementSize, the shared core of pointer
@@ -171,12 +199,180 @@ class TackyDriver
             return DereferencedPointer{processExpression(u->operand, instructions)};
         if (auto sub = std::dynamic_pointer_cast<SubscriptExpr>(e))
             return DereferencedPointer{subscriptAddress(sub, instructions)};
+        // A member access lvalue is the member's address (base + constant offset).
+        if (auto m = std::dynamic_pointer_cast<MemberExpr>(e))
+            return DereferencedPointer{memberAddress(m, instructions)};
         // A string literal is an array object; its lvalue is the interned constant,
         // so `&"..."` becomes GetAddress of that constant's label.
         if (auto s = std::dynamic_pointer_cast<StringLiterals>(e))
             return internStringLiteral(s);
         // plain variable (or anything else that's a simple operand)
         return processExpression(e, instructions);
+    }
+
+    static std::string structTagOf(const std::shared_ptr<Type> &t)
+    {
+        return std::dynamic_pointer_cast<StructType>(t)->getName();
+    }
+
+    // Address (a POINTER value) of any lvalue, exactly as the unary `&` operator
+    // computes it: a dereferenced lvalue yields the pointer itself, anything else
+    // is taken with GetAddress.
+    TackyVal addressOf(const std::shared_ptr<Expression> &e,
+                       std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        auto lv = processLvalue(e, instructions);
+        if (auto *dp = std::get_if<DereferencedPointer>(&lv))
+            return dp->ptr;
+        auto *v = std::get_if<TackyVal>(&lv);
+        TackyVar dst{makeTemp("tmp."), ConstantType::POINTER};
+        instructions.push_back(
+            std::make_unique<TackyGetAddress>(e->getLine(), e->getCol(), *v, dst));
+        return dst;
+    }
+
+    // base + off as a POINTER value; off 0 returns base unchanged.
+    TackyVal ptrPlus(TackyVal base, long long off, int line, int col,
+                     std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (off == 0)
+            return base;
+        TackyVar dst{makeTemp("tmp."), ConstantType::POINTER};
+        instructions.push_back(std::make_unique<TackyBinary>(
+            line, col, BinaryOp::Add, base, TackyConstant(off, ConstantType::LONG), dst));
+        return dst;
+    }
+
+    // Address of named object `name` at byte `offset`, as a POINTER value.
+    TackyVal namedObjectAddress(const std::string &name, long long offset, int line, int col,
+                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        TackyVar base{makeTemp("tmp."), ConstantType::POINTER};
+        instructions.push_back(std::make_unique<TackyGetAddress>(
+            line, col, TackyVar(name, ConstantType::POINTER), base));
+        return ptrPlus(base, offset, line, col, instructions);
+    }
+
+    // Address (POINTER value) of the member `e.field` / `e->field`. For `->` the
+    // base is the pointer operand; for `.` it is the address of the struct lvalue.
+    TackyVal memberAddress(const std::shared_ptr<MemberExpr> &e,
+                           std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        TackyVal base = e->isArrow ? processExpression(e->object, instructions)
+                                   : aggregateAddress(e->object, instructions);
+        const auto &ot = e->object->resolvedType;
+        std::shared_ptr<StructType> st;
+        if (auto p = std::dynamic_pointer_cast<PointerType>(ot))
+            st = std::dynamic_pointer_cast<StructType>(p->getInner());
+        else
+            st = std::dynamic_pointer_cast<StructType>(ot);
+        const StructLayout *layout = findStructLayout(st->getName());
+        long long off = 0;
+        for (const auto &m : layout->members)
+            if (m.name == e->field)
+            {
+                off = m.offset;
+                break;
+            }
+        return ptrPlus(base, off, e->line, e->col, instructions);
+    }
+
+    // Copy `size` bytes from the object at `srcAddr` to the object at `dstAddr`,
+    // in 8/4/1-byte chunks (a struct's size is always a multiple of its alignment,
+    // so this never reads past either object — important for page-boundary tests).
+    void emitStructCopy(const TackyVal &dstAddr, const TackyVal &srcAddr, long long size, int line,
+                        int col, std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        long long off = 0;
+        auto chunk = [&](long long width, ConstantType ct)
+        {
+            while (size - off >= width)
+            {
+                TackyVal sp = ptrPlus(srcAddr, off, line, col, instructions);
+                TackyVar tmp{makeTemp("tmp."), ct};
+                instructions.push_back(std::make_unique<TackyLoad>(line, col, sp, tmp));
+                TackyVal dp = ptrPlus(dstAddr, off, line, col, instructions);
+                instructions.push_back(std::make_unique<TackyStore>(line, col, tmp, dp));
+                off += width;
+            }
+        };
+        chunk(8, ConstantType::LONG);
+        chunk(4, ConstantType::INT);
+        chunk(1, ConstantType::SCHAR);
+    }
+
+    // Materialize a struct-typed value into a named struct object and return that
+    // object's name. A plain variable is already such an object; anything else is
+    // copied into a fresh temporary.
+    std::string freshStructTemp(const std::shared_ptr<Type> &type)
+    {
+        std::string name = makeTemp("struct.");
+        structObjects[name] = classifyStruct(structTagOf(type));
+        return name;
+    }
+
+    std::string structValueObject(const std::shared_ptr<Expression> &e,
+                                  std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (auto v = std::dynamic_pointer_cast<VariableExpr>(e))
+        {
+            const std::string name = v->symbol ? v->symbol->uniqueName : v->name;
+            structObjects[name] = classifyStruct(structTagOf(e->resolvedType));
+            return name;
+        }
+        const std::string name = freshStructTemp(e->resolvedType);
+        TackyVal dstAddr = namedObjectAddress(name, 0, e->getLine(), e->getCol(), instructions);
+        TackyVal srcAddr = aggregateAddress(e, instructions);
+        emitStructCopy(dstAddr, srcAddr, sizeOfType(e->resolvedType), e->getLine(), e->getCol(),
+                       instructions);
+        return name;
+    }
+
+    // Address (POINTER value) of a struct-typed expression's storage. Lvalues give
+    // their storage address directly; an assignment performs its copy and yields
+    // the destination; a ternary selects a branch into a temporary; any other
+    // rvalue (e.g. a struct-returning call) is materialized into a temporary.
+    TackyVal aggregateAddress(const std::shared_ptr<Expression> &e,
+                              std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        if (auto a = std::dynamic_pointer_cast<AssignExpr>(e))
+        {
+            TackyVal dstAddr = addressOf(a->lhs, instructions);
+            TackyVal srcAddr = aggregateAddress(a->rhs, instructions);
+            emitStructCopy(dstAddr, srcAddr, sizeOfType(a->lhs->resolvedType), a->line, a->col,
+                           instructions);
+            return dstAddr;
+        }
+        if (auto t = std::dynamic_pointer_cast<TernaryExpr>(e))
+        {
+            const std::string name = freshStructTemp(e->resolvedType);
+            const long long size = sizeOfType(e->resolvedType);
+            const std::string elseLabel = makeTemp("ternary_false.");
+            const std::string endLabel = makeTemp("end.");
+            auto cond = processExpression(t->condition, instructions);
+            instructions.push_back(
+                std::make_unique<TackyJumpIfZero>(t->line, t->col, cond, elseLabel));
+            TackyVal dThen = namedObjectAddress(name, 0, t->line, t->col, instructions);
+            emitStructCopy(dThen, aggregateAddress(t->thenBranch, instructions), size, t->line,
+                           t->col, instructions);
+            instructions.push_back(std::make_unique<TackyJump>(t->line, t->col, endLabel));
+            instructions.push_back(std::make_unique<TackyLabel>(t->line, t->col, elseLabel));
+            TackyVal dElse = namedObjectAddress(name, 0, t->line, t->col, instructions);
+            emitStructCopy(dElse, aggregateAddress(t->elseBranch, instructions), size, t->line,
+                           t->col, instructions);
+            instructions.push_back(std::make_unique<TackyLabel>(t->line, t->col, endLabel));
+            return namedObjectAddress(name, 0, t->line, t->col, instructions);
+        }
+        if (std::dynamic_pointer_cast<FunctionCallExpr>(e))
+        {
+            // The call lowers to a temporary struct object; take its address.
+            TackyVal obj = processExpression(e, instructions);
+            TackyVar dst{makeTemp("tmp."), ConstantType::POINTER};
+            instructions.push_back(
+                std::make_unique<TackyGetAddress>(e->getLine(), e->getCol(), obj, dst));
+            return dst;
+        }
+        return addressOf(e, instructions);
     }
 
     TackyVal processFloatingLiteral(const std::shared_ptr<FloatingLiterals> &floatLiteral)
@@ -262,18 +458,7 @@ class TackyDriver
         }
         else if (unaryExpr->op == "&")
         {
-            auto inner = processLvalue(unaryExpr->operand, instructions);
-
-            if (auto *dp = std::get_if<DereferencedPointer>(&inner))
-            {
-                return dp->ptr;
-            }
-
-            auto *operand = std::get_if<TackyVal>(&inner);
-            TackyVar dst{makeTemp("tmp."), returnConstantType(unaryExpr->resolvedType)};
-            instructions.push_back(
-                std::make_unique<TackyGetAddress>(unaryExpr->line, unaryExpr->col, *operand, dst));
-            return dst;
+            return addressOf(unaryExpr->operand, instructions);
         }
         else
             throw std::runtime_error("unhandled unary op: " + unaryExpr->op);
@@ -446,6 +631,12 @@ class TackyDriver
                                std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
         const int line = assignExpr->line, col = assignExpr->col;
+
+        // Whole-struct assignment is a byte copy (only `=` is valid on structs).
+        // aggregateAddress performs the copy and yields the destination address.
+        if (isStructType(assignExpr->lhs->resolvedType))
+            return aggregateAddress(assignExpr, instructions);
+
         auto lhs = processLvalue(assignExpr->lhs, instructions);
         auto rhs = processExpression(assignExpr->rhs, instructions);
 
@@ -550,9 +741,18 @@ class TackyDriver
         std::vector<TackyVal> args;
         for (const auto &param : functionCallExpr->parameters)
         {
-            args.push_back(processExpression(param, instructions));
+            // A by-value struct argument is passed as its named object (codegen
+            // splits it into eightbytes per the calling convention).
+            if (isStructType(param->resolvedType))
+                args.push_back(
+                    TackyVar(structValueObject(param, instructions), ConstantType::POINTER));
+            else
+                args.push_back(processExpression(param, instructions));
         }
-        TackyVar dst{makeTemp("tmp."), returnConstantType(functionCallExpr->resolvedType)};
+        // A struct return materializes into a fresh struct object the caller owns.
+        const bool structRet = isStructType(functionCallExpr->resolvedType);
+        TackyVar dst{structRet ? freshStructTemp(functionCallExpr->resolvedType) : makeTemp("tmp."),
+                     returnConstantType(functionCallExpr->resolvedType)};
         instructions.push_back(std::make_unique<TackyFunctionCall>(
             functionCallExpr->line, functionCallExpr->col, functionCallExpr->functionName->name,
             args, dst, functionCallExpr->calleeVariadic));
@@ -728,6 +928,16 @@ class TackyDriver
             const auto &sizedType = p->expr ? p->expr->resolvedType : p->type;
             return TackyConstant{sizeOfType(sizedType), ConstantType::ULONG};
         }
+        if (const auto &p = std::dynamic_pointer_cast<MemberExpr>(expression))
+        {
+            // A scalar member used as a value: take its address and load through it.
+            // (Aggregate members are reached via array decay / aggregateAddress, so
+            // a struct-typed member never arrives here.)
+            auto addr = memberAddress(p, instructions);
+            TackyVar dst{makeTemp("tmp."), returnConstantType(p->resolvedType)};
+            instructions.push_back(std::make_unique<TackyLoad>(p->line, p->col, addr, dst));
+            return dst;
+        }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
 
@@ -776,6 +986,27 @@ class TackyDriver
     {
         if (const auto initList = std::dynamic_pointer_cast<InitExpr>(init))
         {
+            // Struct brace initializer: bind element i to member i, zero-filling the
+            // padding gaps between members and any uninitialized trailing members.
+            if (const auto layout = structLayoutOf(targetType))
+            {
+                long long cur = 0;
+                for (size_t i = 0; i < initList->elements.size(); ++i)
+                {
+                    const auto &m = layout->members[i];
+                    if (m.offset > cur)
+                        emitZeroFill(dst, offset + cur, m.offset - cur, init->getLine(),
+                                     init->getCol(), instructions);
+                    emitInitializer(m.type, initList->elements[i], dst, offset + m.offset,
+                                    instructions);
+                    cur = m.offset + sizeOfType(m.type);
+                }
+                if (layout->size > cur)
+                    emitZeroFill(dst, offset + cur, layout->size - cur, init->getLine(),
+                                 init->getCol(), instructions);
+                return;
+            }
+
             const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType);
             const long long elemSize = sizeOfType(arr->getInner());
             for (size_t i = 0; i < initList->elements.size(); ++i)
@@ -786,6 +1017,18 @@ class TackyDriver
             const long long total = sizeOfType(targetType);
             emitZeroFill(dst, offset + written, total - written, init->getLine(), init->getCol(),
                          instructions);
+            return;
+        }
+
+        // A struct member/element initialized by a (non-brace) struct expression:
+        // byte-copy that value into the object at this offset.
+        if (isStructType(targetType))
+        {
+            TackyVal dstAddr =
+                namedObjectAddress(dst, offset, init->getLine(), init->getCol(), instructions);
+            TackyVal srcAddr = aggregateAddress(init, instructions);
+            emitStructCopy(dstAddr, srcAddr, sizeOfType(targetType), init->getLine(),
+                           init->getCol(), instructions);
             return;
         }
 
@@ -821,7 +1064,13 @@ class TackyDriver
         std::optional<TackyVal> returnVal;
         if (returnStmt->returnExpression)
         {
-            returnVal = processExpression(returnStmt->returnExpression, instructions);
+            // A struct return value is handed to codegen as its named object; codegen
+            // packs it into return registers or writes it through the hidden pointer.
+            if (isStructType(returnStmt->returnExpression->resolvedType))
+                returnVal = TackyVar(structValueObject(returnStmt->returnExpression, instructions),
+                                     ConstantType::POINTER);
+            else
+                returnVal = processExpression(returnStmt->returnExpression, instructions);
         }
         instructions.push_back(
             std::make_unique<TackyReturn>(returnStmt->line, returnStmt->col, std::move(returnVal)));
@@ -850,8 +1099,19 @@ class TackyDriver
                     recordArrayObject(name, vd->type);
                     if (vd->initialization)
                     {
-                        if (std::dynamic_pointer_cast<ArrayType>(vd->type))
+                        if (std::dynamic_pointer_cast<ArrayType>(vd->type) ||
+                            (isStructType(vd->type) &&
+                             std::dynamic_pointer_cast<InitExpr>(vd->initialization)))
                             emitInitializer(vd->type, vd->initialization, name, 0, instructions);
+                        else if (isStructType(vd->type))
+                        {
+                            // Copy-initialize from another struct value.
+                            TackyVal dstAddr = namedObjectAddress(name, 0, declareStmt->line,
+                                                                  declareStmt->col, instructions);
+                            TackyVal srcAddr = aggregateAddress(vd->initialization, instructions);
+                            emitStructCopy(dstAddr, srcAddr, sizeOfType(vd->type),
+                                           declareStmt->line, declareStmt->col, instructions);
+                        }
                         else
                         {
                             auto val = processExpression(vd->initialization, instructions);
@@ -1042,6 +1302,10 @@ class TackyDriver
         std::vector<std::pair<std::string, ConstantType>> params;
         for (const auto &param : functionNode->parameters)
         {
+            // A by-value struct parameter needs a sized slot and a classification so
+            // codegen can reassemble it from its incoming registers/stack bytes.
+            if (isStructType(param.type))
+                structObjects[param.name] = classifyStruct(structTagOf(param.type));
             params.push_back({param.name, returnConstantType(param.type)});
         }
         processBlockStmt(functionNode->statements, instructions);
@@ -1052,9 +1316,17 @@ class TackyDriver
         instructions.push_back(std::make_unique<TackyReturn>(functionNode->line, functionNode->col,
                                                              TackyConstant(0, ConstantType::INT)));
         bool global = functionNode->symbol && functionNode->symbol->linkage == Linkage::External;
-        return std::make_unique<TackyFunction>(functionNode->line, functionNode->col,
-                                               functionNode->name, global, std::move(instructions),
-                                               params);
+        auto fn = std::make_unique<TackyFunction>(functionNode->line, functionNode->col,
+                                                  functionNode->name, global,
+                                                  std::move(instructions), params);
+        // Function::type is the return type; a struct return drives the hidden-pointer
+        // (MEMORY) or register packing convention in codegen.
+        if (isStructType(functionNode->type))
+        {
+            fn->returnsStruct = true;
+            fn->returnABI = classifyStruct(structTagOf(functionNode->type));
+        }
+        return fn;
     }
 
     std::unique_ptr<TackyProgram> tacky(const std::shared_ptr<Program> &prog)
@@ -1081,6 +1353,11 @@ class TackyDriver
             std::vector<StaticInit> inits = symbol->staticInits;
             if (inits.empty())
                 inits.push_back(StaticInit::zero(sizeOfType(symbol->type)));
+            // A static `char *` initialized from a string literal: intern the bytes
+            // and replace the placeholder with a pointer to that constant's label.
+            for (auto &si : inits)
+                if (si.kind == StaticInit::Kind::PointerString)
+                    si = StaticInit::ptrLabel(internBytes(si.strVal));
             nodes.push_back(std::make_unique<TackyStaticVariable>(
                 symbol->line, symbol->column, symbol->uniqueName,
                 symbol->linkage == Linkage::External, std::move(inits), alignOfType(symbol->type)));
@@ -1102,7 +1379,13 @@ class TackyDriver
         // String-constant labels are static data too: references lower to RIP data.
         for (const auto &sc : stringConstants)
             program->staticNames.insert(sc.label);
+        // Static-storage struct objects also need a classification (e.g. when one is
+        // passed or returned by value), though their storage is data, not a slot.
+        for (const auto &symbol : seenVarDecls)
+            if (isStructType(symbol->type))
+                structObjects[symbol->uniqueName] = classifyStruct(structTagOf(symbol->type));
         program->arrayObjects = std::move(arrayObjects);
+        program->structObjects = std::move(structObjects);
         return program;
     }
 };

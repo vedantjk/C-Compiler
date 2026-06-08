@@ -46,7 +46,7 @@ CATEGORIES = ("parse_valid", "parse_invalid", "validate_invalid")
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump as chapters
 # land. This is the single source of truth for the implemented gate.
-IMPLEMENTED_CHAPTERS = set(range(1, 18))  # chapters 1..17
+IMPLEMENTED_CHAPTERS = set(range(1, 19))  # chapters 1..18
 
 STAGES = ("lex", "parse", "validate", "tacky", "codegen", "run")
 _CHAP_RE = re.compile(r"chapter_(\d+)")
@@ -239,6 +239,14 @@ def execute(f: Path, cc89: Path, art: Path, timeout: float):
     helper_fixtures = {
         "stack_alignment.c": "stack_alignment_check_linux.s",
         "push_arg_on_page_boundary.c": "data_on_page_boundary_linux.s",
+        # chapter 18 struct ABI edge cases: extern structs placed at a page
+        # boundary, the RAX-return-pointer validator, and the return-space overlap
+        # checker, each defined in a committed platform .s alongside the test.
+        "pass_args_on_page_boundary.c": "data_on_page_boundary_linux.s",
+        "return_struct_on_page_boundary.c": "data_on_page_boundary_linux.s",
+        "return_big_struct_on_page_boundary.c": "big_data_on_page_boundary_linux.s",
+        "return_pointer_in_rax.c": "validate_return_pointer_linux.s",
+        "return_space_overlap.c": "return_space_address_overlap_linux.s",
     }
     if f.name in helper_fixtures:
         helper = f.parent / helper_fixtures[f.name]

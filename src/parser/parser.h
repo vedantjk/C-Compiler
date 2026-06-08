@@ -902,6 +902,9 @@ class Parser
             auto structVar = parseStructDecl(type, line, col);
             return std::make_shared<DeclareStmt>(line, col, structVar);
         }
+        if (atStructForwardDecl(type))
+            return std::make_shared<DeclareStmt>(line, col,
+                                                 parseStructForwardDecl(type, line, col));
         DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
         if (dl.isFunction)
             error(line, col, "function declaration not allowed here");
@@ -1039,6 +1042,12 @@ class Parser
                     statements.emplace_back(std::make_shared<DeclareStmt>(line, col, structVar));
                     continue;
                 }
+                if (atStructForwardDecl(type))
+                {
+                    statements.emplace_back(std::make_shared<DeclareStmt>(
+                        line, col, parseStructForwardDecl(type, line, col)));
+                    continue;
+                }
                 DeclList dl = parseDeclarationList(type, false, storageClass, line, col);
                 if (dl.isFunction)
                 {
@@ -1107,6 +1116,24 @@ class Parser
     // Top-level / program — parameters, functions, structs, entry
     // ============================================================
 
+    // A forward declaration `struct s;` introduces an incomplete tag with no body.
+    // Only valid for a struct specifier; `int;` and friends stay declarator errors.
+    std::shared_ptr<StructDecl> parseStructForwardDecl(const std::shared_ptr<Type> &structType,
+                                                       int line, int col)
+    {
+        expect(SEMI_COLON);
+        auto st = std::dynamic_pointer_cast<StructType>(structType);
+        return std::make_shared<StructDecl>(st->getName(), std::vector<StructField>{}, line, col,
+                                            structType, false);
+    }
+
+    // True when a run of specifiers resolved to a bare struct tag terminated by `;`,
+    // i.e. a forward declaration rather than a definition or an object declaration.
+    bool atStructForwardDecl(const std::shared_ptr<Type> &type)
+    {
+        return std::dynamic_pointer_cast<StructType>(type) && peek() == SEMI_COLON;
+    }
+
     std::shared_ptr<StructDecl> parseStructDecl(const std::shared_ptr<Type> &structType, int line,
                                                 int col)
     {
@@ -1117,9 +1144,14 @@ class Parser
         while (peek() != RIGHT_BRACE && peek() != EOF_TOKEN)
         {
             auto [type, baseLine, baseCol] = parseBaseType();
+            if (peek() == SEMI_COLON)
+                error(baseLine, baseCol, "struct member requires a declarator");
             while (peek() != SEMI_COLON && peek() != EOF_TOKEN)
             {
                 Declarator d = processDeclarator(parseDeclarator(false), type);
+                if (std::dynamic_pointer_cast<FunctionType>(d.type))
+                    error(d.line, d.col,
+                          "struct member '" + d.name + "' cannot have function type");
                 fields.emplace_back(d.type, d.name, d.line, d.col);
                 if (peek() == COMMA)
                     consume();
@@ -1145,6 +1177,11 @@ class Parser
                 if (peek() == LEFT_BRACE)
                 {
                     nodes.emplace_back(parseStructDecl(type, line, col));
+                    continue;
+                }
+                if (atStructForwardDecl(type))
+                {
+                    nodes.emplace_back(parseStructForwardDecl(type, line, col));
                     continue;
                 }
                 DeclList dl = parseDeclarationList(type, true, storageClass, line, col);

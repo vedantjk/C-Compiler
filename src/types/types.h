@@ -14,7 +14,13 @@ struct StaticInit
         Long,   // 8-byte integer (also pointers)
         Double, // 8-byte IEEE double
         Zero,   // `zeroBytes` bytes of zero
-        String  // raw bytes of a string literal (`strNull` adds a trailing null)
+        String, // raw bytes of a string literal (`strNull` adds a trailing null)
+        // An 8-byte pointer to a string literal. `PointerString` carries the
+        // decoded bytes and is produced by semantic analysis; TACKY interns the
+        // string into a labeled constant and rewrites it to `PointerLabel` (the
+        // label in `strVal`), which the emitter writes as `.quad <label>`.
+        PointerString,
+        PointerLabel
     } kind;
     long long intVal = 0;
     double dblVal = 0.0;
@@ -32,6 +38,18 @@ struct StaticInit
         StaticInit s{Kind::String, 0, 0.0, 0};
         s.strVal = std::move(bytes);
         s.strNull = nullTerminated;
+        return s;
+    }
+    static StaticInit ptrString(std::string bytes)
+    {
+        StaticInit s{Kind::PointerString, 0, 0.0, 0};
+        s.strVal = std::move(bytes);
+        return s;
+    }
+    static StaticInit ptrLabel(std::string label)
+    {
+        StaticInit s{Kind::PointerLabel, 0, 0.0, 0};
+        s.strVal = std::move(label);
         return s;
     }
 };
@@ -257,6 +275,9 @@ class StructType : public Type
     explicit StructType(std::string n) : name(std::move(n)) {}
     [[nodiscard]] std::string toString() const override { return "struct " + name; }
     [[nodiscard]] const std::string &getName() const { return name; }
+    // Semantic analysis rewrites the source tag to its resolved (mangled) name so
+    // that shadowed same-named structs in nested scopes stay distinct downstream.
+    void setName(std::string n) { name = std::move(n); }
 
     [[nodiscard]] bool equals(const Type &other) const override
     {
