@@ -9,12 +9,16 @@ enum class ConstantType
     UINT,
     ULONG,
     DOUBLE,
-    POINTER
+    POINTER,
+    SCHAR, // char / signed char (1 byte, signed)
+    UCHAR  // unsigned char (1 byte, unsigned)
 };
 
-// Width in bytes: int/uint are 4, long/ulong are 8.
+// Width in bytes: char types are 1, int/uint are 4, long/ulong/pointer are 8.
 inline int ctBytes(const ConstantType t)
 {
+    if (t == ConstantType::SCHAR || t == ConstantType::UCHAR)
+        return 1;
     return (t == ConstantType::LONG || t == ConstantType::ULONG || t == ConstantType::POINTER) ? 8
                                                                                                : 4;
 }
@@ -23,12 +27,13 @@ inline bool isUnsignedCt(const ConstantType t)
 {
     // Pointers compare as unsigned quantities (an address with the high bit set
     // must order above a low one), so POINTER counts as unsigned here.
-    return t == ConstantType::UINT || t == ConstantType::ULONG || t == ConstantType::POINTER;
+    return t == ConstantType::UINT || t == ConstantType::ULONG || t == ConstantType::POINTER ||
+           t == ConstantType::UCHAR;
 }
 
 inline bool isIntCt(const ConstantType t)
 {
-    return t == ConstantType::INT || t == ConstantType::LONG;
+    return t == ConstantType::INT || t == ConstantType::LONG || t == ConstantType::SCHAR;
 }
 
 inline bool isDouble(const ConstantType t) { return t == ConstantType::DOUBLE; }

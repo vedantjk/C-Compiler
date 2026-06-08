@@ -34,11 +34,19 @@ inline bool isBitwiseOp(const std::string &op)
 
 inline bool isComma(const std::string &op) { return op == ","; }
 
+// The three character types (char, signed char, unsigned char). They are integer
+// types but are promoted to int before taking part in most expressions.
+inline bool isCharacter(const std::shared_ptr<Type> &t)
+{
+    return std::dynamic_pointer_cast<CharType>(t) != nullptr ||
+           std::dynamic_pointer_cast<SignedCharType>(t) != nullptr ||
+           std::dynamic_pointer_cast<UnsignedCharType>(t) != nullptr;
+}
+
 inline bool isInteger(const std::shared_ptr<Type> &t)
 {
     return std::dynamic_pointer_cast<IntType>(t) != nullptr ||
-           std::dynamic_pointer_cast<LongType>(t) != nullptr ||
-           std::dynamic_pointer_cast<CharType>(t) != nullptr ||
+           std::dynamic_pointer_cast<LongType>(t) != nullptr || isCharacter(t) ||
            std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
            std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
 }
@@ -74,14 +82,15 @@ inline bool isScalar(const std::shared_ptr<Type> &t)
 inline bool isUnsigned(const std::shared_ptr<Type> &t)
 {
     return std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
-           std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
+           std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr ||
+           std::dynamic_pointer_cast<UnsignedCharType>(t) != nullptr;
 }
 
 // Width in bytes of a scalar type; 0 for non-scalars. Used for usual-arithmetic
 // conversions, where the wider integer type wins.
 inline int typeSize(const std::shared_ptr<Type> &t)
 {
-    if (std::dynamic_pointer_cast<CharType>(t))
+    if (isCharacter(t))
         return 1;
     if (std::dynamic_pointer_cast<IntType>(t))
         return 4;
@@ -101,9 +110,14 @@ inline int typeSize(const std::shared_ptr<Type> &t)
 // signedness: the unsigned type wins unless the signed type is strictly wider
 // (a wider signed type represents all the unsigned values, so long + unsigned
 // int -> long).
-inline std::shared_ptr<Type> getCommonType(const std::shared_ptr<Type> &a,
-                                           const std::shared_ptr<Type> &b)
+inline std::shared_ptr<Type> getCommonType(const std::shared_ptr<Type> &aIn,
+                                           const std::shared_ptr<Type> &bIn)
 {
+    // Integer promotion: a character operand acts as int in arithmetic, so the
+    // common type is computed over the promoted types (char + char -> int).
+    const std::shared_ptr<Type> a = isCharacter(aIn) ? IntType::getInstance() : aIn;
+    const std::shared_ptr<Type> b = isCharacter(bIn) ? IntType::getInstance() : bIn;
+
     if (a->equals(*b))
         return a;
 
@@ -132,8 +146,10 @@ inline long long reduceToType(long long v, const std::shared_ptr<Type> &t)
         return static_cast<int>(v);
     if (std::dynamic_pointer_cast<UnsignedIntType>(t))
         return static_cast<unsigned int>(v);
-    if (std::dynamic_pointer_cast<CharType>(t))
+    if (std::dynamic_pointer_cast<CharType>(t) || std::dynamic_pointer_cast<SignedCharType>(t))
         return static_cast<signed char>(v);
+    if (std::dynamic_pointer_cast<UnsignedCharType>(t))
+        return static_cast<unsigned char>(v);
     return v;
 }
 
@@ -142,7 +158,7 @@ inline long long sizeOfTypeBytes(const std::shared_ptr<Type> &t)
 {
     if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
         return static_cast<long long>(a->getSize()) * sizeOfTypeBytes(a->getInner());
-    if (std::dynamic_pointer_cast<CharType>(t))
+    if (isCharacter(t))
         return 1;
     if (std::dynamic_pointer_cast<IntType>(t) || std::dynamic_pointer_cast<UnsignedIntType>(t))
         return 4;
@@ -294,6 +310,15 @@ class SemanticAnalyzer
         return cast;
     }
 
+    // Integer promotion of a single operand: a character-typed rvalue is promoted
+    // to int in place (e.g. unary `-`/`~` and shift left operands operate on the
+    // promoted value, so `-uc` is int -1 rather than wrapping in unsigned char).
+    void promote(std::shared_ptr<Expression> &e)
+    {
+        if (isCharacter(e->resolvedType))
+            e = convertTo(e, IntType::getInstance());
+    }
+
     // C's assignment conversions, shared by `=`, initializers, `return`, and call
     // arguments: an rvalue is assignable to a target when the types are equal, both
     // are arithmetic, or the target is a pointer and the rvalue is a null pointer
@@ -394,7 +419,10 @@ class SemanticAnalyzer
             const auto type = CharType::getInstance();
             auto stringType = std::make_shared<ArrayType>(type, size);
             x->resolvedType = stringType;
-            x->isLvalue = false;
+            // A string literal is an array object with static storage, hence an
+            // lvalue (`&"..."` is valid). Assignment to it is still rejected by the
+            // non-modifiable-array rule.
+            x->isLvalue = true;
         }
         else if (auto x = std::dynamic_pointer_cast<AssignExpr>(expr))
         {
@@ -486,14 +514,29 @@ class SemanticAnalyzer
             const bool compoundInPlace = x->op == "+=" || x->op == "-=" || x->op == "*=" ||
                                          x->op == "/=" || x->op == "%=" || x->op == "&=" ||
                                          x->op == "^=" || x->op == "|=";
-            // Pointer compound assignment widens the offset to long (it is scaled by
-            // the element size in TACKY, like ordinary pointer arithmetic); an
-            // arithmetic lhs brings the rhs to its own type so the in-place op runs
-            // at the lhs width.
+            const bool isShift = x->op == "<<=" || x->op == ">>=";
             if (compoundInPlace && isPointer(lType))
+            {
+                // Pointer compound assignment widens the offset to long (it is scaled
+                // by the element size in TACKY, like ordinary pointer arithmetic).
                 x->rhs = convertTo(x->rhs, LongType::getInstance());
+            }
+            else if ((compoundInPlace || isShift) && isCharacter(lType))
+            {
+                // A character lhs promotes to int: the op runs in the promoted/common
+                // type and the result is converted back to char in TACKY. Shifts run
+                // in the promoted lhs type (the count keeps its own type).
+                const auto compute = isShift ? IntType::getInstance() : getCommonType(lType, rType);
+                if (!isShift)
+                    x->rhs = convertTo(x->rhs, compute);
+                x->computeType = compute;
+            }
             else if (compoundInPlace && (isInteger(lType) || isDouble(lType)))
+            {
+                // A non-character arithmetic lhs brings the rhs to its own type so the
+                // in-place op runs at the lhs width.
                 x->rhs = convertTo(x->rhs, lType);
+            }
 
             x->resolvedType = x->lhs->resolvedType;
             x->isLvalue = false;
@@ -718,9 +761,11 @@ class SemanticAnalyzer
                 }
                 else if (x->binaryOp == "<<" || x->binaryOp == ">>")
                 {
-                    // Shift result is the left operand's type; the shift count type
-                    // is independent, so the operands are not brought to a common type.
-                    x->resolvedType = lType;
+                    // Shift result is the (promoted) left operand's type; the shift
+                    // count type is independent, so the operands are not brought to a
+                    // common type. A char left operand promotes to int.
+                    promote(x->left);
+                    x->resolvedType = x->left->resolvedType;
                 }
                 else
                 {
@@ -950,18 +995,20 @@ class SemanticAnalyzer
             if (x->op == "-" || x->op == "+" || x->op == "~")
             {
                 // '~' is integer-only; unary '-'/'+' also accept floating-point.
-                const auto operandType = x->operand->resolvedType;
-                const bool ok = (x->op == "~") ? isInteger(operandType)
-                                               : (isInteger(operandType) || isDouble(operandType));
+                const bool ok = (x->op == "~") ? isInteger(x->operand->resolvedType)
+                                               : (isInteger(x->operand->resolvedType) ||
+                                                  isDouble(x->operand->resolvedType));
                 if (!ok)
                 {
                     error(x->getLine(), x->getCol(),
                           "required " + std::string(x->op == "~" ? "integer" : "arithmetic") +
-                              " operand, received '" + operandType->toString() + "'.");
+                              " operand, received '" + x->operand->resolvedType->toString() + "'.");
                 }
-                // Negation/complement keep the operand's (promoted) type, so `-longVal`
-                // stays long rather than being truncated to int.
-                x->resolvedType = operandType;
+                // Character operands are promoted to int before the op, so `-uc`/`~uc`
+                // can't wrap in char width. Wider types keep their type (`-longVal`
+                // stays long).
+                promote(x->operand);
+                x->resolvedType = x->operand->resolvedType;
                 x->isLvalue = false;
             }
             else if (x->op == "!")
@@ -1553,11 +1600,21 @@ class SemanticAnalyzer
             // The only non-brace initializer an array accepts is a string literal
             // initializing a character array.
             const auto strLit = std::dynamic_pointer_cast<StringLiterals>(init);
-            if (strLit && isInteger(arr->getInner()))
+            if (strLit && isCharacter(arr->getInner()))
             {
+                // init->resolvedType is char[chars+1] (counting the null). The null
+                // may be dropped on an exact fit, so it's the character count that
+                // must not exceed the array length.
                 const auto strArr = std::dynamic_pointer_cast<ArrayType>(init->resolvedType);
-                if (strArr && strArr->getSize() > arr->getSize())
+                if (strArr && strArr->getSize() - 1 > arr->getSize())
                     error(line, col, "string literal too long for " + targetType->toString() + ".");
+                return;
+            }
+            if (strLit)
+            {
+                error(line, col,
+                      "string literal cannot initialize non-character array " +
+                          targetType->toString() + ".");
                 return;
             }
             error(line, col,
@@ -1602,6 +1659,22 @@ class SemanticAnalyzer
             return;
         }
 
+        // A string literal initializing a character array: the raw bytes followed by
+        // a zero tail (which carries the null terminator when there is room for it).
+        if (const auto s = std::dynamic_pointer_cast<StringLiterals>(init))
+        {
+            if (const auto arr = std::dynamic_pointer_cast<ArrayType>(targetType))
+            {
+                const std::string bytes = decodeStringLiteral(s->literal);
+                out.push_back(StaticInit::str(bytes, /*nullTerminated=*/false));
+                const long long pad =
+                    static_cast<long long>(arr->getSize()) - static_cast<long long>(bytes.size());
+                if (pad > 0)
+                    out.push_back(StaticInit::zero(pad));
+                return;
+            }
+        }
+
         if (isDouble(targetType))
         {
             double d;
@@ -1628,7 +1701,10 @@ class SemanticAnalyzer
             v = isUnsigned(targetType) ? static_cast<long long>(static_cast<unsigned long long>(d))
                                        : static_cast<long long>(d);
         v = reduceToType(v, targetType);
-        out.push_back(sizeOfTypeBytes(targetType) == 8 ? StaticInit::i64(v) : StaticInit::i32(v));
+        const long long width = sizeOfTypeBytes(targetType);
+        out.push_back(width == 8   ? StaticInit::i64(v)
+                      : width == 1 ? StaticInit::i8(v)
+                                   : StaticInit::i32(v));
     }
 
     void analyzeVarDecl(const std::shared_ptr<VarDecl> &variable)

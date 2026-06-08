@@ -6,6 +6,7 @@
 #include "../TopLevelNodes/codegenStaticVariable.h"
 #include <algorithm>
 #include <bit>
+#include <cstdio>
 #include <iomanip>
 #include <memory>
 #include <ostream>
@@ -14,6 +15,42 @@
 class codegenASTPrinter
 {
     std::ostream &out;
+
+    // Render raw bytes as a gas string-literal body: printable characters as-is
+    // (with " and \ escaped), everything else as a 3-digit octal escape.
+    static std::string gasStringBody(const std::string &bytes)
+    {
+        std::string out;
+        for (unsigned char b : bytes)
+        {
+            if (b == '"' || b == '\\')
+            {
+                out += '\\';
+                out += static_cast<char>(b);
+            }
+            else if (b >= 32 && b < 127)
+            {
+                out += static_cast<char>(b);
+            }
+            else
+            {
+                char buf[5];
+                std::snprintf(buf, sizeof(buf), "\\%03o", b);
+                out += buf;
+            }
+        }
+        return out;
+    }
+
+    // AT&T operation-size suffix for an integer assembly type.
+    static char suffix(const AssemblyType t)
+    {
+        if (t == AssemblyType::BYTE)
+            return 'b';
+        if (t == AssemblyType::QUADWORD)
+            return 'q';
+        return 'l';
+    }
 
     void visit(const codegenProgram &node) const
     {
@@ -46,6 +83,9 @@ class codegenASTPrinter
         {
             switch (si.kind)
             {
+            case StaticInit::Kind::Char:
+                out << "    .byte " << si.intVal << "\n";
+                break;
             case StaticInit::Kind::Int:
                 out << "    .long " << si.intVal << "\n";
                 break;
@@ -58,6 +98,11 @@ class codegenASTPrinter
                 break;
             case StaticInit::Kind::Zero:
                 out << "    .zero " << si.zeroBytes << "\n";
+                break;
+            case StaticInit::Kind::String:
+                // .asciz appends a null terminator; .ascii does not.
+                out << (si.strNull ? "    .asciz \"" : "    .ascii \"") << gasStringBody(si.strVal)
+                    << "\"\n";
                 break;
             }
         }
@@ -125,7 +170,7 @@ class codegenASTPrinter
         if (node.type == AssemblyType::DOUBLE)
             out << "movsd    ";
         else
-            out << "mov" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+            out << "mov" << suffix(node.type) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -208,7 +253,7 @@ class codegenASTPrinter
 
     void visit(const UnaryInstruction &node) const
     {
-        visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
+        visit(node.op, suffix(node.type));
         out << "    ";
         dispatch(*node.operand);
     }
@@ -223,7 +268,7 @@ class codegenASTPrinter
         if (node.type == AssemblyType::DOUBLE)
             visitDoubleBinaryOp(node.op);
         else
-            visit(node.op, node.type == AssemblyType::QUADWORD ? 'q' : 'l');
+            visit(node.op, suffix(node.type));
         out << "    ";
         dispatch(*node.src);
         out << ", ";
@@ -274,7 +319,7 @@ class codegenASTPrinter
         if (node.type == AssemblyType::DOUBLE)
             out << "ucomisd    ";
         else
-            out << "cmp" << (node.type == AssemblyType::QUADWORD ? 'q' : 'l') << "    ";
+            out << "cmp" << suffix(node.type) << "    ";
         dispatch(*node.a);
         out << ", ";
         dispatch((*node.b));
@@ -297,7 +342,18 @@ class codegenASTPrinter
 
     void visit(const MoveSXInstruction &node) const
     {
-        out << "movslq    ";
+        // movs<src><dst>: e.g. movsbl (byte->long), movsbq (byte->quad),
+        // movslq (long->quad).
+        out << "movs" << suffix(node.srcType) << suffix(node.dstType) << "    ";
+        dispatch(*node.src);
+        out << ", ";
+        dispatch(*node.dst);
+    }
+
+    void visit(const MoveZeroExtendInstruction &node) const
+    {
+        // Only the byte form survives the fixup pass: movzbl / movzbq.
+        out << "movz" << suffix(node.srcType) << suffix(node.dstType) << "    ";
         dispatch(*node.src);
         out << ", ";
         dispatch(*node.dst);
@@ -400,6 +456,10 @@ class codegenASTPrinter
             visit(*p);
         }
         else if (auto *p = dynamic_cast<const MoveSXInstruction *>(&node))
+        {
+            visit(*p);
+        }
+        else if (auto *p = dynamic_cast<const MoveZeroExtendInstruction *>(&node))
         {
             visit(*p);
         }

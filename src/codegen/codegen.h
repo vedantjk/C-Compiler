@@ -56,18 +56,23 @@ class codegenDriver
         return dynamic_cast<const Immediate *>(&op) != nullptr;
     }
 
-    // Assembly width of a TACKY value: long -> 8-byte quadword, else 4-byte longword.
+    // Assembly width of a TACKY value: char -> 1-byte, long/pointer -> 8-byte
+    // quadword, double -> SSE, else 4-byte longword.
     static AssemblyType toAssemblyType(const ConstantType t)
     {
         if (t == ConstantType::DOUBLE)
             return AssemblyType::DOUBLE;
+        if (ctBytes(t) == 1)
+            return AssemblyType::BYTE;
         return ctBytes(t) == 8 ? AssemblyType::QUADWORD : AssemblyType::LONGWORD;
     }
     static AssemblyType assemblyTypeOf(const TackyVal &v) { return toAssemblyType(typeOf(v)); }
     // Register width that matches an assembly type. Quadword and double are both
-    // 8 bytes; longword is 4.
+    // 8 bytes; longword is 4; byte is 1.
     static int bytesOf(const AssemblyType t)
     {
+        if (t == AssemblyType::BYTE)
+            return 1;
         return (t == AssemblyType::QUADWORD || t == AssemblyType::DOUBLE) ? 8 : 4;
     }
 
@@ -445,8 +450,12 @@ class codegenDriver
             }
             else
             {
+                // A sub-quadword arg (longword/byte): move it into AX at its own
+                // width, then push the full 8-byte slot.
+                const AssemblyType at = assemblyTypeOf(tackyArg);
                 instructions.push_back(std::make_unique<MoveInstruction>(
-                    std::move(assemblyArg), std::make_unique<Register>(RegisterName::AX, 4)));
+                    std::move(assemblyArg),
+                    std::make_unique<Register>(RegisterName::AX, bytesOf(at)), at));
                 instructions.push_back(std::make_unique<PushInstruction>(
                     std::make_unique<Register>(RegisterName::AX, 8)));
             }
@@ -491,7 +500,9 @@ class codegenDriver
     {
         auto src = tackyValToOperand(tackySignExtend.src);
         auto dst = tackyValToOperand(tackySignExtend.dst);
-        instructions.push_back(std::make_unique<MoveSXInstruction>(std::move(src), std::move(dst)));
+        instructions.push_back(std::make_unique<MoveSXInstruction>(
+            std::move(src), std::move(dst), assemblyTypeOf(tackySignExtend.src),
+            assemblyTypeOf(tackySignExtend.dst)));
     }
 
     void processTackyZeroExtend(const TackyZeroExtend &tackyZeroExtend,
@@ -499,18 +510,20 @@ class codegenDriver
     {
         auto src = tackyValToOperand(tackyZeroExtend.src);
         auto dst = tackyValToOperand(tackyZeroExtend.dst);
-        instructions.push_back(
-            std::make_unique<MoveZeroExtendInstruction>(std::move(src), std::move(dst)));
+        instructions.push_back(std::make_unique<MoveZeroExtendInstruction>(
+            std::move(src), std::move(dst), assemblyTypeOf(tackyZeroExtend.src),
+            assemblyTypeOf(tackyZeroExtend.dst)));
     }
 
     void processTackyTruncate(const TackyTruncate &tackyTruncate,
                               std::vector<std::unique_ptr<Instruction>> &instructions)
     {
-        // Truncation is a plain 4-byte move: it keeps the low 32 bits of the source.
+        // Truncation keeps the low bytes of the source: a plain move at the
+        // destination's width (4 bytes for long->int, 1 byte for int->char).
         auto src = tackyValToOperand(tackyTruncate.src);
         auto dst = tackyValToOperand(tackyTruncate.dst);
-        instructions.push_back(std::make_unique<MoveInstruction>(std::move(src), std::move(dst),
-                                                                 AssemblyType::LONGWORD));
+        instructions.push_back(std::make_unique<MoveInstruction>(
+            std::move(src), std::move(dst), assemblyTypeOf(tackyTruncate.dst)));
     }
 
     void processTackyIntToDouble(const TackyIntToDouble &tackyIntToDouble,
@@ -880,6 +893,10 @@ class codegenDriver
                 used += (8 - used % 8) % 8; // align the slot to 8 bytes
                 used += 8;
             }
+            else if (type == AssemblyType::BYTE)
+            {
+                used += 1;
+            }
             else
             {
                 used += 4;
@@ -1042,46 +1059,73 @@ class codegenDriver
             }
             else if (auto *m = dynamic_cast<MoveSXInstruction *>(instr.get()))
             {
-                // movslq needs a non-immediate source and a register destination.
+                // movsx needs a non-immediate source and a register destination.
+                const AssemblyType st = m->srcType, dt = m->dstType;
                 auto src = std::move(m->src);
                 auto dst = std::move(m->dst);
                 if (isImmediate(*src))
                 {
                     rewritten.push_back(std::make_unique<MoveInstruction>(
-                        std::move(src), reg(RegisterName::R10, 4), AssemblyType::LONGWORD));
-                    src = reg(RegisterName::R10, 4);
+                        std::move(src), reg(RegisterName::R10, bytesOf(st)), st));
+                    src = reg(RegisterName::R10, bytesOf(st));
                 }
                 if (isMemory(*dst))
                 {
                     rewritten.push_back(std::make_unique<MoveSXInstruction>(
-                        std::move(src), reg(RegisterName::R11, 8)));
+                        std::move(src), reg(RegisterName::R11, bytesOf(dt)), st, dt));
                     rewritten.push_back(std::make_unique<MoveInstruction>(
-                        reg(RegisterName::R11, 8), std::move(dst), AssemblyType::QUADWORD));
+                        reg(RegisterName::R11, bytesOf(dt)), std::move(dst), dt));
                 }
                 else
                 {
-                    rewritten.push_back(
-                        std::make_unique<MoveSXInstruction>(std::move(src), std::move(dst)));
+                    rewritten.push_back(std::make_unique<MoveSXInstruction>(
+                        std::move(src), std::move(dst), st, dt));
                 }
             }
             else if (auto *m = dynamic_cast<MoveZeroExtendInstruction *>(instr.get()))
             {
-                // No movzlq exists: zero-extending 32->64 is a plain 32-bit mov,
-                // which clears the upper half of a register destination. A memory
-                // destination can't auto-zero its upper word, so route through R11.
+                const AssemblyType st = m->srcType, dt = m->dstType;
                 auto src = std::move(m->src);
                 auto dst = std::move(m->dst);
-                if (isMemory(*dst))
+                if (st == AssemblyType::BYTE)
                 {
-                    rewritten.push_back(std::make_unique<MoveInstruction>(
-                        std::move(src), reg(RegisterName::R11, 4), AssemblyType::LONGWORD));
-                    rewritten.push_back(std::make_unique<MoveInstruction>(
-                        reg(RegisterName::R11, 8), std::move(dst), AssemblyType::QUADWORD));
+                    // movzbl/movzbq: source reg/mem (not immediate), register dest.
+                    if (isImmediate(*src))
+                    {
+                        rewritten.push_back(std::make_unique<MoveInstruction>(
+                            std::move(src), reg(RegisterName::R10, 1), AssemblyType::BYTE));
+                        src = reg(RegisterName::R10, 1);
+                    }
+                    if (isMemory(*dst))
+                    {
+                        rewritten.push_back(std::make_unique<MoveZeroExtendInstruction>(
+                            std::move(src), reg(RegisterName::R11, bytesOf(dt)), st, dt));
+                        rewritten.push_back(std::make_unique<MoveInstruction>(
+                            reg(RegisterName::R11, bytesOf(dt)), std::move(dst), dt));
+                    }
+                    else
+                    {
+                        rewritten.push_back(std::make_unique<MoveZeroExtendInstruction>(
+                            std::move(src), std::move(dst), st, dt));
+                    }
                 }
                 else
                 {
-                    rewritten.push_back(std::make_unique<MoveInstruction>(
-                        std::move(src), std::move(dst), AssemblyType::LONGWORD));
+                    // No movzlq exists: zero-extending 32->64 is a plain 32-bit mov,
+                    // which clears the upper half of a register destination. A memory
+                    // destination can't auto-zero its upper word, so route through R11.
+                    if (isMemory(*dst))
+                    {
+                        rewritten.push_back(std::make_unique<MoveInstruction>(
+                            std::move(src), reg(RegisterName::R11, 4), AssemblyType::LONGWORD));
+                        rewritten.push_back(std::make_unique<MoveInstruction>(
+                            reg(RegisterName::R11, 8), std::move(dst), AssemblyType::QUADWORD));
+                    }
+                    else
+                    {
+                        rewritten.push_back(std::make_unique<MoveInstruction>(
+                            std::move(src), std::move(dst), AssemblyType::LONGWORD));
+                    }
                 }
             }
             else if (auto *m = dynamic_cast<IDivInstruction *>(instr.get());

@@ -9,20 +9,93 @@ struct StaticInit
 {
     enum class Kind
     {
+        Char,   // 1-byte integer
         Int,    // 4-byte integer
         Long,   // 8-byte integer (also pointers)
         Double, // 8-byte IEEE double
-        Zero    // `zeroBytes` bytes of zero
+        Zero,   // `zeroBytes` bytes of zero
+        String  // raw bytes of a string literal (`strNull` adds a trailing null)
     } kind;
     long long intVal = 0;
     double dblVal = 0.0;
     long long zeroBytes = 0;
+    std::string strVal;
+    bool strNull = false;
 
+    static StaticInit i8(long long v) { return {Kind::Char, v, 0.0, 0}; }
     static StaticInit i32(long long v) { return {Kind::Int, v, 0.0, 0}; }
     static StaticInit i64(long long v) { return {Kind::Long, v, 0.0, 0}; }
     static StaticInit dbl(double d) { return {Kind::Double, 0, d, 0}; }
     static StaticInit zero(long long n) { return {Kind::Zero, 0, 0.0, n}; }
+    static StaticInit str(std::string bytes, bool nullTerminated)
+    {
+        StaticInit s{Kind::String, 0, 0.0, 0};
+        s.strVal = std::move(bytes);
+        s.strNull = nullTerminated;
+        return s;
+    }
 };
+
+// Decode a string-literal lexeme (surrounding quotes included, C escape sequences
+// intact) into its raw bytes. Shared by semantic analysis (static images) and the
+// TACKY/codegen string handling.
+inline std::string decodeStringLiteral(const std::string &lit)
+{
+    std::string out;
+    for (size_t i = 1; i + 1 < lit.size(); ++i)
+    {
+        char c = lit[i];
+        if (c != '\\')
+        {
+            out += c;
+            continue;
+        }
+        char e = lit[++i];
+        switch (e)
+        {
+        case 'n':
+            out += '\n';
+            break;
+        case 't':
+            out += '\t';
+            break;
+        case 'r':
+            out += '\r';
+            break;
+        case 'a':
+            out += '\a';
+            break;
+        case 'b':
+            out += '\b';
+            break;
+        case 'f':
+            out += '\f';
+            break;
+        case 'v':
+            out += '\v';
+            break;
+        case '\\':
+            out += '\\';
+            break;
+        case '\'':
+            out += '\'';
+            break;
+        case '"':
+            out += '"';
+            break;
+        case '?':
+            out += '\?';
+            break;
+        case '0':
+            out += '\0';
+            break;
+        default:
+            out += e;
+            break;
+        }
+    }
+    return out;
+}
 
 class Type
 {
@@ -124,6 +197,38 @@ class CharType : public Type
     }
 
     [[nodiscard]] std::string toString() const override { return "char"; }
+
+    [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+};
+
+class SignedCharType : public Type
+{
+    SignedCharType() = default;
+
+  public:
+    static std::shared_ptr<Type> getInstance()
+    {
+        static std::shared_ptr<Type> instance(new SignedCharType());
+        return instance;
+    }
+
+    [[nodiscard]] std::string toString() const override { return "signed char"; }
+
+    [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
+};
+
+class UnsignedCharType : public Type
+{
+    UnsignedCharType() = default;
+
+  public:
+    static std::shared_ptr<Type> getInstance()
+    {
+        static std::shared_ptr<Type> instance(new UnsignedCharType());
+        return instance;
+    }
+
+    [[nodiscard]] std::string toString() const override { return "unsigned char"; }
 
     [[nodiscard]] bool equals(const Type &other) const override { return this == &other; }
 };

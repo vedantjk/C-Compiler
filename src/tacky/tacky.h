@@ -2,6 +2,7 @@
 #include "../ast/ASTNodes/Program.h"
 #include "../ast/Expressions/BinaryExpr.h"
 #include "../ast/Expressions/IntLiterals.h"
+#include "../ast/Expressions/StringLiterals.h"
 #include "../ast/Expressions/SubscriptExpr.h"
 #include "../ast/Expressions/UnaryExpr.h"
 #include "../ast/Statements/BlockStmt.h"
@@ -35,13 +36,20 @@ class TackyDriver
             return ConstantType::DOUBLE;
         if (std::dynamic_pointer_cast<PointerType>(literalType))
             return ConstantType::POINTER;
+        // char / signed char are signed 1-byte; unsigned char is unsigned 1-byte.
+        if (std::dynamic_pointer_cast<UnsignedCharType>(literalType))
+            return ConstantType::UCHAR;
+        if (std::dynamic_pointer_cast<CharType>(literalType) ||
+            std::dynamic_pointer_cast<SignedCharType>(literalType))
+            return ConstantType::SCHAR;
         return ConstantType::INT;
     }
 
     static bool isUnsignedType(const std::shared_ptr<Type> &t)
     {
         return std::dynamic_pointer_cast<UnsignedIntType>(t) != nullptr ||
-               std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr;
+               std::dynamic_pointer_cast<UnsignedLongType>(t) != nullptr ||
+               std::dynamic_pointer_cast<UnsignedCharType>(t) != nullptr;
     }
 
     static bool isPtrType(const std::shared_ptr<Type> &t)
@@ -56,7 +64,9 @@ class TackyDriver
     {
         if (const auto a = std::dynamic_pointer_cast<ArrayType>(t))
             return static_cast<long long>(a->getSize()) * sizeOfType(a->getInner());
-        if (std::dynamic_pointer_cast<CharType>(t))
+        if (std::dynamic_pointer_cast<CharType>(t) ||
+            std::dynamic_pointer_cast<SignedCharType>(t) ||
+            std::dynamic_pointer_cast<UnsignedCharType>(t))
             return 1;
         if (std::dynamic_pointer_cast<IntType>(t) || std::dynamic_pointer_cast<UnsignedIntType>(t))
             return 4;
@@ -92,10 +102,34 @@ class TackyDriver
     std::unordered_map<std::string, int> tempCounters;
     std::set<Symbol *> seenVarDecls;
     std::unordered_map<std::string, ArrayObject> arrayObjects;
+
+    // Anonymous read-only constants for string literals used as values. Each gets a
+    // label, its decoded bytes, and an alignment; emitted as null-terminated data.
+    struct StringConstant
+    {
+        std::string label;
+        std::string bytes;
+        int align;
+    };
+    std::vector<StringConstant> stringConstants;
+    int stringCounter = 0;
+
     std::string makeTemp(const std::string &&name)
     {
         tempCounters[name]++;
         return "." + name + std::to_string(tempCounters[name]);
+    }
+
+    // Intern a string literal as a static constant and return a value referring to
+    // that object (by label). Taking its address (`&`/decay) yields a char*.
+    TackyVal internStringLiteral(const std::shared_ptr<StringLiterals> &s)
+    {
+        const std::string bytes = decodeStringLiteral(s->literal);
+        const std::string label = makeTemp("Lstr.");
+        const long long n = static_cast<long long>(bytes.size()) + 1; // + null terminator
+        const int align = n >= 16 ? 16 : 1;
+        stringConstants.push_back({label, bytes, align});
+        return TackyVar(label, ConstantType::POINTER);
     }
 
     // Element address ptrExpr +/- index*elementSize, the shared core of pointer
@@ -136,6 +170,10 @@ class TackyDriver
             return DereferencedPointer{processExpression(u->operand, instructions)};
         if (auto sub = std::dynamic_pointer_cast<SubscriptExpr>(e))
             return DereferencedPointer{subscriptAddress(sub, instructions)};
+        // A string literal is an array object; its lvalue is the interned constant,
+        // so `&"..."` becomes GetAddress of that constant's label.
+        if (auto s = std::dynamic_pointer_cast<StringLiterals>(e))
+            return internStringLiteral(s);
         // plain variable (or anything else that's a simple operand)
         return processExpression(e, instructions);
     }
@@ -410,14 +448,33 @@ class TackyDriver
         auto lhs = processLvalue(assignExpr->lhs, instructions);
         auto rhs = processExpression(assignExpr->rhs, instructions);
 
+        const auto lhsType = assignExpr->lhs->resolvedType;
+
         if (auto *v = std::get_if<TackyVal>(&lhs))
         {
             if (assignExpr->op != "=")
             {
                 BinaryOp op = stringToBinaryOp(assignExpr->op);
-                TackyVal delta = compoundDelta(assignExpr->lhs->resolvedType, assignExpr->op, rhs,
-                                               line, col, instructions);
-                instructions.push_back(std::make_unique<TackyBinary>(line, col, op, *v, delta, *v));
+                if (assignExpr->computeType)
+                {
+                    // Character lhs: promote to the computation type, do the op, then
+                    // convert the result back to the (narrow) lhs type.
+                    TackyVal lhsC =
+                        convertValue(*v, lhsType, assignExpr->computeType, line, col, instructions);
+                    TackyVar res{makeTemp("tmp."), returnConstantType(assignExpr->computeType)};
+                    instructions.push_back(
+                        std::make_unique<TackyBinary>(line, col, op, lhsC, rhs, res));
+                    TackyVal back = convertValue(res, assignExpr->computeType, lhsType, line, col,
+                                                 instructions);
+                    instructions.push_back(std::make_unique<TackyCopy>(line, col, back, *v));
+                }
+                else
+                {
+                    TackyVal delta =
+                        compoundDelta(lhsType, assignExpr->op, rhs, line, col, instructions);
+                    instructions.push_back(
+                        std::make_unique<TackyBinary>(line, col, op, *v, delta, *v));
+                }
             }
             else
             {
@@ -431,16 +488,30 @@ class TackyDriver
             if (assignExpr->op != "=")
             {
                 // *p OP= rhs  ->  load *p, combine, store back
-                ConstantType ct = returnConstantType(assignExpr->lhs->resolvedType); // type of *p
+                ConstantType ct = returnConstantType(lhsType); // type of *p
                 TackyVar cur{makeTemp("tmp."), ct};
                 instructions.push_back(std::make_unique<TackyLoad>(line, col, v->ptr, cur));
-                TackyVar res{makeTemp("tmp."), ct};
                 BinaryOp op = stringToBinaryOp(assignExpr->op);
-                TackyVal delta = compoundDelta(assignExpr->lhs->resolvedType, assignExpr->op, rhs,
-                                               line, col, instructions);
-                instructions.push_back(
-                    std::make_unique<TackyBinary>(line, col, op, cur, delta, res));
-                stored = res;
+                if (assignExpr->computeType)
+                {
+                    // Character lvalue: promote, operate, convert back to char.
+                    TackyVal lhsC = convertValue(cur, lhsType, assignExpr->computeType, line, col,
+                                                 instructions);
+                    TackyVar res{makeTemp("tmp."), returnConstantType(assignExpr->computeType)};
+                    instructions.push_back(
+                        std::make_unique<TackyBinary>(line, col, op, lhsC, rhs, res));
+                    stored = convertValue(res, assignExpr->computeType, lhsType, line, col,
+                                          instructions);
+                }
+                else
+                {
+                    TackyVar res{makeTemp("tmp."), ct};
+                    TackyVal delta =
+                        compoundDelta(lhsType, assignExpr->op, rhs, line, col, instructions);
+                    instructions.push_back(
+                        std::make_unique<TackyBinary>(line, col, op, cur, delta, res));
+                    stored = res;
+                }
             }
             instructions.push_back(std::make_unique<TackyStore>(line, col, stored, v->ptr));
             return stored;
@@ -487,41 +558,64 @@ class TackyDriver
         return dst;
     }
 
-    TackyVal processCastExpr(const std::shared_ptr<CastExpr> &castExpr,
-                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    // Convert an already-computed value from srcType to dstType, emitting the
+    // needed extend/truncate/SSE-conversion. Shared by explicit casts and the
+    // promote-compute-truncate of character compound assignment.
+    TackyVal convertValue(TackyVal result, const std::shared_ptr<Type> &srcType,
+                          const std::shared_ptr<Type> &dstType, int line, int col,
+                          std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
-        auto result = processExpression(castExpr->operand, instructions);
-        const auto &srcType = castExpr->operand->resolvedType;
-        const auto &dstType = castExpr->type;
-
         const ConstantType srcCt = returnConstantType(srcType);
         const ConstantType dstCt = returnConstantType(dstType);
+
+        // char <-> double has no direct SSE form (cvtsi2sd/cvttsd2si take no byte
+        // operand), so route through a 4-byte int: char -> int -> double, or
+        // double -> int -> char.
+        if (ctBytes(srcCt) == 1 && isDouble(dstCt))
+        {
+            TackyVar intTmp{makeTemp("tmp."), ConstantType::INT};
+            if (isUnsignedType(srcType))
+                instructions.push_back(
+                    std::make_unique<TackyZeroExtend>(line, col, result, intTmp));
+            else
+                instructions.push_back(
+                    std::make_unique<TackySignExtend>(line, col, result, intTmp));
+            TackyVar dbl{makeTemp("tmp."), dstCt};
+            instructions.push_back(std::make_unique<TackyIntToDouble>(line, col, intTmp, dbl));
+            return dbl;
+        }
+        if (isDouble(srcCt) && ctBytes(dstCt) == 1)
+        {
+            TackyVar intTmp{makeTemp("tmp."), ConstantType::INT};
+            instructions.push_back(std::make_unique<TackyDoubleToInt>(line, col, result, intTmp));
+            TackyVar ch{makeTemp("tmp."), dstCt};
+            instructions.push_back(std::make_unique<TackyTruncate>(line, col, intTmp, ch));
+            return ch;
+        }
+
         if (isDouble(srcCt) && isIntCt(dstCt))
         {
             TackyVar intDst{makeTemp("tmp."), dstCt};
-            instructions.push_back(
-                std::make_unique<TackyDoubleToInt>(castExpr->line, castExpr->col, result, intDst));
+            instructions.push_back(std::make_unique<TackyDoubleToInt>(line, col, result, intDst));
             return intDst;
         }
         if (isDouble(srcCt) && isUnsignedCt(dstCt))
         {
             TackyVar uIntDst{makeTemp("tmp."), dstCt};
-            instructions.push_back(std::make_unique<TackyDoubleToUInt>(
-                castExpr->line, castExpr->col, result, uIntDst));
+            instructions.push_back(std::make_unique<TackyDoubleToUInt>(line, col, result, uIntDst));
             return uIntDst;
         }
         if (isIntCt(srcCt) && isDouble(dstCt))
         {
             TackyVar doubleCt{makeTemp("tmp."), dstCt};
-            instructions.push_back(std::make_unique<TackyIntToDouble>(castExpr->line, castExpr->col,
-                                                                      result, doubleCt));
+            instructions.push_back(std::make_unique<TackyIntToDouble>(line, col, result, doubleCt));
             return doubleCt;
         }
         if (isUnsignedCt(srcCt) && isDouble(dstCt))
         {
             TackyVar doubleCt{makeTemp("tmp."), dstCt};
-            instructions.push_back(std::make_unique<TackyUIntToDouble>(
-                castExpr->line, castExpr->col, result, doubleCt));
+            instructions.push_back(
+                std::make_unique<TackyUIntToDouble>(line, col, result, doubleCt));
             return doubleCt;
         }
 
@@ -534,8 +628,7 @@ class TackyDriver
             if (srcCt == dstCt)
                 return result;
             TackyVar sameWidthDst{makeTemp("tmp."), dstCt};
-            instructions.push_back(
-                std::make_unique<TackyCopy>(castExpr->line, castExpr->col, result, sameWidthDst));
+            instructions.push_back(std::make_unique<TackyCopy>(line, col, result, sameWidthDst));
             return sameWidthDst;
         }
 
@@ -543,23 +636,28 @@ class TackyDriver
 
         if (ctBytes(dstCt) < ctBytes(srcCt))
         {
-            // Narrowing 8 -> 4: keep the low 32 bits.
-            instructions.push_back(
-                std::make_unique<TackyTruncate>(castExpr->line, castExpr->col, result, dst));
+            // Narrowing: keep the low bytes.
+            instructions.push_back(std::make_unique<TackyTruncate>(line, col, result, dst));
         }
         else if (isUnsignedType(srcType))
         {
             // Widening from an unsigned source: zero-fill the upper bits.
-            instructions.push_back(
-                std::make_unique<TackyZeroExtend>(castExpr->line, castExpr->col, result, dst));
+            instructions.push_back(std::make_unique<TackyZeroExtend>(line, col, result, dst));
         }
         else
         {
             // Widening from a signed source: replicate the sign bit.
-            instructions.push_back(
-                std::make_unique<TackySignExtend>(castExpr->line, castExpr->col, result, dst));
+            instructions.push_back(std::make_unique<TackySignExtend>(line, col, result, dst));
         }
         return dst;
+    }
+
+    TackyVal processCastExpr(const std::shared_ptr<CastExpr> &castExpr,
+                             std::vector<std::unique_ptr<TackyInstruction>> &instructions)
+    {
+        auto result = processExpression(castExpr->operand, instructions);
+        return convertValue(result, castExpr->operand->resolvedType, castExpr->type, castExpr->line,
+                            castExpr->col, instructions);
     }
 
     TackyVal processExpression(const std::shared_ptr<Expression> &expression,
@@ -609,6 +707,15 @@ class TackyDriver
             instructions.push_back(std::make_unique<TackyLoad>(p->line, p->col, addr, dst));
             return dst;
         }
+        if (const auto &p = std::dynamic_pointer_cast<StringLiterals>(expression))
+        {
+            // A string used directly as a value decays to a pointer to its first
+            // byte: take the address of the interned constant.
+            auto obj = internStringLiteral(p);
+            TackyVar dst{makeTemp("tmp."), ConstantType::POINTER};
+            instructions.push_back(std::make_unique<TackyGetAddress>(p->line, p->col, obj, dst));
+            return dst;
+        }
         throw std::runtime_error("TackyDriver::processExpression: unhandled expression kind");
     }
 
@@ -619,9 +726,8 @@ class TackyDriver
                         returnConstantType(varDecl->type));
     }
 
-    // Zero `nbytes` of object `dst` starting at `offset`, in quadword then longword
-    // chunks. Array element widths in this chapter are 4 or 8, so gaps are always a
-    // multiple of 4 (sub-4 char fills arrive with the strings chapter).
+    // Zero `nbytes` of object `dst` starting at `offset`, in quadword, longword,
+    // then byte chunks (char arrays leave sub-4 tails).
     void emitZeroFill(const std::string &dst, long long offset, long long nbytes, int line, int col,
                       std::vector<std::unique_ptr<TackyInstruction>> &instructions)
     {
@@ -638,6 +744,13 @@ class TackyDriver
                 line, col, TackyConstant(0, ConstantType::INT), dst, static_cast<int>(offset)));
             offset += 4;
             nbytes -= 4;
+        }
+        while (nbytes >= 1)
+        {
+            instructions.push_back(std::make_unique<TackyCopyToOffset>(
+                line, col, TackyConstant(0, ConstantType::SCHAR), dst, static_cast<int>(offset)));
+            offset += 1;
+            nbytes -= 1;
         }
     }
 
@@ -662,6 +775,27 @@ class TackyDriver
             emitZeroFill(dst, offset + written, total - written, init->getLine(), init->getCol(),
                          instructions);
             return;
+        }
+
+        // A string literal initializing a character array: copy each byte into the
+        // object, then zero-fill the tail (which supplies the null terminator when
+        // the array has room for it).
+        if (const auto s = std::dynamic_pointer_cast<StringLiterals>(init))
+        {
+            if (std::dynamic_pointer_cast<ArrayType>(targetType))
+            {
+                const std::string bytes = decodeStringLiteral(s->literal);
+                for (size_t i = 0; i < bytes.size(); ++i)
+                    instructions.push_back(std::make_unique<TackyCopyToOffset>(
+                        s->getLine(), s->getCol(),
+                        TackyConstant(static_cast<unsigned char>(bytes[i]), ConstantType::SCHAR),
+                        dst, static_cast<int>(offset + static_cast<long long>(i))));
+                const long long total = sizeOfType(targetType);
+                emitZeroFill(dst, offset + static_cast<long long>(bytes.size()),
+                             total - static_cast<long long>(bytes.size()), s->getLine(),
+                             s->getCol(), instructions);
+                return;
+            }
         }
 
         auto val = processExpression(init, instructions);
@@ -939,11 +1073,23 @@ class TackyDriver
                 symbol->line, symbol->column, symbol->uniqueName,
                 symbol->linkage == Linkage::External, std::move(inits), alignOfType(symbol->type)));
         }
+        // Emit interned string literals as null-terminated static constants.
+        for (const auto &sc : stringConstants)
+        {
+            std::vector<StaticInit> inits{StaticInit::str(sc.bytes, /*nullTerminated=*/true)};
+            nodes.push_back(std::make_unique<TackyStaticVariable>(prog->line, prog->col, sc.label,
+                                                                  /*global=*/false,
+                                                                  std::move(inits), sc.align));
+        }
+
         auto program = std::make_unique<TackyProgram>(prog->line, prog->col, std::move(nodes));
         // Record every static-storage name (incl. extern-only declarations) so
         // codegen resolves their references to RIP-relative data, not stack slots.
         for (const auto &symbol : seenVarDecls)
             program->staticNames.insert(symbol->uniqueName);
+        // String-constant labels are static data too: references lower to RIP data.
+        for (const auto &sc : stringConstants)
+            program->staticNames.insert(sc.label);
         program->arrayObjects = std::move(arrayObjects);
         return program;
     }

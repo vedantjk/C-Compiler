@@ -45,6 +45,7 @@ enum class CondCode
 
 enum class AssemblyType
 {
+    BYTE,
     LONGWORD,
     QUADWORD,
     DOUBLE

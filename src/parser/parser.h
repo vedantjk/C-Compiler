@@ -222,6 +222,72 @@ class Parser
                type == RIGHT_ASSIGN;
     }
 
+    // A CONSTANT token whose lexeme opens with a single quote is a character
+    // constant ('a', '\n', ...) rather than a numeric constant.
+    static bool isCharConstantLexeme(const std::string &lex)
+    {
+        return !lex.empty() && lex.front() == '\'';
+    }
+
+    // Decode a character-constant lexeme (quotes included) to its value. A
+    // character constant has type int, and plain char is signed on this target,
+    // so the byte is sign-extended (e.g. '\xff' would be -1).
+    static int decodeCharConstant(const std::string &lex)
+    {
+        const std::string body = lex.substr(1, lex.size() - 2);
+        unsigned char value;
+        if (body.size() >= 2 && body[0] == '\\')
+        {
+            switch (body[1])
+            {
+            case 'n':
+                value = '\n';
+                break;
+            case 't':
+                value = '\t';
+                break;
+            case 'r':
+                value = '\r';
+                break;
+            case 'a':
+                value = '\a';
+                break;
+            case 'b':
+                value = '\b';
+                break;
+            case 'f':
+                value = '\f';
+                break;
+            case 'v':
+                value = '\v';
+                break;
+            case '\\':
+                value = '\\';
+                break;
+            case '\'':
+                value = '\'';
+                break;
+            case '"':
+                value = '"';
+                break;
+            case '?':
+                value = '\?';
+                break;
+            case '0':
+                value = '\0';
+                break;
+            default:
+                value = static_cast<unsigned char>(body[1]);
+                break;
+            }
+        }
+        else
+        {
+            value = static_cast<unsigned char>(body[0]);
+        }
+        return static_cast<int>(static_cast<signed char>(value));
+    }
+
     // ============================================================
     // Type / declarator parsing — base types and declarator chains
     // ============================================================
@@ -242,15 +308,27 @@ class Parser
         if (has(SIGNED) && has(UNSIGNED))
             return invalid();
 
-        // void / char / struct are standalone: they combine with nothing else.
-        if (has(VOID) || has(CHAR) || has(STRUCT))
+        // char is the only integer base that combines with signed/unsigned but
+        // nothing else: `char`, `signed char`, `unsigned char` are three distinct
+        // types and char cannot mix with int/long/double/void/struct.
+        if (has(CHAR))
+        {
+            if (has(VOID) || has(STRUCT) || has(INT) || has(LONG) || has(DOUBLE))
+                return invalid();
+            if (has(SIGNED))
+                return SignedCharType::getInstance();
+            if (has(UNSIGNED))
+                return UnsignedCharType::getInstance();
+            return CharType::getInstance();
+        }
+
+        // void / struct are standalone: they combine with nothing else.
+        if (has(VOID) || has(STRUCT))
         {
             if (specs.size() != 1)
                 return invalid();
             if (has(VOID))
                 return VoidType::getInstance();
-            if (has(CHAR))
-                return CharType::getInstance();
             return std::make_shared<StructType>(structName->lexeme);
         }
 
@@ -372,7 +450,10 @@ class Parser
             consume();
             Token sz = expect(CONSTANT);
             expect(RIGHT_BRACKET);
-            node = std::make_shared<ArrayDeclarator>(std::move(node), std::stoull(sz.lexeme));
+            const size_t dim = isCharConstantLexeme(sz.lexeme)
+                                   ? static_cast<size_t>(decodeCharConstant(sz.lexeme))
+                                   : std::stoull(sz.lexeme);
+            node = std::make_shared<ArrayDeclarator>(std::move(node), dim);
         }
         return node;
     }
@@ -584,7 +665,17 @@ class Parser
     std::shared_ptr<Expression> parseFactor()
     {
         std::shared_ptr<Expression> node;
-        if (peek() == CONSTANT)
+        if (peek() == CONSTANT && isCharConstantLexeme(curToken().lexeme))
+        {
+            // A character constant has type int and its value is the decoded byte.
+            Token constant = consume();
+            const int value = decodeCharConstant(constant.lexeme);
+            node = std::make_shared<IntLiterals>(
+                constant.line, constant.col,
+                static_cast<unsigned long long>(static_cast<long long>(value)),
+                IntType::getInstance());
+        }
+        else if (peek() == CONSTANT)
         {
             Token constant = consume();
             const std::string &lex = constant.lexeme;

@@ -153,22 +153,33 @@ class CallInstruction : public Instruction
     explicit CallInstruction(std::string identifier_) : identifier(std::move(identifier_)) {}
 };
 
+// Sign-extend src into dst. srcType/dstType give the widths so the emitter picks
+// the right mnemonic (movsbl byte->long, movsbq byte->quad, movslq long->quad).
 class MoveSXInstruction : public Instruction
 {
   public:
     std::unique_ptr<Operand> src, dst;
-    MoveSXInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_)
-        : src(std::move(src_)), dst(std::move(dst_))
+    AssemblyType srcType, dstType;
+    MoveSXInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_,
+                      const AssemblyType srcType_ = AssemblyType::LONGWORD,
+                      const AssemblyType dstType_ = AssemblyType::QUADWORD)
+        : src(std::move(src_)), dst(std::move(dst_)), srcType(srcType_), dstType(dstType_)
     {
     }
 };
 
+// Zero-extend src into dst. A byte source uses a real movzbl/movzbq; a longword
+// source is lowered to a plain mov (a 32-bit write clears the upper half) by the
+// fixup pass, so the emitter only ever sees the byte form.
 class MoveZeroExtendInstruction : public Instruction
 {
   public:
     std::unique_ptr<Operand> src, dst;
-    MoveZeroExtendInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_)
-        : src(std::move(src_)), dst(std::move(dst_))
+    AssemblyType srcType, dstType;
+    MoveZeroExtendInstruction(std::unique_ptr<Operand> src_, std::unique_ptr<Operand> dst_,
+                              const AssemblyType srcType_ = AssemblyType::LONGWORD,
+                              const AssemblyType dstType_ = AssemblyType::QUADWORD)
+        : src(std::move(src_)), dst(std::move(dst_)), srcType(srcType_), dstType(dstType_)
     {
     }
 };
