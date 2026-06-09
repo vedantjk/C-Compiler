@@ -18,13 +18,16 @@ class codegenDriver
 {
     const ABI &abi_;
 
-    // Names of all static-storage variables (file-scope, block static, extern),
-    // supplied by TACKY. Their pseudos lower to RIP-relative Data, not stack slots.
-    std::unordered_set<std::string> staticNames;
-    // Array objects (by name) that need a sized, aligned stack slot; supplied by TACKY.
-    std::unordered_map<std::string, ArrayObject> arrayObjects;
-    // Struct objects (by name): sized/aligned slot plus System V classification.
-    std::unordered_map<std::string, StructABI> structObjects;
+    // Per-name object facts recovered from self-typed operands at the start of the
+    // stack-slot pass: whether the name is static (RIP-relative) and, for an
+    // aggregate, the data needed to size and align its slot. Built fresh per function.
+    struct ObjInfo
+    {
+        bool isStatic = false;
+        long long objSize = 0; // array byte size; 0 unless an array
+        int objAlign = 0;      // array alignment
+        std::string structTag; // non-empty => struct (classified on demand)
+    };
 
     int constCounter = 0;
     std::map<std::pair<uint64_t, int>, std::string> constLabels;
@@ -168,10 +171,12 @@ class codegenDriver
     {
         const TackyVar *structVal =
             tackyReturn.val ? std::get_if<TackyVar>(&*tackyReturn.val) : nullptr;
-        if (structVal && structObjects.count(structVal->name))
+        if (structVal && !structVal->structTag.empty())
         {
-            const StructABI &abi = structObjects[structVal->name];
+            const StructABI abi = classifyStruct(structVal->structTag);
             const std::string &name = structVal->name;
+            const std::string &tag = structVal->structTag;
+            const bool tagStatic = structVal->isStatic;
             if (abi.inMemory)
             {
                 // Copy the struct into the caller's space (the saved hidden pointer),
@@ -186,7 +191,7 @@ class codegenDriver
                     while (size - off >= w)
                     {
                         instructions.push_back(std::make_unique<MoveInstruction>(
-                            std::make_unique<PseudoMem>(name, static_cast<int>(off), t),
+                            aggMem(name, static_cast<int>(off), t, tag, tagStatic),
                             std::make_unique<Register>(RegisterName::R10, bytesOf(t)), t));
                         instructions.push_back(std::make_unique<MoveInstruction>(
                             std::make_unique<Register>(RegisterName::R10, bytesOf(t)),
@@ -210,9 +215,11 @@ class codegenDriver
                 {
                     const int bc = static_cast<int>(std::min<long long>(8, abi.size - 8 * i));
                     if (abi.classes[i] == Eightbyte::SSE)
-                        emitLoadEightbyte(name, 8 * i, 8, true, sseRegs[ssei++], instructions);
+                        emitLoadEightbyte(name, 8 * i, 8, true, sseRegs[ssei++], instructions, tag,
+                                          tagStatic);
                     else
-                        emitLoadEightbyte(name, 8 * i, bc, false, gpRegs[gpi++], instructions);
+                        emitLoadEightbyte(name, 8 * i, bc, false, gpRegs[gpi++], instructions, tag,
+                                          tagStatic);
                 }
             }
             instructions.push_back(std::make_unique<ReturnInstruction>());
@@ -446,11 +453,13 @@ class codegenDriver
     Arg makeArg(const TackyVal &v)
     {
         Arg a;
-        if (auto *var = std::get_if<TackyVar>(&v); var && structObjects.count(var->name))
+        if (auto *var = std::get_if<TackyVar>(&v); var && !var->structTag.empty())
         {
             a.isStruct = true;
+            a.isStatic = var->isStatic;
             a.name = var->name;
-            a.abi = structObjects[var->name];
+            a.structTag = var->structTag;
+            a.abi = classifyStruct(var->structTag);
             return a;
         }
         a.val = v;
@@ -459,12 +468,24 @@ class codegenDriver
         return a;
     }
 
+    // A PseudoMem into a named aggregate, carrying the object's static-ness and struct
+    // tag so the stack-slot pass can recover both placement (RIP data vs stack slot)
+    // and slot size from any one reference to it.
+    static std::unique_ptr<PseudoMem> aggMem(const std::string &name, int off, AssemblyType t,
+                                             const std::string &structTag, bool isStatic)
+    {
+        auto m = std::make_unique<PseudoMem>(name, off, t);
+        m->structTag = structTag;
+        m->isStatic = isStatic;
+        return m;
+    }
+
     // The memory operand for a slot's struct eightbyte (scalars use tackyValToOperand).
     std::unique_ptr<Operand> slotMem(const Arg &a, const Slot &s)
     {
-        return std::make_unique<PseudoMem>(a.name, s.objOff,
-                                           s.where == Slot::SSE_REG ? AssemblyType::DOUBLE
-                                                                    : AssemblyType::QUADWORD);
+        return aggMem(a.name, s.objOff,
+                      s.where == Slot::SSE_REG ? AssemblyType::DOUBLE : AssemblyType::QUADWORD,
+                      a.structTag, a.isStatic);
     }
 
     // Load one eightbyte of struct object `name` (at byte `off`) into register
@@ -473,13 +494,14 @@ class codegenDriver
     // object — required when it sits at the end of a mapped page.
     void emitLoadEightbyte(const std::string &name, int off, int byteCount, bool sse,
                            RegisterName reg,
-                           std::vector<std::unique_ptr<Instruction>> &instructions)
+                           std::vector<std::unique_ptr<Instruction>> &instructions,
+                           const std::string &structTag, bool isStatic)
     {
         if (sse || byteCount >= 8)
         {
             const AssemblyType t = sse ? AssemblyType::DOUBLE : AssemblyType::QUADWORD;
             instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<PseudoMem>(name, off, t), std::make_unique<Register>(reg, 8), t));
+                aggMem(name, off, t, structTag, isStatic), std::make_unique<Register>(reg, 8), t));
             return;
         }
         instructions.push_back(std::make_unique<MoveInstruction>(
@@ -491,7 +513,7 @@ class codegenDriver
                 std::make_unique<Immediate>(8), std::make_unique<Register>(reg, 8),
                 BinaryOp::LeftShift, AssemblyType::QUADWORD));
             instructions.push_back(std::make_unique<MoveInstruction>(
-                std::make_unique<PseudoMem>(name, off + k, AssemblyType::BYTE),
+                aggMem(name, off + k, AssemblyType::BYTE, structTag, isStatic),
                 std::make_unique<Register>(reg, 1), AssemblyType::BYTE));
         }
     }
@@ -501,9 +523,11 @@ class codegenDriver
     {
         // Is this a struct return, and if so does it travel via a hidden pointer?
         const auto *dstVar = std::get_if<TackyVar>(&tackyFunctionCall.dst);
-        const bool structRet = dstVar && structObjects.count(dstVar->name);
-        const StructABI dstABI = structRet ? structObjects[dstVar->name] : StructABI{};
+        const bool structRet = dstVar && !dstVar->structTag.empty();
+        const StructABI dstABI = structRet ? classifyStruct(dstVar->structTag) : StructABI{};
         const bool returnsMemory = structRet && dstABI.inMemory;
+        const std::string dstTag = structRet ? dstVar->structTag : std::string{};
+        const bool dstStatic = structRet && dstVar->isStatic;
 
         std::vector<Arg> args;
         args.reserve(tackyFunctionCall.args.size());
@@ -545,7 +569,7 @@ class codegenDriver
                 else
                 {
                     emitLoadEightbyte(a.name, s.objOff, s.width, false, RegisterName::AX,
-                                      instructions);
+                                      instructions, a.structTag, a.isStatic);
                     instructions.push_back(std::make_unique<PushInstruction>(
                         std::make_unique<Register>(RegisterName::AX, 8)));
                 }
@@ -590,7 +614,8 @@ class codegenDriver
                 {
                     // Struct eightbyte: a full eightbyte is one mov, a partial tail is
                     // assembled byte by byte (no read past the object).
-                    emitLoadEightbyte(a.name, s.objOff, s.width, false, s.reg, instructions);
+                    emitLoadEightbyte(a.name, s.objOff, s.width, false, s.reg, instructions,
+                                      a.structTag, a.isStatic);
                 }
             }
         }
@@ -598,7 +623,7 @@ class codegenDriver
         // Hidden return pointer for a MEMORY-class struct return goes in RDI.
         if (returnsMemory)
             instructions.push_back(std::make_unique<LeaInstruction>(
-                std::make_unique<PseudoMem>(dstVar->name, 0, AssemblyType::QUADWORD),
+                aggMem(dstVar->name, 0, AssemblyType::QUADWORD, dstTag, dstStatic),
                 std::make_unique<Register>(RegisterName::DI, 8)));
 
         if (tackyFunctionCall.variadic)
@@ -629,13 +654,12 @@ class codegenDriver
                     if (dstABI.classes[i] == Eightbyte::SSE)
                         instructions.push_back(std::make_unique<MoveInstruction>(
                             std::make_unique<Register>(sseRegs[ssei++], 8),
-                            std::make_unique<PseudoMem>(dstVar->name, 8 * i, AssemblyType::DOUBLE),
+                            aggMem(dstVar->name, 8 * i, AssemblyType::DOUBLE, dstTag, dstStatic),
                             AssemblyType::DOUBLE));
                     else
                         instructions.push_back(std::make_unique<MoveInstruction>(
                             std::make_unique<Register>(gpRegs[gpi++], 8),
-                            std::make_unique<PseudoMem>(dstVar->name, 8 * i,
-                                                        AssemblyType::QUADWORD),
+                            aggMem(dstVar->name, 8 * i, AssemblyType::QUADWORD, dstTag, dstStatic),
                             AssemblyType::QUADWORD));
                 }
             }
@@ -1000,23 +1024,24 @@ class codegenDriver
 
         std::vector<Arg> params;
         params.reserve(functionNode.params.size());
-        for (const auto &[pname, pct] : functionNode.params)
+        for (const auto &param : functionNode.params)
         {
-            if (structObjects.count(pname))
+            if (!param.structTag.empty())
             {
                 Arg a;
                 a.isStruct = true;
-                a.name = pname;
-                a.abi = structObjects[pname];
+                a.name = param.name;
+                a.structTag = param.structTag;
+                a.abi = classifyStruct(param.structTag);
                 params.push_back(std::move(a));
             }
             else
             {
                 Arg a;
-                a.name = pname; // the param's pseudo-register, used as the slot dest
-                a.val = TackyVar(pname, pct);
-                a.stype = toAssemblyType(pct);
-                a.sdouble = isDouble(pct);
+                a.name = param.name; // the param's pseudo-register, used as the slot dest
+                a.val = TackyVar(param.name, param.type);
+                a.stype = toAssemblyType(param.type);
+                a.sdouble = isDouble(param.type);
                 params.push_back(std::move(a));
             }
         }
@@ -1034,10 +1059,10 @@ class codegenDriver
                 auto dest = [&]() -> std::unique_ptr<Operand>
                 {
                     if (a.isStruct)
-                        return std::make_unique<PseudoMem>(a.name, s.objOff,
-                                                           s.where == Slot::SSE_REG
-                                                               ? AssemblyType::DOUBLE
-                                                               : AssemblyType::QUADWORD);
+                        return aggMem(a.name, s.objOff,
+                                      s.where == Slot::SSE_REG ? AssemblyType::DOUBLE
+                                                               : AssemblyType::QUADWORD,
+                                      a.structTag, a.isStatic);
                     return std::make_unique<PseudoRegister>(a.name, a.stype);
                 };
                 if (s.where == Slot::STACK)
@@ -1067,9 +1092,94 @@ class codegenDriver
                                                  std::move(instructions));
     }
 
+    // Apply `fn` to each operand slot an instruction owns. Used by both passes over
+    // a function body: collecting object facts, then lowering pseudos to real slots.
+    template <class F> static void forEachSlot(Instruction &instruction, F &&fn)
+    {
+        if (auto *p = dynamic_cast<MoveInstruction *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+        else if (auto *p = dynamic_cast<MoveSXInstruction *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+        else if (auto *p = dynamic_cast<MoveZeroExtendInstruction *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+        else if (auto *p = dynamic_cast<UnaryInstruction *>(&instruction))
+        {
+            fn(p->operand);
+        }
+        else if (auto *p = dynamic_cast<BinaryInstruction *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+        else if (auto *p = dynamic_cast<IDivInstruction *>(&instruction))
+        {
+            fn(p->operand);
+        }
+        else if (auto *p = dynamic_cast<DivInstruction *>(&instruction))
+        {
+            fn(p->operand);
+        }
+        else if (auto *p = dynamic_cast<CmpInstruction *>(&instruction))
+        {
+            fn(p->a);
+            fn(p->b);
+        }
+        else if (auto *p = dynamic_cast<SetCCInstruction *>(&instruction))
+        {
+            fn(p->a);
+        }
+        else if (auto *p = dynamic_cast<PushInstruction *>(&instruction))
+        {
+            fn(p->a);
+        }
+        else if (auto *p = dynamic_cast<CVTSI2SD *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+        else if (auto *p = dynamic_cast<CVTTSD2SI *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+        else if (auto *p = dynamic_cast<LeaInstruction *>(&instruction))
+        {
+            fn(p->src);
+            fn(p->dst);
+        }
+    }
+
+    // The object name and self-typing fields a pseudo operand carries. Returns false
+    // for non-pseudo operands (immediates, real registers, already-lowered memory).
+    static bool pseudoSelfType(const Operand &op, std::string &name, ObjInfo &info)
+    {
+        if (auto *p = dynamic_cast<const PseudoRegister *>(&op))
+        {
+            name = p->name;
+            info = {p->isStatic, p->objSize, p->objAlign, p->structTag};
+            return true;
+        }
+        if (auto *m = dynamic_cast<const PseudoMem *>(&op))
+        {
+            name = m->name;
+            info = {m->isStatic, m->objSize, m->objAlign, m->structTag};
+            return true;
+        }
+        return false;
+    }
+
     void lowerPseudoSlot(std::unique_ptr<Operand> &slot,
                          std::unordered_map<std::string, int> &pseudoToOffset, int &used,
-                         const std::unordered_set<std::string> &staticNames)
+                         const std::unordered_map<std::string, ObjInfo> &objInfo)
     {
         // A pseudo register (scalar) or a pseudo-mem (an aggregate referenced at a
         // byte offset). Both resolve to the same per-name stack slot.
@@ -1090,7 +1200,12 @@ class codegenDriver
         else
             return;
 
-        if (staticNames.count(name))
+        const ObjInfo *info = nullptr;
+        if (auto it = objInfo.find(name); it != objInfo.end())
+            info = &it->second;
+
+        // A static-storage object lives in RIP-relative data, not a stack slot.
+        if (info && info->isStatic)
         {
             slot = std::make_unique<Data>(name, extra);
             return;
@@ -1099,22 +1214,23 @@ class codegenDriver
         auto found = pseudoToOffset.find(name);
         if (found == pseudoToOffset.end())
         {
-            if (auto ai = arrayObjects.find(name); ai != arrayObjects.end())
+            if (info && !info->structTag.empty())
+            {
+                // A struct slot is sized/aligned from its classification, but its size
+                // is rounded up to a multiple of 8 so whole-eightbyte loads/stores
+                // (used by the calling convention) never spill past the slot.
+                const StructABI abi = classifyStruct(info->structTag);
+                const int sz = (static_cast<int>(abi.size) + 7) / 8 * 8;
+                used += sz;
+                const int al = abi.align < 8 ? 8 : abi.align;
+                used += (al - used % al) % al;
+            }
+            else if (info && info->objSize)
             {
                 // Reserve the whole array, then align the base (-used) to the
                 // object's alignment.
-                used += static_cast<int>(ai->second.size);
-                used += (ai->second.align - used % ai->second.align) % ai->second.align;
-            }
-            else if (auto si = structObjects.find(name); si != structObjects.end())
-            {
-                // A struct slot is sized/aligned like an array object, but its size
-                // is rounded up to a multiple of 8 so whole-eightbyte loads/stores
-                // (used by the calling convention) never spill past the slot.
-                const int sz = (static_cast<int>(si->second.size) + 7) / 8 * 8;
-                used += sz;
-                const int al = si->second.align < 8 ? 8 : si->second.align;
-                used += (al - used % al) % al;
+                used += static_cast<int>(info->objSize);
+                used += (info->objAlign - used % info->objAlign) % info->objAlign;
             }
             else if (type == AssemblyType::QUADWORD || type == AssemblyType::DOUBLE)
             {
@@ -1134,74 +1250,40 @@ class codegenDriver
         slot = std::make_unique<Memory>(RegisterName::BP, found->second + extra);
     }
 
-    void removePseudosFromFunction(codegenFunction &func,
-                                   std::unordered_set<std::string> &staticNames)
+    void removePseudosFromFunction(codegenFunction &func)
     {
+        // Pass 1: recover each named object's facts (static storage, aggregate size)
+        // by merging the self-typing fields from every operand that references it.
+        // Merging makes slot sizing order-independent — one carrying reference per
+        // object suffices even if other references to it carry nothing.
+        std::unordered_map<std::string, ObjInfo> objInfo;
+        for (auto &instruction : func.instructions)
+            forEachSlot(*instruction,
+                        [&](std::unique_ptr<Operand> &op)
+                        {
+                            std::string name;
+                            ObjInfo st;
+                            if (!pseudoSelfType(*op, name, st))
+                                return;
+                            ObjInfo &e = objInfo[name];
+                            if (st.isStatic)
+                                e.isStatic = true;
+                            if (st.objSize)
+                            {
+                                e.objSize = st.objSize;
+                                e.objAlign = st.objAlign;
+                            }
+                            if (!st.structTag.empty())
+                                e.structTag = st.structTag;
+                        });
+
+        // Pass 2: assign each pseudo to its stack slot (or RIP data, for statics).
         std::unordered_map<std::string, int> pseudoToOffset;
         int used = 0;
         for (auto &instruction : func.instructions)
-        {
-            if (auto *p = dynamic_cast<MoveInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<MoveSXInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<MoveZeroExtendInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<UnaryInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<BinaryInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<IDivInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<DivInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->operand, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<CmpInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->b, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<SetCCInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<PushInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->a, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<CVTSI2SD *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<CVTTSD2SI *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-            else if (auto *p = dynamic_cast<LeaInstruction *>(instruction.get()))
-            {
-                lowerPseudoSlot(p->src, pseudoToOffset, used, staticNames);
-                lowerPseudoSlot(p->dst, pseudoToOffset, used, staticNames);
-            }
-        }
+            forEachSlot(*instruction, [&](std::unique_ptr<Operand> &op)
+                        { lowerPseudoSlot(op, pseudoToOffset, used, objInfo); });
+
         if (int frameSize = used; frameSize > 0)
         {
             frameSize = frameSize + (16 - frameSize % 16) % 16;
@@ -1218,7 +1300,7 @@ class codegenDriver
         {
             if (auto *p = dynamic_cast<codegenFunction *>(node.get()))
             {
-                removePseudosFromFunction(*p, staticNames);
+                removePseudosFromFunction(*p);
             }
         }
     }
@@ -1233,9 +1315,6 @@ class codegenDriver
 
     std::unique_ptr<codegenProgram> codegen(const TackyProgram &prog)
     {
-        staticNames = prog.staticNames;
-        arrayObjects = prog.arrayObjects;
-        structObjects = prog.structObjects;
         std::vector<std::unique_ptr<codegenTopLevelNode>> nodes;
         for (const auto &node : prog.nodes)
         {

@@ -42,7 +42,9 @@ struct Slot
 struct Arg
 {
     bool isStruct = false;
+    bool isStatic = false;                             // struct object has static storage
     std::string name;                                  // struct object name
+    std::string structTag;                             // struct tag, stamps slot PseudoMems
     StructABI abi;                                     // struct classification
     TackyVal val{TackyConstant(0, ConstantType::INT)}; // scalar value
     AssemblyType stype = AssemblyType::LONGWORD;       // scalar width
