@@ -3,6 +3,7 @@
 #include "operand.h"
 #include <memory>
 #include <utility>
+#include <vector>
 
 enum class InstrKind
 {
@@ -25,6 +26,7 @@ enum class InstrKind
     CVTSI2SD,
     CVTTSD2SI,
     LeaInstruction,
+    PopInstruction
 };
 
 class Instruction
@@ -53,7 +55,14 @@ class MoveInstruction : public Instruction
 class ReturnInstruction : public Instruction
 {
   public:
-    ReturnInstruction() : Instruction(InstrKind::ReturnInstruction) {}
+    // Hardware registers holding the return value: AX/XMM0, or up to two for a struct
+    // returned in registers; empty for a void return. Recorded so the register allocator's
+    // liveness keeps the value live into the bare `ret`.
+    std::vector<RegisterName> returnRegs;
+    explicit ReturnInstruction(std::vector<RegisterName> returnRegs_ = {})
+        : Instruction(InstrKind::ReturnInstruction), returnRegs(std::move(returnRegs_))
+    {
+    }
     static bool classof(InstrKind k) { return k == InstrKind::ReturnInstruction; }
 };
 
@@ -203,8 +212,13 @@ class CallInstruction : public Instruction
 {
   public:
     std::string identifier;
-    explicit CallInstruction(std::string identifier_)
-        : Instruction(InstrKind::CallInstruction), identifier(std::move(identifier_))
+    // Hardware registers the call reads as arguments (the GP/SSE arg registers, plus the
+    // hidden return pointer in DI and AL for a variadic call). Recorded so the register
+    // allocator's liveness can see what a bare `call` uses.
+    std::vector<RegisterName> argRegs;
+    explicit CallInstruction(std::string identifier_, std::vector<RegisterName> argRegs_ = {})
+        : Instruction(InstrKind::CallInstruction), identifier(std::move(identifier_)),
+          argRegs(std::move(argRegs_))
     {
     }
     static bool classof(InstrKind k) { return k == InstrKind::CallInstruction; }
@@ -284,3 +298,83 @@ class LeaInstruction : public Instruction
     }
     static bool classof(InstrKind k) { return k == InstrKind::LeaInstruction; }
 };
+
+class PopInstruction : public Instruction
+{
+  public:
+    std::unique_ptr<Operand> reg;
+    explicit PopInstruction(std::unique_ptr<Operand> reg_)
+        : Instruction(InstrKind::PopInstruction), reg(std::move(reg_))
+    {
+    }
+
+    static bool classof(InstrKind k) { return k == InstrKind::PopInstruction; }
+};
+
+// Apply `fn` to each operand slot an instruction owns (its std::unique_ptr<Operand>&
+// fields). Instructions with no operand slots — returns, jumps, labels, calls, cdq — are
+// simply skipped. A free function (not tied to the codegen driver) so both codegen and
+// the register allocator can walk operands without depending on each other.
+template <class F> void forEachSlot(Instruction &instruction, F &&fn)
+{
+    if (auto *p = dynamic_cast<MoveInstruction *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+    else if (auto *p = dynamic_cast<MoveSXInstruction *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+    else if (auto *p = dynamic_cast<MoveZeroExtendInstruction *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+    else if (auto *p = dynamic_cast<UnaryInstruction *>(&instruction))
+    {
+        fn(p->operand);
+    }
+    else if (auto *p = dynamic_cast<BinaryInstruction *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+    else if (auto *p = dynamic_cast<IDivInstruction *>(&instruction))
+    {
+        fn(p->operand);
+    }
+    else if (auto *p = dynamic_cast<DivInstruction *>(&instruction))
+    {
+        fn(p->operand);
+    }
+    else if (auto *p = dynamic_cast<CmpInstruction *>(&instruction))
+    {
+        fn(p->a);
+        fn(p->b);
+    }
+    else if (auto *p = dynamic_cast<SetCCInstruction *>(&instruction))
+    {
+        fn(p->a);
+    }
+    else if (auto *p = dynamic_cast<PushInstruction *>(&instruction))
+    {
+        fn(p->a);
+    }
+    else if (auto *p = dynamic_cast<CVTSI2SD *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+    else if (auto *p = dynamic_cast<CVTTSD2SI *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+    else if (auto *p = dynamic_cast<LeaInstruction *>(&instruction))
+    {
+        fn(p->src);
+        fn(p->dst);
+    }
+}

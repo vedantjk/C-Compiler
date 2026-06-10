@@ -282,6 +282,10 @@ struct SysVx86_64ABI : ABI
                     }
                     else
                     {
+                        // Register destination: the 32-bit mov clears its upper half, but
+                        // the suffix must match, so use the destination's 4-byte form.
+                        if (auto *r = dynamic_cast<Register *>(dst.get()))
+                            dst = reg(r->name, 4);
                         rewritten.push_back(std::make_unique<MoveInstruction>(
                             std::move(src), std::move(dst), AssemblyType::LONGWORD));
                     }
@@ -439,6 +443,16 @@ struct SysVx86_64ABI : ABI
                     rewritten.push_back(std::move(instr));
                 }
             }
+            else if (auto *m = dynamic_cast<PushInstruction *>(instr.get()); m && isXmmReg(*m->a))
+            {
+                // pushq can't take an XMM register: make room and store it with movsd.
+                rewritten.push_back(std::make_unique<BinaryInstruction>(
+                    std::make_unique<Immediate>(8), reg(RegisterName::SP, 8), BinaryOp::Subtract,
+                    AssemblyType::QUADWORD));
+                rewritten.push_back(std::make_unique<MoveInstruction>(
+                    std::move(m->a), std::make_unique<Memory>(RegisterName::SP, 0),
+                    AssemblyType::DOUBLE));
+            }
             else if (auto *m = dynamic_cast<PushInstruction *>(instr.get());
                      m && isLargeImmediate(*m->a))
             {
@@ -494,6 +508,12 @@ struct SysVx86_64ABI : ABI
     static bool isMemory(const Operand &op)
     {
         return dynamic_cast<const Memory *>(&op) != nullptr || isData(op);
+    }
+
+    static bool isXmmReg(const Operand &op)
+    {
+        auto *r = dynamic_cast<const Register *>(&op);
+        return r && isXmm(r->name);
     }
 
     static bool isLargeImmediate(const Operand &op)

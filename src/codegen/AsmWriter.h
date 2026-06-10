@@ -74,6 +74,9 @@ struct AsmWriter
     // pushq — push, always quadword
     virtual std::string pushqMnemonic() const = 0;
 
+    // popq — pop, always quadword
+    virtual std::string popqMnemonic() const = 0;
+
     // ---- frame sequences ---------------------------------------------------
 
     // Emit the function prologue lines (after the label):
@@ -178,6 +181,36 @@ struct SysVAsmWriter : AsmWriter
             if (bytes == 4)
                 return "%r11d";
             return "%r11b";
+        case RegisterName::BX:
+            if (bytes == 8)
+                return "%rbx";
+            if (bytes == 4)
+                return "%ebx";
+            return "%bl";
+        case RegisterName::R12:
+            if (bytes == 8)
+                return "%r12";
+            if (bytes == 4)
+                return "%r12d";
+            return "%r12b";
+        case RegisterName::R13:
+            if (bytes == 8)
+                return "%r13";
+            if (bytes == 4)
+                return "%r13d";
+            return "%r13b";
+        case RegisterName::R14:
+            if (bytes == 8)
+                return "%r14";
+            if (bytes == 4)
+                return "%r14d";
+            return "%r14b";
+        case RegisterName::R15:
+            if (bytes == 8)
+                return "%r15";
+            if (bytes == 4)
+                return "%r15d";
+            return "%r15b";
         // SP and BP are always 64-bit
         case RegisterName::SP:
             return "%rsp";
@@ -200,6 +233,18 @@ struct SysVAsmWriter : AsmWriter
             return "%xmm6";
         case RegisterName::XMM7:
             return "%xmm7";
+        case RegisterName::XMM8:
+            return "%xmm8";
+        case RegisterName::XMM9:
+            return "%xmm9";
+        case RegisterName::XMM10:
+            return "%xmm10";
+        case RegisterName::XMM11:
+            return "%xmm11";
+        case RegisterName::XMM12:
+            return "%xmm12";
+        case RegisterName::XMM13:
+            return "%xmm13";
         case RegisterName::XMM14:
             return "%xmm14";
         case RegisterName::XMM15:
@@ -286,6 +331,8 @@ struct SysVAsmWriter : AsmWriter
     std::string leaqMnemonic() const override { return "leaq"; }
 
     std::string pushqMnemonic() const override { return "pushq"; }
+
+    std::string popqMnemonic() const override { return "popq"; }
 
     // ---- frame sequences ---------------------------------------------------
 

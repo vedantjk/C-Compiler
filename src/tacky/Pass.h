@@ -1,4 +1,5 @@
 #pragma once
+#include "../cfg/CFG.h"
 #include "../support/RTTI.h"
 #include "ast/ASTNodes/TackyProgram.h"
 #include "ast/TopLevelNodes/TackyFunction.h"
@@ -34,41 +35,50 @@ struct OptimizationFlags
     }
 };
 
-// A node of the control-flow graph: a maximal straight-line run of instructions,
-// plus its adjacency. `id` is the block's index into CFG::blocks, which is also
-// how predecessors/successors refer to it. ENTRY and EXIT are empty blocks at the
-// front and back of CFG::blocks.
-struct BasicBlock
+// Classify TACKY instructions for the shared CFG builder (cfg/CFG.h): which instructions
+// open a block (labels) or end one (jumps, branches, returns), and a terminator's target.
+using cfg::TermKind;
+struct TackyCFGClassify
 {
-    int id = -1;          // index into CFG::blocks; assigned by makeControlFlowGraph
-    bool removed = false; // flagged dead by a pass; skipped when flattening / iterating
-    std::vector<std::unique_ptr<TackyInstruction>> instructions;
-    std::vector<int> predecessors;
-    std::vector<int> successors;
+    bool isLabel(const TackyInstruction &i) const { return i.getKind() == TackyKind::Label; }
+    std::string labelOf(const TackyInstruction &i) const
+    {
+        return cast<TackyLabel>(&i)->identifier;
+    }
+    TermKind termKind(const TackyInstruction &i) const
+    {
+        switch (i.getKind())
+        {
+        case TackyKind::Jump:
+            return TermKind::Jump;
+        case TackyKind::JumpIfZero:
+        case TackyKind::JumpIfNotZero:
+            return TermKind::Branch;
+        case TackyKind::Return:
+            return TermKind::Return;
+        default:
+            return TermKind::None;
+        }
+    }
+    std::string targetOf(const TackyInstruction &i) const
+    {
+        switch (i.getKind())
+        {
+        case TackyKind::Jump:
+            return cast<TackyJump>(&i)->identifier;
+        case TackyKind::JumpIfZero:
+            return cast<TackyJumpIfZero>(&i)->identifier;
+        case TackyKind::JumpIfNotZero:
+            return cast<TackyJumpIfNotZero>(&i)->identifier;
+        default:
+            return {};
+        }
+    }
 };
 
-// The control-flow graph for one function. blocks[0] is ENTRY, blocks.back() is
-// EXIT (both instruction-free); the real blocks sit between them in program order,
-// so concatenating every block's instructions reproduces the original list.
-struct CFG
-{
-    std::vector<BasicBlock> blocks;
-    int entryId() const { return 0; }
-    int exitId() const { return static_cast<int>(blocks.size()) - 1; }
-
-    // A directed edge is mirrored in both endpoints: `to` is a successor of `from`,
-    // and `from` is a predecessor of `to`.
-    void addEdge(int from, int to)
-    {
-        blocks[from].successors.push_back(to);
-        blocks[to].predecessors.push_back(from);
-    }
-    void removeEdge(int from, int to)
-    {
-        std::erase(blocks[from].successors, to);
-        std::erase(blocks[to].predecessors, from);
-    }
-};
+// This optimizer works the TACKY IR, so specialize the shared CFG to it.
+using BasicBlock = cfg::BasicBlock<TackyInstruction>;
+using CFG = cfg::CFG<TackyInstruction>;
 
 // ---------------------------------------------------------------------------
 // The four passes (stubs to fill in).
@@ -394,97 +404,6 @@ inline void foldConstants(std::vector<std::unique_ptr<TackyInstruction>> &instru
     }
 
     instructions = std::move(result);
-}
-
-// Build the control-flow graph for a function body. The instruction list is first
-// partitioned into basic blocks: a label opens a new block, a jump/branch/return
-// closes the current one, and any leftover trailing instructions form a final
-// block. The blocks are then laid out as [ENTRY, real blocks in program order,
-// EXIT] and numbered by their index, which is also how edges refer to them.
-// Finally the edges are wired from each block's terminator: ENTRY flows to the
-// first real block (or EXIT if there is none); a jump goes to its target block; a
-// conditional branch goes to both its target and the next block (fall-through); a
-// return goes to EXIT; and a block with no terminator falls through to the next.
-// Predecessor lists are kept as the mirror of successors.
-inline CFG makeControlFlowGraph(std::vector<std::unique_ptr<TackyInstruction>> instructions)
-{
-    std::vector<BasicBlock> blocks;
-    BasicBlock current;
-    auto closeBlock = [&]()
-    {
-        if (!current.instructions.empty())
-        {
-            blocks.push_back(std::move(current));
-            current = BasicBlock{};
-        }
-    };
-
-    for (auto &instr : instructions)
-    {
-        const TackyKind k = instr->getKind();
-        if (k == TackyKind::Label)
-        {
-            closeBlock();
-            current.instructions.push_back(std::move(instr));
-        }
-        else if (k == TackyKind::Jump || k == TackyKind::JumpIfZero ||
-                 k == TackyKind::JumpIfNotZero || k == TackyKind::Return)
-        {
-            current.instructions.push_back(std::move(instr));
-            closeBlock();
-        }
-        else
-        {
-            current.instructions.push_back(std::move(instr));
-        }
-    }
-    closeBlock();
-
-    CFG cfg;
-    cfg.blocks.reserve(blocks.size() + 2);
-    cfg.blocks.push_back(BasicBlock{}); // ENTRY
-    for (auto &b : blocks)
-        cfg.blocks.push_back(std::move(b));
-    cfg.blocks.push_back(BasicBlock{}); // EXIT
-    for (int i = 0; i < static_cast<int>(cfg.blocks.size()); ++i)
-        cfg.blocks[i].id = i;
-
-    const int entry = cfg.entryId();
-    const int exit = cfg.exitId();
-    const int firstReal = 1;
-    const int lastReal = exit - 1; // < firstReal when there are no real blocks
-
-    std::unordered_map<std::string, int> labelBlock;
-    for (int i = firstReal; i <= lastReal; ++i)
-        if (const auto *lbl = dyn_cast<TackyLabel>(cfg.blocks[i].instructions.front().get()))
-            labelBlock[lbl->identifier] = i;
-
-    cfg.addEdge(entry, lastReal >= firstReal ? firstReal : exit);
-
-    for (int i = firstReal; i <= lastReal; ++i)
-    {
-        const int fallthrough = (i == lastReal) ? exit : i + 1;
-        TackyInstruction *last = cfg.blocks[i].instructions.back().get();
-
-        if (const auto *j = dyn_cast<TackyJump>(last))
-            cfg.addEdge(i, labelBlock.at(j->identifier));
-        else if (const auto *jz = dyn_cast<TackyJumpIfZero>(last))
-        {
-            cfg.addEdge(i, labelBlock.at(jz->identifier));
-            cfg.addEdge(i, fallthrough);
-        }
-        else if (const auto *jnz = dyn_cast<TackyJumpIfNotZero>(last))
-        {
-            cfg.addEdge(i, labelBlock.at(jnz->identifier));
-            cfg.addEdge(i, fallthrough);
-        }
-        else if (isa<TackyReturn>(last))
-            cfg.addEdge(i, exit);
-        else
-            cfg.addEdge(i, fallthrough);
-    }
-
-    return cfg;
 }
 
 // The book's "eliminate unreachable code", three cleanups over the CFG:
@@ -1336,7 +1255,7 @@ inline void optimizeFunction(TackyFunction &fn, const OptimizationFlags &flags)
 
         if (flags.eliminateUnreachableCode || flags.propagateCopies || flags.eliminateDeadStores)
         {
-            CFG cfg = makeControlFlowGraph(std::move(fn.instructions));
+            CFG cfg = ::cfg::makeControlFlowGraph(std::move(fn.instructions), TackyCFGClassify{});
             if (flags.eliminateUnreachableCode)
                 eliminateUnreachableCode(cfg, changed);
             if (flags.propagateCopies)

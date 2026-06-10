@@ -315,7 +315,11 @@ class codegenASTPrinter
     void visit(const SetCCInstruction &node) const
     {
         out << "set" << condCodeToString(node.condCode) << "    ";
-        dispatch(*node.a);
+        // setcc writes a single byte: a register operand must use its byte sub-register.
+        if (auto *r = dynamic_cast<const Register *>(node.a.get()))
+            out << wr.reg(r->name, 1);
+        else
+            dispatch(*node.a);
     }
 
     void visit(const Label &node) const { out << wr.localLabelDef(node.identifier); }
@@ -343,6 +347,12 @@ class codegenASTPrinter
     {
         out << wr.pushqMnemonic() << "    ";
         dispatch(*node.a);
+    }
+
+    void visit(const PopInstruction &node) const
+    {
+        out << wr.popqMnemonic() << "    ";
+        dispatch(*node.reg);
     }
 
     void visit(const CVTSI2SD &node) const
@@ -474,6 +484,11 @@ class codegenASTPrinter
         case InstrKind::LeaInstruction:
         {
             visit(*cast<const LeaInstruction>(&node));
+            break;
+        }
+        case InstrKind::PopInstruction:
+        {
+            visit(*cast<const PopInstruction>(&node));
             break;
         }
         default:

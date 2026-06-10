@@ -917,7 +917,7 @@ class TackyDriver
             // evaluated, so the operand subtree is not lowered.
             const auto *p = cast<SizeOfExpr>(expression);
             const auto &sizedType = p->expr ? p->expr->resolvedType : p->type;
-            return TackyConstant{sizeOfType(sizedType), ConstantType::ULONG};
+            return TackyConstant(sizeOfType(sizedType), ConstantType::ULONG);
         }
         case NodeKind::MemberExpr:
         {

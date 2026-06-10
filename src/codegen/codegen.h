@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../registerallocator/registerAllocator.h"
 #include "../support/RTTI.h"
 #include "../tacky/ast/ASTNodes/TackyProgram.h"
 #include "../tacky/ast/TopLevelNodes/TackyFunction.h"
@@ -177,6 +178,7 @@ class codegenDriver
             const std::string &name = structVal->name;
             const std::string &tag = structVal->structTag;
             const bool tagStatic = structVal->isStatic;
+            std::vector<RegisterName> retRegs;
             if (abi.inMemory)
             {
                 // Copy the struct into the caller's space (the saved hidden pointer),
@@ -205,6 +207,7 @@ class codegenDriver
                 instructions.push_back(std::make_unique<MoveInstruction>(
                     std::make_unique<PseudoRegister>(curRetPtrName, AssemblyType::QUADWORD),
                     std::make_unique<Register>(RegisterName::AX, 8), AssemblyType::QUADWORD));
+                retRegs.push_back(RegisterName::AX);
             }
             else
             {
@@ -215,28 +218,36 @@ class codegenDriver
                 {
                     const int bc = static_cast<int>(std::min<long long>(8, abi.size - 8 * i));
                     if (abi.classes[i] == Eightbyte::SSE)
+                    {
+                        retRegs.push_back(sseRegs[ssei]);
                         emitLoadEightbyte(name, 8 * i, 8, true, sseRegs[ssei++], instructions, tag,
                                           tagStatic);
+                    }
                     else
+                    {
+                        retRegs.push_back(gpRegs[gpi]);
                         emitLoadEightbyte(name, 8 * i, bc, false, gpRegs[gpi++], instructions, tag,
                                           tagStatic);
+                    }
                 }
             }
-            instructions.push_back(std::make_unique<ReturnInstruction>());
+            instructions.push_back(std::make_unique<ReturnInstruction>(std::move(retRegs)));
             return;
         }
 
+        std::vector<RegisterName> retRegs;
         if (tackyReturn.val)
         {
             const AssemblyType t = assemblyTypeOf(*tackyReturn.val);
             std::unique_ptr<Operand> source = tackyValToOperand(*tackyReturn.val);
             const bool dbl = t == AssemblyType::DOUBLE;
+            retRegs.push_back(dbl ? RegisterName::XMM0 : RegisterName::AX);
             auto dest =
                 std::make_unique<Register>(dbl ? RegisterName::XMM0 : RegisterName::AX, bytesOf(t));
             instructions.push_back(
                 std::make_unique<MoveInstruction>(std::move(source), std::move(dest), t));
         }
-        instructions.push_back(std::make_unique<ReturnInstruction>());
+        instructions.push_back(std::make_unique<ReturnInstruction>(std::move(retRegs)));
     }
 
     void processDivision(const TackyBinary &tackyBinary,
@@ -588,6 +599,7 @@ class codegenDriver
             }
         }
 
+        std::vector<RegisterName> argRegs;
         // Load register arguments.
         for (size_t i = 0; i < args.size(); i++)
         {
@@ -596,6 +608,7 @@ class codegenDriver
             {
                 if (s.where == Slot::STACK)
                     continue;
+                argRegs.push_back(s.reg);
                 if (s.where == Slot::SSE_REG)
                 {
                     auto src = s.scalar ? tackyValToOperand(s.val) : slotMem(a, s);
@@ -622,16 +635,23 @@ class codegenDriver
 
         // Hidden return pointer for a MEMORY-class struct return goes in RDI.
         if (returnsMemory)
+        {
             instructions.push_back(std::make_unique<LeaInstruction>(
                 aggMem(dstVar->name, 0, AssemblyType::QUADWORD, dstTag, dstStatic),
                 std::make_unique<Register>(RegisterName::DI, 8)));
+            argRegs.push_back(RegisterName::DI);
+        }
 
         if (tackyFunctionCall.variadic)
+        {
             instructions.push_back(std::make_unique<MoveInstruction>(
                 std::make_unique<Immediate>(xmmUsed),
                 std::make_unique<Register>(RegisterName::AX, 4), AssemblyType::LONGWORD));
+            argRegs.push_back(RegisterName::AX);
+        }
 
-        instructions.push_back(std::make_unique<CallInstruction>(tackyFunctionCall.funcName));
+        instructions.push_back(
+            std::make_unique<CallInstruction>(tackyFunctionCall.funcName, std::move(argRegs)));
 
         if (int bytesToRemove = 8 * stackCount + stackPadding)
             instructions.push_back(
@@ -1092,72 +1112,6 @@ class codegenDriver
                                                  std::move(instructions));
     }
 
-    // Apply `fn` to each operand slot an instruction owns. Used by both passes over
-    // a function body: collecting object facts, then lowering pseudos to real slots.
-    template <class F> static void forEachSlot(Instruction &instruction, F &&fn)
-    {
-        if (auto *p = dynamic_cast<MoveInstruction *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-        else if (auto *p = dynamic_cast<MoveSXInstruction *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-        else if (auto *p = dynamic_cast<MoveZeroExtendInstruction *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-        else if (auto *p = dynamic_cast<UnaryInstruction *>(&instruction))
-        {
-            fn(p->operand);
-        }
-        else if (auto *p = dynamic_cast<BinaryInstruction *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-        else if (auto *p = dynamic_cast<IDivInstruction *>(&instruction))
-        {
-            fn(p->operand);
-        }
-        else if (auto *p = dynamic_cast<DivInstruction *>(&instruction))
-        {
-            fn(p->operand);
-        }
-        else if (auto *p = dynamic_cast<CmpInstruction *>(&instruction))
-        {
-            fn(p->a);
-            fn(p->b);
-        }
-        else if (auto *p = dynamic_cast<SetCCInstruction *>(&instruction))
-        {
-            fn(p->a);
-        }
-        else if (auto *p = dynamic_cast<PushInstruction *>(&instruction))
-        {
-            fn(p->a);
-        }
-        else if (auto *p = dynamic_cast<CVTSI2SD *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-        else if (auto *p = dynamic_cast<CVTTSD2SI *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-        else if (auto *p = dynamic_cast<LeaInstruction *>(&instruction))
-        {
-            fn(p->src);
-            fn(p->dst);
-        }
-    }
-
     // The object name and self-typing fields a pseudo operand carries. Returns false
     // for non-pseudo operands (immediates, real registers, already-lowered memory).
     static bool pseudoSelfType(const Operand &op, std::string &name, ObjInfo &info)
@@ -1330,6 +1284,9 @@ class codegenDriver
 
         auto codegenAST =
             std::make_unique<codegenProgram>(prog.line, prog.column, std::move(nodes));
+
+        RegisterAllocator registerAllocator;
+        registerAllocator.buildGraph(*codegenAST);
 
         removePseudos(*codegenAST);
         for (auto &node : codegenAST->nodes)
