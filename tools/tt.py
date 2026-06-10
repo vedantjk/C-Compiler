@@ -46,7 +46,7 @@ CATEGORIES = ("parse_valid", "parse_invalid", "validate_invalid")
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump as chapters
 # land. This is the single source of truth for the implemented gate.
-IMPLEMENTED_CHAPTERS = set(range(1, 20))  # chapters 1..19
+IMPLEMENTED_CHAPTERS = set(range(1, 21))  # chapters 1..20
 
 STAGES = ("lex", "parse", "validate", "tacky", "codegen", "run")
 _CHAP_RE = re.compile(r"chapter_(\d+)")
@@ -205,6 +205,10 @@ def discover(stage: str, target: str | None, extra_credit: bool):
             if not base.exists():
                 continue
             for f in base.rglob("*.c"):
+                # Chapter 20 test helpers compiled with the system compiler and linked
+                # in, not standalone tests.
+                if f.name in ("util.c", "target_shim.c") or f.name.endswith("_lib.c"):
+                    continue
                 n = chapter_of(f)
                 if chapters is None or (n is not None and n in chapters):
                     files.append(f)
@@ -271,6 +275,18 @@ def execute(f: Path, cc89: Path, art: Path, timeout: float, opt):
         helper = f.parent / helper_fixtures[f.name]
         if helper.exists():
             return _exec_linked(f, cc89, art, timeout, opt, extra=[str(helper)])
+
+    # Chapter 20 register-allocation tests link against util.c (system-built), plus an
+    # X_lib.c companion for some, and validate behavior at runtime.
+    if "/chapter_20/" in f.as_posix():
+        ch20 = f
+        while ch20.name != "chapter_20":
+            ch20 = ch20.parent
+        extra = [str(ch20 / "util.c")]
+        lib = ch20 / f"{f.stem}_lib.c"
+        if lib.exists():
+            extra.append(str(lib))
+        return _exec_linked(f, cc89, art, timeout, opt, extra=extra)
 
     if "/libraries/" in f.as_posix():
         sib = library_sibling(f)
