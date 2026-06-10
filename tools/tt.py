@@ -46,7 +46,7 @@ CATEGORIES = ("parse_valid", "parse_invalid", "validate_invalid")
 
 # Chapters whose codegen is complete enough to run end-to-end. Bump as chapters
 # land. This is the single source of truth for the implemented gate.
-IMPLEMENTED_CHAPTERS = set(range(1, 19))  # chapters 1..18
+IMPLEMENTED_CHAPTERS = set(range(1, 20))  # chapters 1..19
 
 STAGES = ("lex", "parse", "validate", "tacky", "codegen", "run")
 _CHAP_RE = re.compile(r"chapter_(\d+)")
@@ -229,8 +229,25 @@ def expectation(stage: str, cls: str) -> str:
 # --------------------------------------------------------------------------- #
 # run-stage execution (single / library pair / stack_alignment)
 # --------------------------------------------------------------------------- #
-def execute(f: Path, cc89: Path, art: Path, timeout: float):
-    """Return (ok, reason). Compares our exit code against a gcc reference build."""
+def _cc89_codegen(cc89, src, asm, timeout, flags):
+    """cc89 --codegen [flags] src > asm. Returns (ok, reason)."""
+    with open(asm, "wb") as out:
+        rc, to = run_proc([str(cc89), "--codegen", *flags, str(src)], timeout, stdout=out)
+    if to:
+        return False, "cc89 --codegen TIMEOUT"
+    if rc != 0:
+        return False, f"cc89 --codegen failed (exit {rc})"
+    return True, ""
+
+
+def execute(f: Path, cc89: Path, art: Path, timeout: float, opt):
+    """Return (ok, reason).
+
+    Default (opt == []): compare cc89's exit code against a gcc reference build.
+    With opt flags: differential test — optimized cc89 (opt flags) vs *unoptimized*
+    cc89. Both go through cc89, so a mismatch isolates a miscompile introduced by an
+    optimization pass (the unoptimized side is already validated against gcc).
+    """
     base = artifact_base(f)
     asm = art / f"{base}.s"
 
@@ -247,63 +264,86 @@ def execute(f: Path, cc89: Path, art: Path, timeout: float):
         "return_big_struct_on_page_boundary.c": "big_data_on_page_boundary_linux.s",
         "return_pointer_in_rax.c": "validate_return_pointer_linux.s",
         "return_space_overlap.c": "return_space_address_overlap_linux.s",
+        # chapter 19 UCE: a non-terminating program that exits via a helper.
+        "infinite_loop.c": "exit_wrapper_linux.s",
     }
     if f.name in helper_fixtures:
         helper = f.parent / helper_fixtures[f.name]
         if helper.exists():
-            return _exec_linked(f, cc89, art, timeout, extra=[str(helper)])
+            return _exec_linked(f, cc89, art, timeout, opt, extra=[str(helper)])
 
     if "/libraries/" in f.as_posix():
         sib = library_sibling(f)
         if sib.exists():
-            return _exec_pair(f, sib, cc89, art, timeout)
+            return _exec_pair(f, sib, cc89, art, timeout, opt)
 
     # plain single-file program
     our, ref = art / f"{base}.our", art / f"{base}.ref"
-    with open(asm, "wb") as out:
-        rc, to = run_proc([str(cc89), "--codegen", str(f)], timeout, stdout=out)
-    if to:
-        return False, "cc89 --codegen TIMEOUT"
-    if rc != 0:
-        return False, f"cc89 --codegen failed (exit {rc})"
+    ok, reason = _cc89_codegen(cc89, f, asm, timeout, opt)
+    if not ok:
+        return False, reason
     if run_proc(["gcc", "-w", str(asm), "-o", str(our), "-lm"], timeout)[0] != 0:
         return False, "gcc could not assemble/link cc89 output"
-    if run_proc(["gcc", "-w", str(f), "-o", str(ref), "-lm"], timeout)[0] != 0:
+    if opt:
+        ref_asm = art / f"{base}.noopt.s"
+        ok, reason = _cc89_codegen(cc89, f, ref_asm, timeout, [])
+        if not ok:
+            return False, "unoptimized " + reason
+        if run_proc(["gcc", "-w", str(ref_asm), "-o", str(ref), "-lm"], timeout)[0] != 0:
+            return False, "gcc could not assemble/link unoptimized cc89 output"
+    elif run_proc(["gcc", "-w", str(f), "-o", str(ref), "-lm"], timeout)[0] != 0:
         return False, "reference gcc build failed"
     return _compare(our, ref, timeout)
 
 
-def _exec_linked(f, cc89, art, timeout, extra):
+def _exec_linked(f, cc89, art, timeout, opt, extra):
     base = artifact_base(f)
     asm, our, ref = art / f"{base}.s", art / f"{base}.our", art / f"{base}.ref"
-    with open(asm, "wb") as out:
-        rc, to = run_proc([str(cc89), "--codegen", str(f)], timeout, stdout=out)
-    if to or rc != 0:
-        return False, ("cc89 --codegen TIMEOUT" if to else f"cc89 --codegen failed (exit {rc})")
+    ok, reason = _cc89_codegen(cc89, f, asm, timeout, opt)
+    if not ok:
+        return False, reason
     if run_proc(["gcc", "-w", str(asm), *extra, "-o", str(our), "-lm"], timeout)[0] != 0:
         return False, "gcc could not assemble/link cc89 output"
-    if run_proc(["gcc", "-w", str(f), *extra, "-o", str(ref), "-lm"], timeout)[0] != 0:
+    if opt:
+        ref_asm = art / f"{base}.noopt.s"
+        ok, reason = _cc89_codegen(cc89, f, ref_asm, timeout, [])
+        if not ok:
+            return False, "unoptimized " + reason
+        if run_proc(["gcc", "-w", str(ref_asm), *extra, "-o", str(ref), "-lm"], timeout)[0] != 0:
+            return False, "gcc could not assemble/link unoptimized cc89 output"
+    elif run_proc(["gcc", "-w", str(f), *extra, "-o", str(ref), "-lm"], timeout)[0] != 0:
         return False, "reference gcc build failed"
     return _compare(our, ref, timeout)
 
 
-def _exec_pair(f, sib, cc89, art, timeout):
-    """Build file-under-test with cc89, its sibling with gcc, link, compare to all-gcc."""
+def _exec_pair(f, sib, cc89, art, timeout, opt):
+    """Build file-under-test with cc89, its sibling with gcc, link, compare.
+
+    Reference is all-gcc by default, or unoptimized-cc89 + gcc-sibling under opt.
+    """
     base = artifact_base(f)
     asm = art / f"{base}.s"
     our_o, sib_o = art / f"{base}.o", art / f"{base}.sib.o"
     our, ref = art / f"{base}.our", art / f"{base}.ref"
-    with open(asm, "wb") as out:
-        rc, to = run_proc([str(cc89), "--codegen", str(f)], timeout, stdout=out)
-    if to or rc != 0:
-        return False, ("cc89 --codegen TIMEOUT" if to else f"cc89 --codegen failed (exit {rc})")
+    ok, reason = _cc89_codegen(cc89, f, asm, timeout, opt)
+    if not ok:
+        return False, reason
     if run_proc(["gcc", "-w", "-c", str(asm), "-o", str(our_o)], timeout)[0] != 0:
         return False, "gcc could not assemble cc89 output"
     if run_proc(["gcc", "-w", "-c", str(sib), "-o", str(sib_o)], timeout)[0] != 0:
         return False, "gcc could not compile sibling"
     if run_proc(["gcc", "-w", str(our_o), str(sib_o), "-o", str(our), "-lm"], timeout)[0] != 0:
         return False, "link of cc89+gcc objects failed"
-    if run_proc(["gcc", "-w", str(f), str(sib), "-o", str(ref), "-lm"], timeout)[0] != 0:
+    if opt:
+        ref_asm, ref_o = art / f"{base}.noopt.s", art / f"{base}.noopt.o"
+        ok, reason = _cc89_codegen(cc89, f, ref_asm, timeout, [])
+        if not ok:
+            return False, "unoptimized " + reason
+        if run_proc(["gcc", "-w", "-c", str(ref_asm), "-o", str(ref_o)], timeout)[0] != 0:
+            return False, "gcc could not assemble unoptimized cc89 output"
+        if run_proc(["gcc", "-w", str(ref_o), str(sib_o), "-o", str(ref), "-lm"], timeout)[0] != 0:
+            return False, "link of unoptimized cc89+gcc objects failed"
+    elif run_proc(["gcc", "-w", str(f), str(sib), "-o", str(ref), "-lm"], timeout)[0] != 0:
         return False, "reference gcc build failed"
     return _compare(our, ref, timeout)
 
@@ -322,6 +362,69 @@ def _compare(our: Path, ref: Path, timeout: float):
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
+def _count_instructions(asm_text: str) -> int:
+    """Count real instruction lines: skip blank lines, directives (.foo) and labels."""
+    n = 0
+    for line in asm_text.splitlines():
+        s = line.strip()
+        if not s or s.startswith(".") or s.startswith("#") or s.endswith(":"):
+            continue
+        n += 1
+    return n
+
+
+def cmd_optsize(args) -> int:
+    """Compile each valid program with and without the opt flags and compare the
+    instruction count of the emitted assembly. Confirms the optimizer actually
+    shrinks codegen (and flags any file where it grows it, which folding never should).
+    """
+    cc89 = ensure_built(args)
+    opt = (getattr(args, "opt", "") or "").split()
+    if not opt:
+        die("optsize needs --opt with at least one flag, e.g. --opt=--fold-constants")
+    files = discover("run", args.target, args.extra_credit)
+    if not files:
+        die("no test files matched", 1)
+
+    print(f"optsize   opt: {' '.join(opt)}   (instructions: unopt -> opt)", flush=True)
+    tot_base = tot_opt = 0
+    nreduced = nsame = nregressed = 0
+    cur_group = None
+
+    for f in files:
+        if classify(f) != "valid":
+            continue
+        base = subprocess.run([str(cc89), "--codegen", str(f)], capture_output=True, text=True)
+        optd = subprocess.run([str(cc89), "--codegen", *opt, str(f)], capture_output=True, text=True)
+        if base.returncode != 0 or optd.returncode != 0:
+            continue  # not compilable at codegen; the run sweep covers correctness
+        b, o = _count_instructions(base.stdout), _count_instructions(optd.stdout)
+        tot_base += b
+        tot_opt += o
+        if o < b:
+            nreduced += 1
+        elif o == b:
+            nsame += 1
+        else:
+            nregressed += 1
+
+        if args.verbose or o > b:
+            ch, cat = chapter_of(f), category_dir(f)
+            if (ch, cat) != cur_group:
+                head = f"{cat} / chapter_{ch}:" if ch is not None else f"{cat}:"
+                print(("\n" if cur_group is not None else "") + head, flush=True)
+                cur_group = (ch, cat)
+            tag = "  REGRESSED" if o > b else ""
+            print(f"  {f.name:<46}  {b:>5} -> {o:>5}  ({o - b:+d}){tag}", flush=True)
+
+    saved = tot_base - tot_opt
+    pct = (100.0 * saved / tot_base) if tot_base else 0.0
+    print(f"\noptsize   opt: {' '.join(opt)}")
+    print(f"instructions: {tot_base} -> {tot_opt}   (saved {saved}, {pct:.1f}%)")
+    print(f"files reduced: {nreduced}   unchanged: {nsame}   REGRESSED: {nregressed}")
+    return 1 if nregressed else 0
+
+
 def cmd_build(args) -> int:
     targets = ("cc89", "test_lexer")
     build_cc89(args, targets)
@@ -404,12 +507,15 @@ def cmd_stage(args) -> int:
     if not files:
         die("no test files matched", 1)
 
+    opt = (getattr(args, "opt", "") or "").split()
+
     art = build_dir(args) / "test-artifacts"
     if stage == "run":
         art.mkdir(parents=True, exist_ok=True)
 
     ec = "on" if args.extra_credit else "off"
-    print(f"stage: {stage}   (extra-credit: {ec})", flush=True)
+    optmsg = f"   (opt: {' '.join(opt)} vs unoptimized)" if opt else ""
+    print(f"stage: {stage}   (extra-credit: {ec}){optmsg}", flush=True)
 
     npass = nfail = nskip = 0
     cur_group = None  # (chapter, category) of the header last printed
@@ -439,7 +545,7 @@ def cmd_stage(args) -> int:
             continue
 
         if act == "execute":
-            ok, reason = execute(f, cc89, art, args.timeout)
+            ok, reason = execute(f, cc89, art, args.timeout, opt)
         else:
             rc, to = run_proc([str(cc89), f"--{stage}", str(f)], args.timeout)
             if to:
@@ -489,6 +595,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-build", action="store_true")
     add_common(s)
 
+    o = sub.add_parser("optsize", help="compare codegen instruction count with/without opt flags")
+    o.add_argument("target", nargs="?", help="chapter | range | all | path")
+    o.add_argument("--opt", default="", help="opt flags to compare against unoptimized, e.g. --opt=--fold-constants")
+    o.add_argument("--extra-credit", action="store_true")
+    o.add_argument("-v", "--verbose", action="store_true", help="print every file's delta, not just regressions")
+    o.add_argument("--no-build", action="store_true")
+    add_common(o)
+
     for stage in STAGES:
         sp = sub.add_parser(stage, help=f"run the {stage} stage over selected tests")
         sp.add_argument("target", nargs="?", help="chapter | range | all | path")
@@ -496,6 +610,13 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("-v", "--verbose", action="store_true")
         sp.add_argument("--timeout", type=float, default=5.0)
         sp.add_argument("--no-build", action="store_true")
+        sp.add_argument(
+            "--opt",
+            default="",
+            help="optimization flags to pass to cc89 (e.g. '--fold-constants'); the "
+            "reference build becomes unoptimized cc89 instead of gcc, isolating the "
+            "optimizer's effect",
+        )
         add_common(sp)
     return p
 
@@ -508,6 +629,8 @@ def main(argv=None) -> int:
         return cmd_asm(args)
     if args.command == "show":
         return cmd_show(args)
+    if args.command == "optsize":
+        return cmd_optsize(args)
     return cmd_stage(args)
 
 

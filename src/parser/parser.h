@@ -970,13 +970,20 @@ class Parser
         return std::make_unique<DeclareStmt>(line, col, std::move(dl.variables));
     }
 
-    // Control-flow bodies in this language are always brace-delimited blocks; the
-    // brace-less single-statement forms are intentionally unsupported.
+    // A control-flow body: a brace-delimited block, or a single statement wrapped
+    // in a synthetic one-statement block so the body's type stays BlockStmt and SA /
+    // codegen need no changes. A declaration is not a statement here, so a brace-less
+    // `if (x) int y;` still falls through to an expression-statement error, as C requires.
     std::unique_ptr<BlockStmt> parseRequiredBlock(const char *context)
     {
-        if (peek() != LEFT_BRACE)
-            error(std::string(context) + " expects a brace-delimited block");
-        return parseBlockStmt();
+        (void)context;
+        if (peek() == LEFT_BRACE)
+            return parseBlockStmt();
+        const Token &start = curToken();
+        std::vector<std::unique_ptr<Statement>> body;
+        if (auto stmt = parseStatement())
+            body.emplace_back(std::move(stmt));
+        return std::make_unique<BlockStmt>(start.line, start.col, std::move(body));
     }
 
     std::unique_ptr<ReturnStmt> parseReturnStmt()
@@ -1090,6 +1097,36 @@ class Parser
         Token continueToken = expect(CONTINUE);
         expect(SEMI_COLON);
         return std::make_unique<ContinueStmt>(continueToken.line, continueToken.col);
+    }
+
+    // Parse a single statement (not a declaration). Returns null for an empty
+    // statement (`;`). Shared by parseBlockStmt and the brace-less control-flow
+    // bodies in parseRequiredBlock.
+    std::unique_ptr<Statement> parseStatement()
+    {
+        if (peek() == LEFT_BRACE)
+            return parseBlockStmt();
+        if (peek() == SEMI_COLON)
+        {
+            consume();
+            return nullptr;
+        }
+        if (peek() == DO)
+            return parseDoWhileStmt();
+        if (peek() == RETURN)
+            return parseReturnStmt();
+        if (peek() == IF)
+            return parseIfStmt();
+        if (peek() == WHILE)
+            return parseWhileStmt();
+        if (peek() == FOR)
+            return parseForStmt();
+        if (peek() == BREAK)
+            return parseBreakStmt();
+        if (peek() == CONTINUE)
+            return parseContinueStmt();
+        // IDENTIFIER and anything else are parsed as an expression statement.
+        return parseExprStatement();
     }
 
     std::unique_ptr<BlockStmt> parseBlockStmt()

@@ -86,7 +86,8 @@ static void spliceIncludes(const std::string &src, const std::string &baseDir, s
 //   --debugTacky  print TACKY IR after the tacky pass (off by default)
 //   -l<lib>       link against <lib> (passed through to gcc); repeatable, e.g. -lm
 static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST,
-               bool debugTacky, const std::vector<std::string> &libs)
+               bool debugTacky, const std::vector<std::string> &libs,
+               const OptimizationFlags &optFlags)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -164,8 +165,7 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
             TackyDebugPrinter(std::cout).print(*tackyProg);
 
         verify(*tackyProg);
-        PassManager pm; // no passes registered yet — the optimization phase will add them
-        pm.run(*tackyProg);
+        optimize(*tackyProg, optFlags);
 
         if (stage == "tacky")
             return 0;
@@ -225,6 +225,7 @@ int main(int argc, char **argv)
     std::vector<std::string> libs;
     bool debugAST = false;
     bool debugTacky = false;
+    OptimizationFlags optFlags;
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
@@ -232,6 +233,17 @@ int main(int argc, char **argv)
             debugAST = true;
         else if (a == "--debugTacky")
             debugTacky = true;
+        else if (a == "--optimize")
+            optFlags.foldConstants = optFlags.eliminateUnreachableCode = optFlags.propagateCopies =
+                optFlags.eliminateDeadStores = true;
+        else if (a == "--fold-constants")
+            optFlags.foldConstants = true;
+        else if (a == "--eliminate-unreachable-code")
+            optFlags.eliminateUnreachableCode = true;
+        else if (a == "--propagate-copies")
+            optFlags.propagateCopies = true;
+        else if (a == "--eliminate-dead-stores")
+            optFlags.eliminateDeadStores = true;
         else if (a.rfind("--", 0) == 0)
             stage = a.substr(2);
         else if (a.rfind("-l", 0) == 0)
@@ -242,13 +254,16 @@ int main(int argc, char **argv)
     if (path.empty())
     {
         std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] "
-                     "[--debugAST] [--debugTacky] [-l<lib>...] <source.c>\n";
+                     "[--debugAST] [--debugTacky] "
+                     "[--optimize|--fold-constants|--eliminate-unreachable-code|"
+                     "--propagate-copies|--eliminate-dead-stores] "
+                     "[-l<lib>...] <source.c>\n";
         return 1;
     }
 
     try
     {
-        return run(path, stage, debugAST, debugTacky, libs);
+        return run(path, stage, debugAST, debugTacky, libs, optFlags);
     }
     catch (const std::exception &e)
     {
