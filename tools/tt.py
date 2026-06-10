@@ -485,8 +485,8 @@ def cmd_show(args) -> int:
         return proc.returncode
 
     # Non-run stages just print what cc89 emits at that stage. parse/validate need
-    # --debugAST and tacky needs --debugTacky to actually dump anything.
-    flags = {"parse": ["--debugAST"], "validate": ["--debugAST"], "tacky": ["--debugTacky"]}
+    # --debugAST to dump the AST; --tacky and --codegen print on their own.
+    flags = {"parse": ["--debugAST"], "validate": ["--debugAST"]}
     proc = subprocess.run(
         [str(cc89), f"--{stage}", *flags.get(stage, []), str(f)], capture_output=True, text=True
     )

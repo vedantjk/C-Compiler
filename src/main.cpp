@@ -77,17 +77,15 @@ static void spliceIncludes(const std::string &src, const std::string &baseDir, s
 //   --lex       lex only; print tokens
 //   --parse     lex + parse
 //   --validate  lex + parse + SA
-//   --tacky     lex + parse + SA + TACKY IR
+//   --tacky     lex + parse + SA + TACKY IR (prints the final IR, post-optimization, to stdout)
 //   --codegen   lex + parse + SA + TACKY + codegen (prints asm to stdout)
 //   --compile   full pipeline, then assemble + link with gcc into an executable   (default)
 //
 // Flags:
 //   --debugAST    print AST after parse / validate (off by default)
-//   --debugTacky  print TACKY IR after the tacky pass (off by default)
 //   -l<lib>       link against <lib> (passed through to gcc); repeatable, e.g. -lm
 static int run(const std::string &inputSourcePath, const std::string &stage, bool debugAST,
-               bool debugTacky, const std::vector<std::string> &libs,
-               const OptimizationFlags &optFlags)
+               const std::vector<std::string> &libs, const OptimizationFlags &optFlags)
 {
     std::ifstream inputFile(inputSourcePath);
     if (!inputFile.is_open())
@@ -161,14 +159,15 @@ static int run(const std::string &inputSourcePath, const std::string &stage, boo
 
         TackyDriver tackyDriver;
         auto tackyProg = tackyDriver.tacky(*p);
-        if (debugTacky)
-            TackyDebugPrinter(std::cout).print(*tackyProg);
 
         verify(*tackyProg);
         optimize(*tackyProg, optFlags);
 
         if (stage == "tacky")
+        {
+            TackyDebugPrinter(std::cout).print(*tackyProg);
             return 0;
+        }
 
         SysVx86_64ABI sysVAbi;
         codegenDriver driver{sysVAbi};
@@ -224,15 +223,12 @@ int main(int argc, char **argv)
     std::string path;
     std::vector<std::string> libs;
     bool debugAST = false;
-    bool debugTacky = false;
     OptimizationFlags optFlags;
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
         if (a == "--debugAST")
             debugAST = true;
-        else if (a == "--debugTacky")
-            debugTacky = true;
         else if (a == "--optimize")
             optFlags.foldConstants = optFlags.eliminateUnreachableCode = optFlags.propagateCopies =
                 optFlags.eliminateDeadStores = true;
@@ -254,7 +250,7 @@ int main(int argc, char **argv)
     if (path.empty())
     {
         std::cerr << "Usage: cc89 [--lex|--parse|--validate|--tacky|--codegen|--compile] "
-                     "[--debugAST] [--debugTacky] "
+                     "[--debugAST] "
                      "[--optimize|--fold-constants|--eliminate-unreachable-code|"
                      "--propagate-copies|--eliminate-dead-stores] "
                      "[-l<lib>...] <source.c>\n";
@@ -263,7 +259,7 @@ int main(int argc, char **argv)
 
     try
     {
-        return run(path, stage, debugAST, debugTacky, libs, optFlags);
+        return run(path, stage, debugAST, libs, optFlags);
     }
     catch (const std::exception &e)
     {

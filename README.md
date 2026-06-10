@@ -137,7 +137,8 @@ Each `--` flag stops the pipeline at that stage. `--compile` (the default) runs
 the full pipeline and then invokes `gcc` to assemble and link the result into an
 executable named after the source (`program.c` → `program`); the intermediate
 `.s` is removed afterward. `--codegen` instead prints the generated assembly to
-stdout. `--debugAST` and `--debugTacky` dump the AST and the TACKY IR respectively.
+stdout, and `--tacky` prints the final TACKY IR (after any optimizations). `--debugAST`
+dumps the AST at the parse and validate stages.
 
 To build a runnable program in one step:
 
