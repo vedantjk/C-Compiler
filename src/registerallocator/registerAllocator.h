@@ -484,6 +484,332 @@ class RegisterAllocator
             }
     }
 
+    // --- register coalescing -------------------------------------------------------
+
+    // Undirected adjacency over the interference-graph nodes. Edges are stored as a
+    // weak_ptr both ways; addEdge dedups so degrees stay exact, removeEdge drops the pair.
+    static bool areNeighbors(const Node *a, const Node *b)
+    {
+        for (const auto &w : a->neighbours)
+            if (auto n = w.lock(); n.get() == b)
+                return true;
+        return false;
+    }
+    static void addEdge(const std::shared_ptr<Node> &a, const std::shared_ptr<Node> &b)
+    {
+        if (a == b || areNeighbors(a.get(), b.get()))
+            return;
+        a->neighbours.push_back(b);
+        b->neighbours.push_back(a);
+    }
+    static void removeEdge(const std::shared_ptr<Node> &a, const std::shared_ptr<Node> &b)
+    {
+        std::erase_if(a->neighbours, [&](const std::weak_ptr<Node> &w) { return w.lock() == b; });
+        std::erase_if(b->neighbours, [&](const std::weak_ptr<Node> &w) { return w.lock() == a; });
+    }
+    // A node's current interference degree: its live (non-expired) neighbour count.
+    // Coalescing runs before any pruning, so every node is live.
+    static int graphDegree(const Node *n)
+    {
+        int d = 0;
+        for (const auto &w : n->neighbours)
+            if (!w.expired())
+                ++d;
+        return d;
+    }
+
+    // Briggs's conservative test: coalescing x and y is safe if the merged node has fewer
+    // than k neighbours of significant degree (>= k). A neighbour adjacent to both loses one
+    // edge to the merge, so its degree is counted one lower. Low-degree neighbours always
+    // find a color regardless, so they cannot make the merged node uncolorable.
+    static bool briggsTest(const std::shared_ptr<Node> &x, const std::shared_ptr<Node> &y, int k)
+    {
+        std::unordered_set<Node *> combined;
+        for (const auto &w : x->neighbours)
+            if (auto n = w.lock())
+                combined.insert(n.get());
+        for (const auto &w : y->neighbours)
+            if (auto n = w.lock())
+                combined.insert(n.get());
+
+        int significant = 0;
+        for (Node *n : combined)
+        {
+            int degree = graphDegree(n);
+            if (areNeighbors(n, x.get()) && areNeighbors(n, y.get()))
+                --degree;
+            if (degree >= k)
+                ++significant;
+        }
+        return significant < k;
+    }
+
+    // George's conservative test for coalescing a pseudo into a hard register: safe if every
+    // neighbour of the pseudo is already constrained enough — it either interferes with the
+    // hard register already or has insignificant degree, so the merge adds no new constraint
+    // that could make it harder to prune.
+    static bool georgeTest(const std::shared_ptr<Node> &hardreg,
+                           const std::shared_ptr<Node> &pseudoreg, int k)
+    {
+        for (const auto &w : pseudoreg->neighbours)
+        {
+            auto n = w.lock();
+            if (!n)
+                continue;
+            if (areNeighbors(n.get(), hardreg.get()))
+                continue;
+            if (graphDegree(n.get()) < k)
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    // Try Briggs first (works for any pair); fall back to George when one side is a hard
+    // register, passing the hard register first since George is asymmetric.
+    static bool conservativeCoalesceable(const std::shared_ptr<Node> &a,
+                                         const std::shared_ptr<Node> &b, int k)
+    {
+        if (briggsTest(a, b, k))
+            return true;
+        if (!isPseudo(*a->id))
+            return georgeTest(a, b, k);
+        if (!isPseudo(*b->id))
+            return georgeTest(b, a, k);
+        return false;
+    }
+
+    // Approximate graph update after a coalescing decision: fold `toMerge` into `toKeep` by
+    // moving each of its edges onto `toKeep`, then drop it from the node set. This can leave
+    // a stale edge where the merged-away node had broken an interference, which only weakens
+    // George's guarantee to "no worse than the start of this build round" — never a
+    // miscompile, since coalescing decisions can't change observable behavior.
+    void updateGraph(const std::shared_ptr<Node> &toMerge, const std::shared_ptr<Node> &toKeep,
+                     std::unordered_map<std::string, std::shared_ptr<Node>> &nodeByKey)
+    {
+        std::vector<std::shared_ptr<Node>> nbrs;
+        for (const auto &w : toMerge->neighbours)
+            if (auto n = w.lock())
+                nbrs.push_back(n);
+        for (const auto &nbr : nbrs)
+        {
+            addEdge(toKeep, nbr);
+            removeEdge(toMerge, nbr);
+        }
+        nodeByKey.erase(keyOf(*toMerge->id));
+        auto &nodes = isSSE(*toMerge->id) ? sseNodes : geNodes;
+        std::erase(nodes, toMerge);
+    }
+
+    // The disjoint-set map from coalescing: a coalesced register's key -> the key it was
+    // merged into. find() chases the chain to the surviving representative; a key with no
+    // entry (a constant, memory operand, or an un-coalesced register) is its own rep.
+    using CoalesceMap = std::unordered_map<std::string, std::string>;
+    static std::string findRep(const CoalesceMap &m, std::string k)
+    {
+        for (auto it = m.find(k); it != m.end(); it = m.find(k))
+            k = it->second;
+        return k;
+    }
+
+    // One coalescing round over the freshly built graph: for every mov whose source and
+    // destination are distinct, non-interfering nodes that pass the conservative test, merge
+    // them. A hard register always stays as the representative (we never replace a hard
+    // register with a pseudo); two pseudos keep the destination, matching the book. Returns
+    // the coalescing decisions; an empty map means the allocation has converged.
+    CoalesceMap coalesce(cfg::CFG<Instruction> &graph)
+    {
+        std::unordered_map<std::string, std::shared_ptr<Node>> nodeByKey;
+        for (auto &nd : geNodes)
+            nodeByKey[keyOf(*nd->id)] = nd;
+        for (auto &nd : sseNodes)
+            nodeByKey[keyOf(*nd->id)] = nd;
+
+        CoalesceMap coalesced;
+        for (auto &block : graph.blocks)
+            for (auto &instr : block.instructions)
+            {
+                auto *m = dynamic_cast<MoveInstruction *>(instr.get());
+                if (!m)
+                    continue;
+                const std::string srcKey = findRep(coalesced, keyOf(*m->src));
+                const std::string dstKey = findRep(coalesced, keyOf(*m->dst));
+                if (srcKey == dstKey)
+                    continue;
+                auto si = nodeByKey.find(srcKey), di = nodeByKey.find(dstKey);
+                if (si == nodeByKey.end() || di == nodeByKey.end())
+                    continue; // a constant, memory, aliased, or static operand: not in graph
+                auto src = si->second, dst = di->second;
+                if (isSSE(*src->id) != isSSE(*dst->id))
+                    continue; // never coalesce across register classes
+                if (areNeighbors(src.get(), dst.get()))
+                    continue; // they interfere; cannot share a register
+                const int k = isSSE(*src->id) ? static_cast<int>(sseBaseCount)
+                                              : static_cast<int>(geBaseCount);
+                if (!conservativeCoalesceable(src, dst, k))
+                    continue;
+
+                std::shared_ptr<Node> toKeep, toMerge;
+                if (!isPseudo(*src->id))
+                {
+                    toKeep = src;
+                    toMerge = dst;
+                }
+                else
+                {
+                    toKeep = dst;
+                    toMerge = src;
+                }
+                if (!isPseudo(*toMerge->id))
+                    continue; // both hard registers (clique edge would normally block this)
+
+                coalesced[keyOf(*toMerge->id)] = keyOf(*toKeep->id);
+                updateGraph(toMerge, toKeep, nodeByKey);
+            }
+        return coalesced;
+    }
+
+    // Rewrite every operand to its coalescing representative, then drop any mov whose source
+    // and destination collapsed to the same register (the coalesced copies, plus any move
+    // that was already redundant). A pseudo merged into a hard register becomes that register
+    // at this slot's width; a pseudo merged into another pseudo is just renamed.
+    void rewriteCoalesced(codegenFunction &fn, const CoalesceMap &coalesced)
+    {
+        auto rewriteSlot = [&](std::unique_ptr<Operand> &slot, int bytes)
+        {
+            auto *p = dynamic_cast<PseudoRegister *>(slot.get());
+            if (!p)
+                return;
+            const std::string key = "p:" + p->name;
+            const std::string rep = findRep(coalesced, key);
+            if (rep == key)
+                return;
+            if (rep.rfind("r:", 0) == 0)
+                slot = std::make_unique<Register>(
+                    static_cast<RegisterName>(std::stoi(rep.substr(2))), bytes);
+            else
+                slot = std::make_unique<PseudoRegister>(rep.substr(2), p->type);
+        };
+        for (auto &instr : fn.instructions)
+            forEachTypedSlot(*instr, rewriteSlot);
+
+        std::vector<std::unique_ptr<Instruction>> out;
+        out.reserve(fn.instructions.size());
+        for (auto &instr : fn.instructions)
+        {
+            if (auto *m = dynamic_cast<MoveInstruction *>(instr.get());
+                m && sameRegister(*m->src, *m->dst))
+                continue;
+            out.push_back(std::move(instr));
+        }
+        fn.instructions = std::move(out);
+    }
+
+    // Two operands name the same physical location: the same hard register or the same
+    // pseudo. Used to drop coalesced self-moves; width differences don't matter here.
+    static bool sameRegister(const Operand &a, const Operand &b)
+    {
+        if (auto *ra = dynamic_cast<const Register *>(&a))
+            if (auto *rb = dynamic_cast<const Register *>(&b))
+                return ra->name == rb->name;
+        if (auto *pa = dynamic_cast<const PseudoRegister *>(&a))
+            if (auto *pb = dynamic_cast<const PseudoRegister *>(&b))
+                return pa->name == pb->name;
+        return false;
+    }
+
+    // Walk each operand slot together with the register width that slot uses, the width set
+    // by the instruction (movsx's two ends differ, setcc is a byte, lea/push are quadwords),
+    // not the pseudo's declared type. Both the coalescing rewrite and the final pseudo->
+    // register rewrite go through this so they agree on every slot's width.
+    template <class F> static void forEachTypedSlot(Instruction &instruction, F &&fn)
+    {
+        switch (instruction.getKind())
+        {
+        case InstrKind::MoveInstruction:
+        {
+            auto *m = cast<MoveInstruction>(&instruction);
+            fn(m->src, regBytes(m->type));
+            fn(m->dst, regBytes(m->type));
+            break;
+        }
+        case InstrKind::MoveSXInstruction:
+        {
+            auto *m = cast<MoveSXInstruction>(&instruction);
+            fn(m->src, regBytes(m->srcType));
+            fn(m->dst, regBytes(m->dstType));
+            break;
+        }
+        case InstrKind::MoveZeroExtendInstruction:
+        {
+            auto *m = cast<MoveZeroExtendInstruction>(&instruction);
+            fn(m->src, regBytes(m->srcType));
+            fn(m->dst, regBytes(m->dstType));
+            break;
+        }
+        case InstrKind::UnaryInstruction:
+        {
+            auto *u = cast<UnaryInstruction>(&instruction);
+            fn(u->operand, regBytes(u->type));
+            break;
+        }
+        case InstrKind::BinaryInstruction:
+        {
+            auto *b = cast<BinaryInstruction>(&instruction);
+            fn(b->src, regBytes(b->type));
+            fn(b->dst, regBytes(b->type));
+            break;
+        }
+        case InstrKind::CmpInstruction:
+        {
+            auto *c = cast<CmpInstruction>(&instruction);
+            fn(c->a, regBytes(c->type));
+            fn(c->b, regBytes(c->type));
+            break;
+        }
+        case InstrKind::IDivInstruction:
+            fn(cast<IDivInstruction>(&instruction)->operand,
+               regBytes(cast<IDivInstruction>(&instruction)->type));
+            break;
+        case InstrKind::DivInstruction:
+            fn(cast<DivInstruction>(&instruction)->operand,
+               regBytes(cast<DivInstruction>(&instruction)->type));
+            break;
+        case InstrKind::SetCCInstruction:
+            fn(cast<SetCCInstruction>(&instruction)->a, 1);
+            break;
+        case InstrKind::PushInstruction:
+            fn(cast<PushInstruction>(&instruction)->a, 8);
+            break;
+        case InstrKind::PopInstruction:
+            fn(cast<PopInstruction>(&instruction)->reg, 8);
+            break;
+        case InstrKind::LeaInstruction:
+        {
+            auto *l = cast<LeaInstruction>(&instruction);
+            fn(l->src, 8);
+            fn(l->dst, 8);
+            break;
+        }
+        case InstrKind::CVTSI2SD:
+        {
+            auto *c = cast<CVTSI2SD>(&instruction);
+            fn(c->src, regBytes(c->type));
+            fn(c->dst, 8);
+            break;
+        }
+        case InstrKind::CVTTSD2SI:
+        {
+            auto *c = cast<CVTTSD2SI>(&instruction);
+            fn(c->src, 8);
+            fn(c->dst, regBytes(c->type));
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
     // The allocatable callee-saved GP registers (the ones whose use forces a prologue
     // save/restore). They take the highest available color so pseudos, which take the
     // lowest, prefer the caller-saved registers. No XMM is callee-saved under SysV.
@@ -650,91 +976,7 @@ class RegisterAllocator
                 slot = std::make_unique<Register>(it->second, bytes);
         };
         for (auto &instr : fn.instructions)
-        {
-            Instruction *i = instr.get();
-            switch (i->getKind())
-            {
-            case InstrKind::MoveInstruction:
-            {
-                auto *m = cast<MoveInstruction>(i);
-                assign(m->src, regBytes(m->type));
-                assign(m->dst, regBytes(m->type));
-                break;
-            }
-            case InstrKind::MoveSXInstruction:
-            {
-                auto *m = cast<MoveSXInstruction>(i);
-                assign(m->src, regBytes(m->srcType));
-                assign(m->dst, regBytes(m->dstType));
-                break;
-            }
-            case InstrKind::MoveZeroExtendInstruction:
-            {
-                auto *m = cast<MoveZeroExtendInstruction>(i);
-                assign(m->src, regBytes(m->srcType));
-                assign(m->dst, regBytes(m->dstType));
-                break;
-            }
-            case InstrKind::UnaryInstruction:
-            {
-                auto *u = cast<UnaryInstruction>(i);
-                assign(u->operand, regBytes(u->type));
-                break;
-            }
-            case InstrKind::BinaryInstruction:
-            {
-                auto *b = cast<BinaryInstruction>(i);
-                assign(b->src, regBytes(b->type));
-                assign(b->dst, regBytes(b->type));
-                break;
-            }
-            case InstrKind::CmpInstruction:
-            {
-                auto *c = cast<CmpInstruction>(i);
-                assign(c->a, regBytes(c->type));
-                assign(c->b, regBytes(c->type));
-                break;
-            }
-            case InstrKind::IDivInstruction:
-                assign(cast<IDivInstruction>(i)->operand, regBytes(cast<IDivInstruction>(i)->type));
-                break;
-            case InstrKind::DivInstruction:
-                assign(cast<DivInstruction>(i)->operand, regBytes(cast<DivInstruction>(i)->type));
-                break;
-            case InstrKind::SetCCInstruction:
-                assign(cast<SetCCInstruction>(i)->a, 1);
-                break;
-            case InstrKind::PushInstruction:
-                assign(cast<PushInstruction>(i)->a, 8);
-                break;
-            case InstrKind::PopInstruction:
-                assign(cast<PopInstruction>(i)->reg, 8);
-                break;
-            case InstrKind::LeaInstruction:
-            {
-                auto *l = cast<LeaInstruction>(i);
-                assign(l->src, 8);
-                assign(l->dst, 8);
-                break;
-            }
-            case InstrKind::CVTSI2SD:
-            {
-                auto *c = cast<CVTSI2SD>(i);
-                assign(c->src, regBytes(c->type));
-                assign(c->dst, 8);
-                break;
-            }
-            case InstrKind::CVTTSD2SI:
-            {
-                auto *c = cast<CVTTSD2SI>(i);
-                assign(c->src, 8);
-                assign(c->dst, regBytes(c->type));
-                break;
-            }
-            default:
-                break;
-            }
-        }
+            forEachTypedSlot(*instr, assign);
 
         std::set<RegisterName> calleeSet;
         for (const auto &kv : regMap)
@@ -771,22 +1013,37 @@ class RegisterAllocator
         fn.instructions = std::move(out);
     }
 
-    // Build the interference graph for one function, color it, map the colored pseudos to
-    // hardware registers, and rewrite the body to use them. The CFG owns the instructions
-    // while it lives, so the body is flattened back onto the function before the rewrite.
+    // Allocate registers for one function. Each round builds a fresh interference graph and
+    // coalesces away the moves it safely can; if anything coalesced, the body is rewritten to
+    // its representatives and the process repeats, since the merges change liveness and open
+    // up further coalescing. Once a round coalesces nothing the graph has converged, so we
+    // colour it, map the colored pseudos to hardware registers, and rewrite the body to use
+    // them. The CFG owns the instructions while it lives, so the body is flattened back onto
+    // the function before each rewrite.
     void buildFunctionGraph(codegenFunction &fn)
     {
-        addFunctionPseudos(fn);
-        auto graph = cfg::makeControlFlowGraph(std::move(fn.instructions), AsmCFGClassify{});
-        addInterferenceEdges(graph, analyzeLiveness(graph));
-        computeSpillCosts(graph);
-        colorGraph(geNodes, static_cast<int>(geBaseCount));
-        colorGraph(sseNodes, static_cast<int>(sseBaseCount));
-        std::unordered_map<std::string, RegisterName> regMap;
-        createRegisterMap(geNodes, regMap);
-        createRegisterMap(sseNodes, regMap);
-        fn.instructions = cfg::flatten(graph);
-        rewritePseudos(fn, regMap);
+        for (;;)
+        {
+            addFunctionPseudos(fn);
+            auto graph = cfg::makeControlFlowGraph(std::move(fn.instructions), AsmCFGClassify{});
+            addInterferenceEdges(graph, analyzeLiveness(graph));
+
+            CoalesceMap coalesced = coalesce(graph);
+            if (coalesced.empty())
+            {
+                computeSpillCosts(graph);
+                colorGraph(geNodes, static_cast<int>(geBaseCount));
+                colorGraph(sseNodes, static_cast<int>(sseBaseCount));
+                std::unordered_map<std::string, RegisterName> regMap;
+                createRegisterMap(geNodes, regMap);
+                createRegisterMap(sseNodes, regMap);
+                fn.instructions = cfg::flatten(graph);
+                rewritePseudos(fn, regMap);
+                return;
+            }
+            fn.instructions = cfg::flatten(graph);
+            rewriteCoalesced(fn, coalesced);
+        }
     }
 
   public:
