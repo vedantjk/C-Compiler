@@ -26,19 +26,24 @@ add_executable(test_lexer
 )
 target_include_directories(test_lexer PRIVATE ${CMAKE_SOURCE_DIR}/src/lexer)
 
-# Auto-format ALL sources (including headers) before building cc89.
-# clang-format isn't on PATH here, so hint the standalone LLVM install;
-# on PATH-based systems (e.g. CI) the hint is harmlessly ignored.
+# clang-format target. On Windows, hint the standalone LLVM install; on PATH-based
+# systems (Linux/CI) the hint is harmlessly ignored.
 find_program(CLANG_FORMAT clang-format HINTS "C:/Program Files/LLVM/bin")
 if(CLANG_FORMAT)
     file(GLOB_RECURSE FORMAT_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/src/*.cpp
         ${CMAKE_SOURCE_DIR}/src/*.h
         ${CMAKE_SOURCE_DIR}/src/*.hpp)
+    # Manual target: `cmake --build <dir> --target format` reformats in place.
     add_custom_target(format
         COMMAND ${CLANG_FORMAT} -i ${FORMAT_SOURCES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Running clang-format"
     )
-    add_dependencies(cc89 format)
+    # Only auto-format as part of the build on Windows (the original dev flow).
+    # On Linux/CI a different clang-format version would rewrite tracked sources
+    # on every build, so there `format` stays opt-in via the manual target above.
+    if(WIN32)
+        add_dependencies(cc89 format)
+    endif()
 endif()

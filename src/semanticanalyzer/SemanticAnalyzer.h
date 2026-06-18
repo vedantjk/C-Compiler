@@ -1353,7 +1353,18 @@ class SemanticAnalyzer
         expr.isLvalue = false;
     }
 
-    void analyzeExprStmt(ExprStmt &exprStmt) { analyzeExpr(*exprStmt.expr); }
+    void analyzeExprStmt(ExprStmt &exprStmt)
+    {
+        analyzeExpr(*exprStmt.expr);
+        // A full expression evaluated as a statement (an expression statement, or a
+        // for-loop's init/condition/update clause) has its value discarded — which
+        // requires a value to exist. A void expression is fine (there's no value),
+        // but an incomplete struct/union type has no formable value: reject it.
+        const auto &t = exprStmt.expr->resolvedType;
+        if (t && !isVoid(t) && !isComplete(t))
+            error(exprStmt.expr->getLine(), exprStmt.expr->getCol(),
+                  "expression statement has incomplete type " + t->toString() + ".");
+    }
 
     void analyzeStructDecl(StructDecl &structDecl)
     {
@@ -2084,6 +2095,19 @@ class SemanticAnalyzer
 
         if (variable.initialization)
         {
+            // An object with an initializer must have a complete type: a struct or
+            // union with no known layout has no slots to initialize. (A bare
+            // `extern struct s x;` with no initializer stays legal while s is
+            // incomplete, which is why this is gated on having an initializer.)
+            // Bail out here so the static-init builder never walks a missing layout.
+            if (!isComplete(variable.type))
+            {
+                error(variable.getLine(), variable.getCol(),
+                      "variable '" + variable.name + "' has an initializer but incomplete type " +
+                          variable.type->toString() + ".");
+                return;
+            }
+
             analyzeExpr(*variable.initialization);
 
             // Static-duration variables require a constant initializer.

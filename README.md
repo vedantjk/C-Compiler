@@ -1,12 +1,15 @@
 # cc89
 
-A C compiler written from scratch in C++20, emitting x86-64 (System V / AT&T)
-assembly. No parser generators, no codegen frameworks — the lexer, recursive
-descent parser, semantic analyzer, intermediate representation, and x86-64
-backend are all hand-written.
+A C compiler written from scratch in C++20, compiling a large subset of C to
+x86-64 assembly (System V ABI, AT&T syntax). The backend does the work that
+matters: a CFG-based optimizer (constant folding, copy propagation, dead-store
+and unreachable-code elimination, run to a fixed point) and a graph-coloring
+register allocator with move coalescing across general-purpose and SSE registers.
+No LLVM, no parser generators, no codegen frameworks; every stage from the scanner
+to the allocator is hand-written.
 
-The compiler produces AT&T-syntax assembly targeting the System V ABI (Linux),
-which is handed to `gcc` to assemble and link.
+Output is AT&T-syntax assembly targeting the System V ABI (Linux); `gcc` is invoked
+only to assemble and link.
 
 > The binary is named `cc89` for historical reasons. The project began aiming at
 > C89; the scope has since grown to a much larger subset of C (see below). The
@@ -45,7 +48,8 @@ is no preprocessor, and several language features are omitted.
 
 ```
 source.c → [Lexer] → tokens → [Parser] → AST → [Semantic Analyzer] → typed AST
-         → [TACKY IR] → three-address code → [Codegen] → x86-64 AT&T .s
+         → [TACKY IR] → three-address code → [Optimizer (CFG)] → optimized TACKY
+         → [Codegen + register allocation] → x86-64 AT&T .s
 ```
 
 ### Lexer (`src/lexer`)
@@ -92,29 +96,47 @@ control flow (`if`, loops, `&&`/`||`, the ternary) into conditional and
 unconditional jumps between labels. It is deliberately **not** in SSA form, which
 keeps the lowering and the backend simple.
 
-### Codegen (`src/codegen`)
+### Optimizer (`src/tacky`, `src/cfg`)
 
-The backend lowers TACKY to x86-64 AT&T assembly in three passes over an assembly
-IR. First, *instruction selection* translates each TACKY instruction into x86
-instructions, still referring to operands by abstract "pseudoregisters" and
-following the System V calling convention (first six integer arguments in
-registers, the rest pushed on the stack, with 16-byte stack alignment). Second, a
-*pseudo-replacement* pass assigns each pseudoregister a slot — a stack offset for
-locals, or a RIP-relative address for static-storage variables — and computes the
-frame size. Third, a *fixup* pass repairs instructions the ISA can't express
-directly, such as memory-to-memory moves (routed through a scratch register) and
-the operand constraints of `idiv`, shifts, and `imul`. The result is printed as an
-assembly file.
+Optional optimization runs on the TACKY IR before codegen. Each function is turned
+into a control-flow graph (`src/cfg`) of basic blocks, and a fixed-point driver
+re-runs the passes until the IR stops changing. Four passes are implemented:
+constant folding, unreachable-code elimination, copy propagation, and dead-store
+elimination. They are off by default and enabled per pass (`--fold-constants`,
+`--eliminate-unreachable-code`, `--propagate-copies`, `--eliminate-dead-stores`) or
+all at once with `--optimize`.
+
+### Codegen (`src/codegen`, `src/registerallocator`)
+
+The backend lowers TACKY to x86-64 AT&T assembly over an assembly IR. First,
+*instruction selection* translates each TACKY instruction into x86 instructions,
+still referring to operands by abstract "pseudoregisters" and following the System V
+calling convention (first six integer arguments in registers, the rest pushed on the
+stack, with 16-byte stack alignment). Next, a *register allocator*
+(`src/registerallocator`) assigns pseudoregisters to machine registers by **graph
+coloring**: it builds an interference graph from a liveness analysis over the
+control-flow graph, colors it with the available general-purpose and XMM registers,
+and **coalesces move-related pseudoregisters** to delete redundant `mov`s. Whatever
+can't be colored is spilled. A *pseudo-replacement* pass then assigns the spilled
+pseudoregisters their slots (a stack offset for locals, or a RIP-relative address for
+static-storage variables) and computes the frame size. Finally, a *fixup* pass
+repairs instructions the ISA can't express directly, such as memory-to-memory moves
+(routed through a scratch register) and the operand constraints of `idiv`, shifts, and
+`imul`. The result is printed as an assembly file.
 
 ## Status
 
-- The **frontend** (lexing, parsing, semantic analysis) passes the full test
-  suite.
-- **End-to-end codegen** runs through the features above — local and file-scope
-  variables, the full operator set, control flow, and functions with calls and
-  recursion.
-- Backend coverage of the later type features (pointers, arrays, structs,
-  floating point) and optimization passes is in progress.
+- The **frontend** (lexing, parsing, semantic analysis) passes the test suite.
+- **End-to-end codegen** covers the full implemented language: every type listed
+  above (including pointers, arrays, `struct`/`union`, and `double`), the full
+  operator set, all control flow, and functions with calls, recursion, and separate
+  translation units.
+- **Differential tested against gcc.** Every executable program in the mainline
+  suite (chapters 1-20, 500+ programs) is compiled by both cc89 and gcc and run; the
+  exit codes match on all of them.
+- **Optimizer and register allocation are implemented**, not aspirational: the four
+  CFG-based TACKY passes above, plus a graph-coloring register allocator with move
+  coalescing.
 
 ## Build
 
@@ -130,15 +152,22 @@ This produces the `cc89` executable in `build/`.
 ## Usage
 
 ```sh
-cc89 [--lex | --parse | --validate | --tacky | --codegen | --compile] [-l<lib>...] <source.c>
+cc89 [--lex | --parse | --validate | --tacky | --codegen | --compile]
+     [--optimize | --fold-constants | --propagate-copies
+                  | --eliminate-unreachable-code | --eliminate-dead-stores]
+     [-l<lib>...] <source.c>
 ```
 
-Each `--` flag stops the pipeline at that stage. `--compile` (the default) runs
+Each stage flag stops the pipeline at that stage. `--compile` (the default) runs
 the full pipeline and then invokes `gcc` to assemble and link the result into an
 executable named after the source (`program.c` → `program`); the intermediate
 `.s` is removed afterward. `--codegen` instead prints the generated assembly to
 stdout, and `--tacky` prints the final TACKY IR (after any optimizations). `--debugAST`
 dumps the AST at the parse and validate stages.
+
+The optimization flags enable TACKY passes (off by default); `--optimize` turns on all
+four. They compose with any stage flag, so `cc89 --tacky --optimize program.c` shows the
+optimized IR and `cc89 --codegen --optimize program.c` the resulting assembly.
 
 To build a runnable program in one step:
 
@@ -215,10 +244,14 @@ src/
 ├── lexer/             # tokenizer
 ├── parser/            # recursive descent parser
 ├── ast/               # AST node definitions
+├── types/             # type system
 ├── semanticanalyzer/  # type checking, symbol resolution
 ├── symboltable/       # symbol table
-├── tacky/             # TACKY three-address IR
+├── tacky/             # TACKY three-address IR + optimization passes
+├── cfg/               # control-flow graph for the optimizer
 ├── codegen/           # x86-64 backend
+├── registerallocator/ # graph-coloring register allocation
+├── support/           # custom RTTI helpers
 └── utils/             # diagnostics, shared helpers
 
 benchmarks/            # test programs (valid / invalid, by chapter)
